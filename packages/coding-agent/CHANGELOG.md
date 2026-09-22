@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Moved the published theme JSON Schema to `schemas/theme.schema.json`. Update existing theme `$schema` references to the new path.
+
 ### Changed
 
 - `/arminsayshi` now plays a 3D version in fullscreen mode, with one cube per pixel of Armin. The 3D pi logo easter egg on header logo click is replaced by it.
@@ -202,6 +206,7 @@
 - Added inherited GPT-6 Sol and GPT-6 Luna support for OpenAI API keys and OpenAI Codex subscriptions.
 - Added inherited Claude Opus 5.5 support for Anthropic with adaptive thinking and a 1M context window.
 
+
 ### Changed
 
 - Changed the default xAI model to Grok 4.7.
@@ -223,7 +228,6 @@
 
 ### Breaking Changes
 
-- Moved the published theme JSON Schema to `schemas/theme.schema.json`. Update existing theme `$schema` references to the new path.
 - Removed the inherited `shouldStopAfterTurn` agent option. Use `finishTurn` and return `{ action: "end" }` instead. `finishTurn` runs before `turn_end` but applies the decision afterward, and it also receives error and aborted responses; migrate normal-response predicates by returning `undefined` for those hard exits. See the `@earendil-works/pi-agent-core` changelog for a complete before-and-after example.
 - Added `ContextEditEntry` to the exported `SessionEntry` union. TypeScript consumers with exhaustive entry switches must handle `context_edit`; use `replacement: null` for omission and a content replacement otherwise.
 - Made `SessionManager` canonical for `AgentSession` provider context. Assigning `session.agent.state.messages` no longer replaces future request history; restore with `SessionManager.inMemory(cwd, { id }, entries)`, navigate with `session.navigateTree()`, or append through `session.sessionManager` and call `session.refreshContext()`.
