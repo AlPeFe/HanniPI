@@ -13,7 +13,7 @@ export interface RenderDeclarationsOptions {
  * description. Tools become members of `declare const tools`, globals become
  * `declare function` statements, and `ns.member` globals members of `declare const ns`. Descriptions become doc comments; schemas become types
  * (`unknown` where a schema is missing or uses features TypeScript cannot express, such as
- * `$ref`).
+ * recursive `$ref`s).
  *
  * ```ts
  * declare const tools: {
@@ -94,28 +94,61 @@ function union(types: string[]): string {
 
 /**
  * Convert a JSON Schema to a TypeScript type expression. `indent` is the indentation of the line
- * the type starts on; nested object members are indented one level deeper.
+ * the type starts on; nested object members are indented one level deeper. Local references
+ * (`#/$defs/...`, `#/definitions/...`) resolve against `schema` itself; recursive references and
+ * references elsewhere render as `unknown`.
  */
 export function schemaToType(schema: CodemodeJsonSchema, indent = ""): string {
+	return toType(schema, indent, { root: schema, resolving: new Set() });
+}
+
+interface SchemaContext {
+	root: CodemodeJsonSchema;
+	/** References being expanded on the current path, to stop at recursive types. */
+	resolving: Set<string>;
+}
+
+function resolveRef(ref: string, root: CodemodeJsonSchema): CodemodeJsonSchema | undefined {
+	if (ref !== "#" && !ref.startsWith("#/")) return undefined;
+	let current: unknown = root;
+	for (const segment of ref.slice(2).split("/").filter(Boolean)) {
+		const key = decodeURIComponent(segment).replaceAll("~1", "/").replaceAll("~0", "~");
+		if (!isObject(current) || !(key in current)) return undefined;
+		current = current[key];
+	}
+	return typeof current === "boolean" || isObject(current) ? current : undefined;
+}
+
+function toType(schema: CodemodeJsonSchema, indent: string, context: SchemaContext): string {
 	if (schema === true) return "unknown";
 	if (schema === false) return "never";
 	if (!isObject(schema)) return "unknown";
-	if (typeof schema.$ref === "string") return "unknown";
+	if (typeof schema.$ref === "string") {
+		const ref = schema.$ref;
+		const target = context.resolving.has(ref) ? undefined : resolveRef(ref, context.root);
+		if (target === undefined) return "unknown";
+		context.resolving.add(ref);
+		try {
+			return toType(target, indent, context);
+		} finally {
+			context.resolving.delete(ref);
+		}
+	}
 
 	if ("const" in schema) return JSON.stringify(schema.const) ?? "unknown";
 	if (Array.isArray(schema.enum)) return union(schema.enum.map((value) => JSON.stringify(value) ?? "unknown"));
 
 	const variants = Array.isArray(schema.anyOf) ? schema.anyOf : Array.isArray(schema.oneOf) ? schema.oneOf : undefined;
-	if (variants) return union(variants.map((variant) => schemaToType(variant as CodemodeJsonSchema, indent)));
+	if (variants) return union(variants.map((variant) => toType(variant as CodemodeJsonSchema, indent, context)));
 	if (Array.isArray(schema.allOf)) {
-		const parts = schema.allOf.map((part) => schemaToType(part as CodemodeJsonSchema, indent));
+		const parts = schema.allOf.map((part) => toType(part as CodemodeJsonSchema, indent, context));
 		const meaningful = parts.filter((part) => part !== "unknown");
 		return meaningful.length === 0 ? "unknown" : meaningful.map(asElement).join(" & ");
 	}
 
 	const type = schema.type;
 	if (Array.isArray(type)) {
-		return union(type.map((entry) => schemaToType({ ...schema, type: entry }, indent)));
+		return union(type.map((entry) => toType({ ...schema, type: entry }, indent, context)));
 	}
 	switch (type) {
 		case "string":
@@ -128,33 +161,35 @@ export function schemaToType(schema: CodemodeJsonSchema, indent = ""): string {
 		case "null":
 			return "null";
 		case "array":
-			return arrayType(schema, indent);
+			return arrayType(schema, indent, context);
 		case "object":
-			return objectType(schema, indent);
+			return objectType(schema, indent, context);
 		case undefined:
-			if (isObject(schema.properties) || isObject(schema.additionalProperties)) return objectType(schema, indent);
-			if (schema.items !== undefined || schema.prefixItems !== undefined) return arrayType(schema, indent);
+			if (isObject(schema.properties) || isObject(schema.additionalProperties)) {
+				return objectType(schema, indent, context);
+			}
+			if (schema.items !== undefined || schema.prefixItems !== undefined) return arrayType(schema, indent, context);
 			return "unknown";
 		default:
 			return "unknown";
 	}
 }
 
-function arrayType(schema: Record<string, unknown>, indent: string): string {
+function arrayType(schema: Record<string, unknown>, indent: string, context: SchemaContext): string {
 	const tuple = Array.isArray(schema.prefixItems)
 		? schema.prefixItems
 		: Array.isArray(schema.items)
 			? schema.items
 			: [];
 	if (tuple.length > 0) {
-		return `[${tuple.map((item) => schemaToType(item as CodemodeJsonSchema, indent)).join(", ")}]`;
+		return `[${tuple.map((item) => toType(item as CodemodeJsonSchema, indent, context)).join(", ")}]`;
 	}
 	const items = schema.items;
 	if (items === undefined || Array.isArray(items)) return "unknown[]";
-	return `${asElement(schemaToType(items as CodemodeJsonSchema, indent))}[]`;
+	return `${asElement(toType(items as CodemodeJsonSchema, indent, context))}[]`;
 }
 
-function objectType(schema: Record<string, unknown>, indent: string): string {
+function objectType(schema: Record<string, unknown>, indent: string, context: SchemaContext): string {
 	const properties = isObject(schema.properties) ? schema.properties : {};
 	const required = new Set(Array.isArray(schema.required) ? schema.required : []);
 	const additional = schema.additionalProperties;
@@ -163,11 +198,11 @@ function objectType(schema: Record<string, unknown>, indent: string): string {
 	for (const [name, property] of Object.entries(properties)) {
 		const description = isObject(property) && typeof property.description === "string" ? property.description : "";
 		const optional = required.has(name) ? "" : "?";
-		const type = schemaToType(property as CodemodeJsonSchema, inner);
+		const type = toType(property as CodemodeJsonSchema, inner, context);
 		members.push(`${docComment(description, inner)}${inner}${propertyKey(name)}${optional}: ${type};`);
 	}
 	if (additional !== undefined && additional !== false) {
-		const type = additional === true ? "unknown" : schemaToType(additional as CodemodeJsonSchema, inner);
+		const type = additional === true ? "unknown" : toType(additional as CodemodeJsonSchema, inner, context);
 		members.push(`${inner}[key: string]: ${type};`);
 	} else if (members.length === 0 && additional === undefined) {
 		return "Record<string, unknown>";

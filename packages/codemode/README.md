@@ -42,7 +42,7 @@ await sandbox.close();
 - `store(key, value)` and `load(key)` read and write JSON values synchronously. See [Store](#store).
 - Nothing else: no timers, `fetch`, `process`, `require`, modules, or `WebAssembly`. `eval` and `Function` work but only produce more code inside the same VM.
 
-`timeoutMs: Infinity` disables the deadline; the script then runs until it settles or `signal` aborts it.
+`timeoutMs: Infinity` disables the deadline; the script then runs until it settles or `signal` aborts it. A script that waits on a promise nothing can settle (no tool call pending, and the VM has no timers or I/O) fails right away instead of hanging.
 
 `memoryLimitBytes` caps the VM's heap. Allocations beyond it fail inside the script as `InternalError: out of memory`.
 
@@ -102,7 +102,7 @@ renderDeclarations({ tools: sandbox.tools, globals: sandbox.globals });
 // };
 ```
 
-Schemas only shape the declarations; values are not validated against them.
+Schemas only shape the declarations; values are not validated against them. Local references (`#/$defs/...`, `#/definitions/...`) are expanded; recursive and remote references render as `unknown`.
 
 `execute()` never rejects for script failures. `result.error.kind` is one of:
 

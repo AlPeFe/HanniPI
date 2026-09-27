@@ -108,6 +108,12 @@ async function main(data: WorkerData): Promise<void> {
 	);
 	const settle = api.getProp("settle");
 	const run = api.getProp("run");
+	const stalled = api.getProp("stalled");
+	/** Run queued jobs, then fail a script that waits on nothing that can ever resume it. */
+	const drain = () => {
+		vm.executePendingJobs();
+		vm.callFunction(stalled, api).dispose();
+	};
 
 	parentPort?.on("message", (message: unknown) => {
 		if (!isHostToWorkerMessage(message)) return;
@@ -121,7 +127,7 @@ async function main(data: WorkerData): Promise<void> {
 					message.payload === undefined ? vm.undefined : vm.newString(message.payload),
 				);
 			});
-			vm.executePendingJobs();
+			drain();
 		} catch (error) {
 			crash(error);
 		}
@@ -139,7 +145,7 @@ async function main(data: WorkerData): Promise<void> {
 	}
 	vm.callFunction(run, api, fn).dispose();
 	fn.dispose();
-	vm.executePendingJobs();
+	drain();
 }
 
 if (parentPort) {

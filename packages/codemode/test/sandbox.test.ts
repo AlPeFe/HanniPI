@@ -354,6 +354,20 @@ describe("limits and lifetime", () => {
 		expect(result).toMatchObject({ ok: true, value: "late" });
 	});
 
+	it("fails a script that waits on a promise nothing can settle", async () => {
+		const sandbox = createSandbox([{ name: "echo", execute: (args) => args }]);
+		const result = await sandbox.execute("await tools.echo(1); await new Promise(() => {}); return 'never'", {
+			timeoutMs: Number.POSITIVE_INFINITY,
+		});
+		expect(result).toMatchObject({
+			ok: false,
+			error: { kind: "script", message: expect.stringContaining("can never settle") },
+		});
+		// Returning while a call is still pending is not a stall.
+		const returned = await sandbox.execute("tools.echo(2); return 'early'", { timeoutMs: Number.POSITIVE_INFINITY });
+		expect(returned).toMatchObject({ ok: true, value: "early" });
+	});
+
 	it("terminates a microtask-spinning loop on timeout", async () => {
 		const sandbox = createSandbox();
 		const result = await sandbox.execute("while (true) await null", { timeoutMs: 200 });

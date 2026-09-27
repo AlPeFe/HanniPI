@@ -10,7 +10,9 @@
  * JSON text passed in as `storeJson`, and the keys the script wrote are reported
  * with a successful "done".
  *
- * Evaluates to a function `(bridge, toolNamesJson, globalsJson, storeJson) => { settle, run }`.
+ * Evaluates to a function `(bridge, toolNamesJson, globalsJson, storeJson) => { settle, run, stalled }`.
+ * `stalled()` reports a script that has not finished while no host call is pending: with no timers
+ * or I/O in the VM, nothing can ever resume it.
  * `globalsJson` lists `{ name, spread }`; `a.b` names are grouped into a frozen `a` object.
  * `bridge(kind, a, b, c)` with kind "call" or "global" (id, name, argsJson),
  * "log" (level, message) or "done" (ok, valueJsonOrErrorJson, writesJson).
@@ -26,6 +28,13 @@ export const PRELUDE_SOURCE: string = `(function (bridge, toolNamesJson, globals
 	const ErrorCtor = Error;
 	const pending = new Map();
 	let nextId = 1;
+	let finished = false;
+
+	function done(ok, payload, writes) {
+		if (finished) return;
+		finished = true;
+		bridge("done", ok, payload, writes);
+	}
 
 	function serialize(value) {
 		return value === undefined ? undefined : stringify(value);
@@ -187,7 +196,7 @@ export const PRELUDE_SOURCE: string = `(function (bridge, toolNamesJson, globals
 			try {
 				promise = fn(tools, console);
 			} catch (error) {
-				bridge("done", false, describeError(error));
+				done(false, describeError(error));
 				return;
 			}
 			promiseThen.call(
@@ -197,15 +206,27 @@ export const PRELUDE_SOURCE: string = `(function (bridge, toolNamesJson, globals
 					try {
 						json = serialize(value);
 					} catch (error) {
-						bridge("done", false, describeError(error));
+						done(false, describeError(error));
 						return;
 					}
-					bridge("done", true, json, serializeWrites());
+					done(true, json, serializeWrites());
 				},
 				(error) => {
-					bridge("done", false, describeError(error));
+					done(false, describeError(error));
 				},
 			);
+		},
+		stalled() {
+			if (finished || pending.size > 0) return false;
+			done(
+				false,
+				stringify({
+					name: "Error",
+					message:
+						"The script is waiting on a promise that can never settle: no tool call is pending, and timers do not exist here.",
+				}),
+			);
+			return true;
 		},
 	};
 })`;

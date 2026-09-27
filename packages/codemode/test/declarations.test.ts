@@ -17,6 +17,29 @@ describe("schemaToType", () => {
 		expect(schemaToType(false)).toBe("never");
 	});
 
+	it("resolves local references and stops at recursive ones", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				item: { $ref: "#/$defs/Item" },
+				legacy: { $ref: "#/definitions/Legacy" },
+				remote: { $ref: "https://example.com/schema.json" },
+			},
+			required: ["item"],
+			$defs: {
+				Item: {
+					type: "object",
+					properties: { id: { type: "string" }, parent: { $ref: "#/$defs/Item" } },
+					required: ["id"],
+				},
+			},
+			definitions: { Legacy: { enum: ["a", "b"] } },
+		};
+		expect(schemaToType(schema)).toBe(
+			'{\n  item: {\n    id: string;\n    parent?: unknown;\n  };\n  legacy?: "a" | "b";\n  remote?: unknown;\n}',
+		);
+	});
+
 	it("renders arrays and tuples", () => {
 		expect(schemaToType({ type: "array", items: { type: "string" } })).toBe("string[]");
 		expect(schemaToType({ type: "array", items: { anyOf: [{ type: "string" }, { type: "number" }] } })).toBe(
