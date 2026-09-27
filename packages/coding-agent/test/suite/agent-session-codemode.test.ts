@@ -267,6 +267,28 @@ describe("AgentSession codemode tool", () => {
 		expect(harness.eventsOfType("tool_execution_start").filter((event) => !event.parentToolCallId)).toHaveLength(1);
 	});
 
+	it("keeps structured content that tool_result handlers replace along with the content", async () => {
+		const harness = await setup([
+			(pi) => {
+				pi.on("tool_result", (event) =>
+					event.toolName === "stats"
+						? { content: [{ type: "text", text: "0 files" }], structuredContent: { files: 0, names: [] } }
+						: undefined,
+				);
+				// A later handler that only touches details keeps what the first one set.
+				pi.on("tool_result", (event) => (event.toolName === "stats" ? { details: { audited: true } } : undefined));
+			},
+		]);
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("exec", { code: "return await tools.stats({});" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("go");
+		expect(JSON.parse(resultText(codemodeResult(harness)))).toEqual({ files: 0, names: [] });
+	});
+
 	it("attaches only the images the script passes to image(), in output order", async () => {
 		const harness = await setup();
 		harness.setResponses([

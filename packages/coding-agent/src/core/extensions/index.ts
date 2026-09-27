@@ -169,6 +169,7 @@ export type {
 	// Events - Tool
 	ToolCallEvent,
 	ToolCallEventResult,
+	ToolContext,
 	// Tools
 	ToolDefinition,
 	// Events - Tool Execution

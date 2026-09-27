@@ -116,7 +116,7 @@ const DESCRIPTION_INTRO = `Run JavaScript code to orchestrate/compose tool calls
 - Accepts raw JavaScript source text, not JSON, quoted strings, or markdown code fences.
 - You may optionally start the tool input with a first-line pragma like \`// @exec: {"max_output_tokens": 1000, "timeout_ms": 60000}\`.
 - \`max_output_tokens\` sets the token budget for direct \`exec\` results. Defaults to 10000 tokens.
-- \`timeout_ms\` sets a hard deadline for the whole script. By default there is none. \`yield_time_ms\` is accepted, but scripts always run to completion.
+- \`timeout_ms\` sets a hard deadline for the whole script. By default there is none.
 - When the JS code is fully evaluated, calls that are still running are cancelled and unawaited promises are silently discarded.
 - Tool calls are real and have side effects. If the script fails partway, earlier calls are not undone.
 - Scripts have a 256 MB memory limit; exceeding it throws \`InternalError: out of memory\`. Filter or aggregate large data instead of accumulating it.

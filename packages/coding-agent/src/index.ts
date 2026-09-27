@@ -164,6 +164,7 @@ export type {
 	ThinkingLevelSelectEvent,
 	ToolCallEvent,
 	ToolCallEventResult,
+	ToolContext,
 	ToolDefinition,
 	ToolExecutionEndEvent,
 	ToolExecutionMode,

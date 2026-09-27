@@ -474,25 +474,34 @@ describe("limits and lifetime", () => {
 	it("aborts via signal and cancels in-flight calls", async () => {
 		const controller = new AbortController();
 		let toolSignal: AbortSignal | undefined;
+		// Resolves on each call, so the test waits for the worker instead of a fixed delay.
+		let called: () => void = () => {};
+		const nextCall = () =>
+			new Promise<void>((resolve) => {
+				called = resolve;
+			});
 		const sandbox = createSandbox([
 			{
 				name: "hang",
 				execute: (_args, { signal }) => {
 					toolSignal = signal;
+					called();
 					return new Promise(() => {});
 				},
 			},
 		]);
+		const firstCall = nextCall();
 		const promise = sandbox.execute("await tools.hang(); return 'never'");
-		await new Promise((resolve) => setTimeout(resolve, 50));
+		await firstCall;
 		controller.abort(new Error("user cancelled"));
 		expect(toolSignal?.aborted).toBe(false);
 		const result = await sandbox.execute("await tools.hang()", { signal: controller.signal });
 		expect(result).toMatchObject({ ok: false, error: { kind: "aborted", message: "user cancelled" } });
 
 		const second = new AbortController();
+		const secondCall = nextCall();
 		const pending = sandbox.execute("await tools.hang(); return 'never'", { signal: second.signal });
-		await new Promise((resolve) => setTimeout(resolve, 50));
+		await secondCall;
 		second.abort();
 		const aborted = await pending;
 		expect(aborted).toMatchObject({ ok: false, error: { kind: "aborted" } });

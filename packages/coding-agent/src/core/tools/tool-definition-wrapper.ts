@@ -1,5 +1,5 @@
 import type { AgentTool, AgentToolCall, AgentToolContext } from "@earendil-works/pi-agent-core";
-import type { ExtensionContext, ExtensionToolContext, ToolDefinition } from "../extensions/types.ts";
+import type { ExtensionContext, ExtensionToolContext, ToolContext, ToolDefinition } from "../extensions/types.ts";
 
 /** Loop services for a tool executed outside the agent loop: no sibling tools, nested calls fail. */
 function createDetachedToolContext(toolCall: AgentToolCall): AgentToolContext {
@@ -18,21 +18,24 @@ function createDetachedToolContext(toolCall: AgentToolCall): AgentToolContext {
 }
 
 /**
- * Combine the extension context with the agent-loop services. Property descriptors are copied so
- * the lazy getters of the extension context keep their stale-instance checks.
+ * Combine the extension context, when there is one, with the agent-loop services. Property
+ * descriptors are copied so the lazy getters of the extension context keep their stale-instance
+ * checks.
  */
 function createToolExecutionContext(
-	base: ExtensionContext | undefined,
+	base: Partial<ExtensionContext> | undefined,
 	agentContext: AgentToolContext,
-): ExtensionToolContext {
-	const context = Object.defineProperties(
+): ToolContext {
+	const context: Partial<ExtensionContext> = Object.defineProperties(
 		{},
 		base ? Object.getOwnPropertyDescriptors(base) : {},
-	) as ExtensionToolContext;
-	context.toolCall = agentContext.toolCall;
-	context.tools = agentContext.tools;
-	context.executeTool = agentContext.executeTool;
-	return context;
+	);
+	// The services of this call win over any copied from a base that is itself a tool context.
+	return Object.assign(context, {
+		toolCall: agentContext.toolCall,
+		tools: agentContext.tools,
+		executeTool: agentContext.executeTool,
+	});
 }
 
 /** Wrap a ToolDefinition into an AgentTool for the core runtime. */
@@ -51,6 +54,9 @@ export function wrapToolDefinition<TDetails = unknown>(
 		executionMode: definition.executionMode,
 		// Without a factory, the incoming context may already be a full ExtensionToolContext, for
 		// example when this AgentTool is itself registered as an extension tool; keep all of it.
+		// Otherwise (a plain Agent, or a direct call) the extension fields are missing. Only tools
+		// that accept a ToolContext, like the built-in tools, are wrapped without a factory; the
+		// cast is where ToolDefinition's ExtensionToolContext parameter meets that case.
 		execute: (toolCallId, params, signal, onUpdate, agentContext) =>
 			definition.execute(
 				toolCallId,
@@ -58,7 +64,7 @@ export function wrapToolDefinition<TDetails = unknown>(
 				signal,
 				onUpdate,
 				createToolExecutionContext(
-					ctxFactory?.() ?? (agentContext as ExtensionContext | undefined),
+					ctxFactory?.() ?? (agentContext as Partial<ExtensionContext> | undefined),
 					agentContext ??
 						createDetachedToolContext({
 							type: "toolCall",
@@ -66,7 +72,7 @@ export function wrapToolDefinition<TDetails = unknown>(
 							name: definition.name,
 							arguments: params as AgentToolCall["arguments"],
 						}),
-				),
+				) as ExtensionToolContext,
 			),
 	};
 }

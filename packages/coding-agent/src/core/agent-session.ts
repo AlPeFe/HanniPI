@@ -600,17 +600,11 @@ export class AgentSession {
 				return undefined;
 			}
 
-			// Structured content that no longer matches replaced content is dropped rather than leaked.
-			let structuredContent = result.structuredContent;
-			if (hookResult && hookResult.structuredContent !== result.structuredContent) {
-				structuredContent = hookResult.structuredContent;
-			} else if (hookResult && hookResult.content !== result.content) {
-				structuredContent = undefined;
-			}
+			// The hook result already dropped structured content that replaced content no longer matches.
 			return {
 				content: normalizedContent,
 				details: hookResult?.details,
-				structuredContent,
+				structuredContent: hookResult ? hookResult.structuredContent : result.structuredContent,
 				isError: hookResult?.isError ?? isError,
 				usage: hookResult?.usage,
 			};
@@ -1332,7 +1326,7 @@ export class AgentSession {
 		const entry = this._toolDefinitions.get(name);
 		if (entry?.definition.exposure) return entry.definition.exposure;
 		// Built-in slots named codemode, including SDK base tool overrides given as plain AgentTools,
-		// hold the codemode tool. Scripts must not start other scripts.
+		// hold the exec (codemode) tool. Scripts must not start other scripts.
 		return name === CODEMODE_TOOL_NAME && entry?.sourceInfo.source === "builtin" ? "model-only" : "direct";
 	}
 
@@ -1364,9 +1358,9 @@ export class AgentSession {
 			);
 		});
 		const codemodeIndex = tools.findIndex((tool) => tool.name === CODEMODE_TOOL_NAME);
-		// Extension tools named codemode are left alone; built-in slots (including SDK base tool
-		// overrides) named codemode are assumed to be the codemode tool. Only the session's own
-		// codemode tool has model access, so overrides do not declare `models`.
+		// Extension tools named exec are left alone; built-in slots (including SDK base tool
+		// overrides) named exec are assumed to be the exec tool. Only the session's own
+		// exec tool has model access, so overrides do not declare `models`.
 		const execActive = codemodeIndex !== -1 && this._isBuiltInTool(CODEMODE_TOOL_NAME);
 		const mode = this.settingsManager.getCodemodeMode();
 		const isDirect = (tool: AgentTool) => this._getToolExposure(tool.name) === "direct";

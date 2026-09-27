@@ -79,20 +79,19 @@ export interface BeforeToolCallResult {
  * Merge semantics are field-by-field:
  * - `content`: if provided, replaces the tool result content array in full
  * - `details`: if provided, replaces the tool result details value in full
+ * - `structuredContent`: if provided, replaces the structured content. If `content` is provided
+ *   without it, the structured content is dropped, because it may no longer match the content.
+ *   Return it along with `content` to keep it.
  * - `isError`: if provided, replaces the tool result error flag
  * - `usage`: if provided, replaces the tool result usage
  * - `terminate`: if provided, replaces the early-termination hint
  *
- * Omitted fields keep the original executed tool result values.
+ * Other omitted fields keep the original executed tool result values.
  * There is no deep merge for `content`, `details`, or `usage`.
  */
 export interface AfterToolCallResult {
 	content?: (TextContent | ImageContent)[];
 	details?: unknown;
-	/**
-	 * If the key is present, replaces the tool result's structured content; an explicit `undefined`
-	 * clears it. Clear it when `content` is replaced with data the structured result no longer matches.
-	 */
 	structuredContent?: JsonValue;
 	isError?: boolean;
 	/** Usage from the final tool execution itself, if available. Not used for main LLM context accounting. */

@@ -365,10 +365,19 @@ export interface ExtensionContext {
  * `toolCall`, `tools`, and `executeTool()` for running other tools through the same hooks and
  * permission checks as model-issued calls.
  *
- * When a tool is executed outside the agent loop, `tools` is empty and `executeTool()` reports
- * an error outcome.
+ * Tools registered by extensions always run in a session and get the full context. A tool wrapped
+ * with `wrapToolDefinition()` without a context factory, such as a built-in tool created with
+ * `createBashTool()`, can also run in a plain `Agent` or be called directly; it then gets a
+ * {@link ToolContext} and must treat the extension fields as optional.
  */
 export interface ExtensionToolContext extends ExtensionContext, AgentToolContext {}
+
+/**
+ * Context of a tool that may run outside a pi session: the agent-loop services, plus the
+ * extension context fields when a session provides them. Outside the agent loop, `tools` is empty
+ * and `executeTool()` reports an error outcome.
+ */
+export type ToolContext = AgentToolContext & Partial<ExtensionContext>;
 
 /**
  * Extended context for command handlers.
@@ -1044,8 +1053,13 @@ export type InputEventResult =
 
 interface ToolCallEventBase {
 	type: "tool_call";
+	/**
+	 * The call's id. For calls another tool made (with `parentToolCallId` set), pi assigns
+	 * `<parent id>/<n>`; such ids never appear as tool calls or tool results in the transcript, only
+	 * in the parent result's `nestedCalls` record.
+	 */
 	toolCallId: string;
-	/** Set when another tool (for example codemode) issued this call. */
+	/** Set when another tool (for example an `exec` script) issued this call. */
 	parentToolCallId?: string;
 }
 
@@ -1113,8 +1127,9 @@ export type ToolCallEvent =
 
 interface ToolResultEventBase {
 	type: "tool_result";
+	/** The call's id; `<parent id>/<n>` for nested calls, see `ToolCallEvent`. */
 	toolCallId: string;
-	/** Set when another tool (for example codemode) issued this call. */
+	/** Set when another tool (for example an `exec` script) issued this call. */
 	parentToolCallId?: string;
 	input: Record<string, unknown>;
 	content: (TextContent | ImageContent)[];
@@ -1320,6 +1335,11 @@ export type UserBashEventResult =
 			result: BashResult;
 	  };
 
+/**
+ * Changes a `tool_result` handler makes. Omitted fields stay as they are, except that replacing
+ * `content` without returning `structuredContent` drops the structured content, because it may no
+ * longer match. Return it along with `content` to keep it.
+ */
 export interface ToolResultEventResult {
 	content?: (TextContent | ImageContent)[];
 	details?: unknown;

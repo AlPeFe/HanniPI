@@ -1062,7 +1062,7 @@ async function finalizeExecutedToolCall(
 					content: afterResult.content ?? result.content,
 					details: afterResult.details ?? result.details,
 					structuredContent:
-						"structuredContent" in afterResult ? afterResult.structuredContent : result.structuredContent,
+						afterResult.structuredContent ?? (afterResult.content ? undefined : result.structuredContent),
 					usage: afterResult.usage ?? result.usage,
 					terminate: afterResult.terminate ?? result.terminate,
 				};

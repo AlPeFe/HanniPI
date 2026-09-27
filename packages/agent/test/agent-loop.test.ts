@@ -2212,7 +2212,7 @@ describe("nested tool calls", () => {
 		expect(toolEvents.filter((event) => event.parentToolCallId === "call-1")).not.toHaveLength(0);
 	});
 
-	it("lets afterToolCall replace or clear structured content", async () => {
+	it("lets afterToolCall replace structured content and drops it when only content is replaced", async () => {
 		const schema = Type.Object({});
 		const structured: AgentTool<typeof schema> = {
 			name: "structured",
@@ -2230,8 +2230,8 @@ describe("nested tool calls", () => {
 			description: "Runs other tools",
 			parameters: schema,
 			async execute(_id, _params, _signal, _onUpdate, context) {
-				seen.push((await context!.executeTool("structured", {})).result.structuredContent);
-				seen.push((await context!.executeTool("structured", {})).result.structuredContent);
+				for (let i = 0; i < 4; i++)
+					seen.push((await context!.executeTool("structured", {})).result.structuredContent);
 				return { content: [], details: {} };
 			},
 		};
@@ -2242,9 +2242,17 @@ describe("nested tool calls", () => {
 			afterToolCall: async ({ parentToolCall }) => {
 				if (!parentToolCall) return undefined;
 				nestedCount++;
-				return nestedCount === 1
-					? { content: [{ type: "text", text: "redacted" }], structuredContent: undefined }
-					: { structuredContent: { secret: 2 } };
+				const redacted = [{ type: "text" as const, text: "redacted" }];
+				switch (nestedCount) {
+					case 1:
+						return { content: redacted };
+					case 2:
+						return { structuredContent: { secret: 2 } };
+					case 3:
+						return { content: redacted, structuredContent: { secret: 3 } };
+					default:
+						return { details: { note: "kept" } };
+				}
 			},
 		};
 		const stream = agentLoop(
@@ -2255,7 +2263,7 @@ describe("nested tool calls", () => {
 			scriptedStream({ type: "toolCall", id: "call-1", name: "runner", arguments: {} }),
 		);
 		await stream.result();
-		expect(seen).toEqual([undefined, { secret: 2 }]);
+		expect(seen).toEqual([undefined, { secret: 2 }, { secret: 3 }, { secret: 1 }]);
 	});
 
 	it("serializes concurrent nested calls to sequential tools", async () => {

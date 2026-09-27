@@ -4,7 +4,7 @@
  * Connects the servers from `mcp.json` when a session starts and registers their tools as
  * `mcp__<server>__<tool>`. By default (`"exposure": "codemode"`) the tools are only callable from
  * codemode scripts, which keeps large MCP tool lists out of the model's tool declarations; the
- * codemode tool is activated for that unless `autoEnableCodemode` is false. `"exposure": "direct"`
+ * exec tool is activated for that unless `autoEnableCodemode` is false. `"exposure": "direct"`
  * declares them to the model as well, `"deferred"` leaves them out of the codemode description, and
  * `"hidden"` makes them unreachable.
  *

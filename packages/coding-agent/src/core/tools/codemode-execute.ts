@@ -19,7 +19,7 @@ import {
 	toCodemodeIdentifier,
 } from "@earendil-works/pi-codemode";
 import { getCodemodeWorkerUrl, getQuickJSWasmPath } from "../../config.ts";
-import type { ExtensionToolContext } from "../extensions/types.ts";
+import type { ToolContext } from "../extensions/types.ts";
 import type { SessionEntry } from "../session-manager.ts";
 import {
 	CODEMODE_STORE_ENTRY_TYPE,
@@ -211,14 +211,14 @@ function toScriptValue(tool: AgentTool<any>, outcome: AgentToolCallOutcome): unk
 
 /**
  * Run one script. Split from the tool definition so the execution path can be used with any
- * `ExtensionToolContext`-compatible loop context.
+ * loop context, also outside a session (then `store()` starts empty and writes are dropped).
  */
 export async function executeCodemode(
 	toolCallId: string,
 	input: CodemodeToolInput,
 	signal: AbortSignal | undefined,
 	onUpdate: ((result: AgentToolResult<CodemodeToolDetails>) => void) | undefined,
-	ctx: ExtensionToolContext,
+	ctx: ToolContext,
 	options: CodemodeToolOptions = {},
 ): Promise<AgentToolResult<CodemodeToolDetails>> {
 	const startedAt = performance.now();

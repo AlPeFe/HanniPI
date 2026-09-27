@@ -18,7 +18,7 @@
  *
  * HTTP servers without an `Authorization` header use OAuth when they answer 401 (`/mcp login`).
  *
- * The top-level `autoEnableCodemode` (default true) activates the codemode tool when a server
+ * The top-level `autoEnableCodemode` (default true) activates the exec tool when a server
  * whose tools are only reachable from codemode connects. A project value overrides the global one.
  */
 
@@ -85,7 +85,7 @@ export interface McpServerEntry {
 
 export interface LoadedMcpConfig {
 	servers: McpServerEntry[];
-	/** Activate the codemode tool when tools only reachable from it connect. Default: true. */
+	/** Activate the exec tool when tools only reachable from it connect. Default: true. */
 	autoEnableCodemode?: boolean;
 	errors: string[];
 }
