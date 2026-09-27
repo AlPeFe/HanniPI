@@ -1,9 +1,9 @@
 /**
- * Presentation for the codemode tool.
+ * Presentation for the exec (codemode) tool.
  *
  * The call shows the script; the result lists the nested tool calls with their status as they
- * run, followed by the script output. Nested calls are not separate tool rows because they never
- * reach the model as tool calls.
+ * run, followed by the script output without the "Script completed" header. Nested calls are not
+ * separate tool rows because they never reach the model as tool calls.
  */
 
 import { Text } from "@earendil-works/pi-tui";
@@ -17,6 +17,7 @@ const CODE_PREVIEW_LINES = 10;
 const CALL_PREVIEW_COUNT = 8;
 const OUTPUT_PREVIEW_LINES = 5;
 const COLLAPSED_ARGS_CHARS = 80;
+const SCRIPT_HEADER = /^Script (completed|failed)\nWall time [\d.]+ seconds\nOutput:\n$/;
 
 function expandHint(theme: Theme, hidden: number, noun: string): string {
 	return `${theme.fg("muted", `... (${hidden} more ${noun},`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
@@ -58,9 +59,9 @@ export const codemodeRenderers: Pick<
 	"renderCall" | "renderResult"
 > = {
 	renderCall(args, theme, context) {
-		// The code includes the `// @options` line, so options show as part of the script.
+		// The code includes the `// @exec:` pragma, so options show as part of the script.
 		const code = str((args as { code?: unknown } | undefined)?.code);
-		let text = theme.fg("toolTitle", theme.bold("codemode"));
+		let text = theme.fg("toolTitle", theme.bold("exec"));
 		if (code === null) {
 			text += ` ${theme.fg("error", "[invalid arg]")}`;
 		} else if (code) {
@@ -87,23 +88,22 @@ export const codemodeRenderers: Pick<
 			sections.push(lines.join("\n"));
 		}
 
-		const output = options.isPartial ? "" : getTextOutput(result, context.showImages).trim();
+		// Drop the "Script completed\nWall time ...\nOutput:\n" header. Rejected input (an invalid pragma)
+		// has no header.
+		const [first, ...rest] = result.content;
+		const hasHeader = first?.type === "text" && SCRIPT_HEADER.test(first.text);
+		const output = options.isPartial
+			? ""
+			: getTextOutput({ ...result, content: hasHeader ? rest : result.content }, context.showImages).trim();
 		if (output) {
 			const color = context.isError ? "error" : "toolOutput";
 			const lines = replaceTabs(output).split("\n");
 			const shown = options.expanded ? lines : lines.slice(0, OUTPUT_PREVIEW_LINES);
-			// Highlighting only the visible slice is safe for JSON: no token spans a newline.
-			const jsonCount = context.isError ? 0 : Math.min(result.details?.jsonLines ?? 0, shown.length);
-			const styled = [
-				...(jsonCount > 0 ? highlightCode(shown.slice(0, jsonCount).join("\n"), "json") : []),
-				...shown.slice(jsonCount).map((line) => theme.fg(color, line)),
-			];
-			let text = styled.join("\n");
+			let text = shown.map((line) => theme.fg(color, line)).join("\n");
 			if (shown.length < lines.length) text += `\n${expandHint(theme, lines.length - shown.length, "lines")}`;
 			// The collapsed preview hides the truncation notice at the end, so name the file here.
 			const fullOutputPath = result.details?.fullOutputPath;
-			if (fullOutputPath && !options.expanded)
-				text += `\n${theme.fg("muted", `Full return value: ${fullOutputPath}`)}`;
+			if (fullOutputPath && !options.expanded) text += `\n${theme.fg("muted", `Full output: ${fullOutputPath}`)}`;
 			sections.push(text);
 		}
 

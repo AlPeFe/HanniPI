@@ -1,11 +1,11 @@
 import { Worker } from "node:worker_threads";
+import { toCodemodeIdentifier } from "../identifier.ts";
 import type {
 	CodemodeCall,
 	CodemodeCallStatus,
 	CodemodeError,
 	CodemodeExecuteOptions,
-	CodemodeLog,
-	CodemodeLogLevel,
+	CodemodeOutputItem,
 	CodemodeResult,
 	CodemodeSandboxOptions,
 	CodemodeStoreWrites,
@@ -20,9 +20,18 @@ import {
 } from "./protocol.ts";
 
 const DEFAULT_TIMEOUT_MS = 300_000;
-const LOG_LEVELS: ReadonlySet<string> = new Set<CodemodeLogLevel>(["log", "info", "warn", "error", "debug"]);
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
-const RESERVED_GLOBALS: ReadonlySet<string> = new Set(["tools", "console", "globalThis", "store", "load"]);
+const RESERVED_GLOBALS: ReadonlySet<string> = new Set([
+	"tools",
+	"ALL_TOOLS",
+	"console",
+	"text",
+	"image",
+	"exit",
+	"globalThis",
+	"store",
+	"load",
+]);
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -83,7 +92,7 @@ class Execution {
 	private readonly globals: ReadonlyMap<string, CodemodeTool>;
 	private readonly signal: AbortSignal | undefined;
 	private readonly timer: NodeJS.Timeout | undefined;
-	private readonly logs: CodemodeLog[] = [];
+	private readonly output: CodemodeOutputItem[] = [];
 	private readonly calls: CodemodeCall[] = [];
 	private readonly pending = new Map<number, PendingCall>();
 	private finished = false;
@@ -127,7 +136,11 @@ class Execution {
 		if (this.finished) return;
 		const workerData: WorkerData = {
 			code: options.code,
-			toolNames: [...options.tools.keys()],
+			tools: [...options.tools.values()].map((tool) => ({
+				name: tool.name,
+				jsName: toCodemodeIdentifier(tool.name),
+				description: tool.description ?? "",
+			})),
 			globals: [...options.globals.values()].map((global) => ({
 				name: global.name,
 				spread: global.spread === true,
@@ -170,11 +183,8 @@ class Execution {
 	private handleMessage(message: unknown): void {
 		if (this.finished || !isWorkerToHostMessage(message)) return;
 		switch (message.type) {
-			case "log":
-				this.logs.push({
-					level: LOG_LEVELS.has(message.level) ? (message.level as CodemodeLogLevel) : "log",
-					message: message.message,
-				});
+			case "output":
+				this.output.push(message.item);
 				break;
 			case "call":
 				void this.handleCall(message);
@@ -243,11 +253,11 @@ class Execution {
 		this.pending.clear();
 
 		const result: CodemodeResult = error
-			? { ok: false, error, logs: this.logs, calls: this.calls }
+			? { ok: false, error, output: this.output, calls: this.calls }
 			: {
 					ok: true,
 					value,
-					logs: this.logs,
+					output: this.output,
 					calls: this.calls,
 					storeWrites: writes === undefined ? { set: {}, delete: [] } : parseStoreWrites(writes),
 				};
@@ -265,8 +275,9 @@ class Execution {
 
 /**
  * Runs JavaScript in a QuickJS VM (a separate wasm instance) inside a worker
- * thread. The script sees `tools.<name>(args)` for every registered tool and
- * `console.*`; nothing else (no timers, `fetch`, `process`, `require`, modules).
+ * thread. The script sees `tools.<name>(args)` for every registered tool, `ALL_TOOLS`,
+ * the output helpers `text`, `image`, `exit`, and `console.*`, `store`/`load`, and the
+ * configured globals; nothing else (no timers, `fetch`, `process`, `require`, modules).
  *
  * Each `execute()` gets its own worker and VM; the sandbox only holds the tool
  * table and defaults. `close()` aborts in-flight executions.

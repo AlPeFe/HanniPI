@@ -1,7 +1,18 @@
-export { type RenderDeclarationsOptions, renderDeclarations, schemaToType } from "./declarations.ts";
+export {
+	DEFAULT_INPUT_SCHEMA_MAX_CHARS,
+	MCP_TYPESCRIPT_PREAMBLE,
+	mcpStructuredContentSchema,
+	type RenderDeclarationsOptions,
+	renderDeclarations,
+	renderToolSample,
+	renderToolSignature,
+	schemaToType,
+} from "./declarations.ts";
+export { toCodemodeIdentifier } from "./identifier.ts";
 export { CodemodeSandbox } from "./runtime/host.ts";
 export { MAX_STORE_TOTAL_CHARS, MAX_STORE_VALUE_CHARS } from "./runtime/prelude-source.ts";
 export {
+	CODEMODE_PRAGMA_PREFIX,
 	CODEMODE_SOURCE_GRAMMAR,
 	CodemodeSourceError,
 	type CodemodeSourceOptions,
@@ -15,8 +26,7 @@ export type {
 	CodemodeErrorKind,
 	CodemodeExecuteOptions,
 	CodemodeJsonSchema,
-	CodemodeLog,
-	CodemodeLogLevel,
+	CodemodeOutputItem,
 	CodemodeResult,
 	CodemodeSandboxOptions,
 	CodemodeStoreWrites,

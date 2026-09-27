@@ -69,13 +69,13 @@ OAuth applies to HTTP servers without an `Authorization` header. For authorizati
 
 Each server's tools are registered as `mcp__<server>__<tool>`. The `exposure` setting controls how the model reaches them:
 
-- `codemode` (default): the tools are callable from [codemode](cli.md#tools) scripts and listed in the codemode tool's description, but are not declared to the model. Large MCP tool lists stay out of the model's tool declarations, and scripts can call several MCP tools, in parallel if needed, while returning only the part of the result the model needs. Pi activates the codemode tool when such a server connects.
-- `deferred`: like `codemode`, but the tools are not listed in the codemode tool's description either. Scripts can still call them by name.
+- `codemode` (default): the tools are callable from [`exec`](cli.md#tools) scripts and listed in the `exec` tool's description, but are not declared to the model. Large MCP tool lists stay out of the model's tool declarations, and scripts can call several MCP tools, in parallel if needed, while returning only the part of the result the model needs. Pi activates the `exec` tool when such a server connects.
+- `deferred`: like `codemode`, but the tools are not listed in the `exec` tool's description either. Scripts can still call them by name and find them in `ALL_TOOLS`.
 - `direct`: the tools are declared to the model like built-in tools, and are also callable from codemode.
 - `hidden`: the tools are registered but cannot be called.
 
-Codemode-only tools do not depend on the active tool set, so they stay callable after `/tree`, resume, and fork. To keep pi from activating the codemode tool, set `"autoEnableCodemode": false` at the top level of `mcp.json`, next to `mcpServers`. A project `mcp.json` value overrides the global one. Pi then warns once that codemode-only tools cannot be called until codemode is activated.
+Codemode-only tools do not depend on the active tool set, so they stay callable after `/tree`, resume, and fork. To keep pi from activating the `exec` tool, set `"autoEnableCodemode": false` at the top level of `mcp.json`, next to `mcpServers`. A project `mcp.json` value overrides the global one. Pi then warns once that codemode-only tools cannot be called until `exec` is activated.
 
-MCP tools that declare an `outputSchema` return their `structuredContent` to codemode scripts. Other tools return their text output. Images are passed through as image content.
+Like in Codex, `exec` scripts receive an MCP tool's whole `CallToolResult` (`content` blocks as sent by the server, `structuredContent`, and `isError`), and the `exec` description declares it as `CallToolResult<T>`. A result with `isError` resolves in scripts and is reported to the model as an error for direct calls. `image(result.content[0])` forwards an image block to the model. The server's `instructions` describe its tools in the `exec` description.
 
-Every MCP call goes through pi's tool pipeline, so `tool_call` and `tool_result` extension handlers, including permission gates, apply to MCP tools. Calls made from codemode scripts carry the codemode call's id as `parentToolCallId`.
+Every MCP call goes through pi's tool pipeline, so `tool_call` and `tool_result` extension handlers, including permission gates, apply to MCP tools. Calls made from `exec` scripts carry the `exec` call's id as `parentToolCallId`.

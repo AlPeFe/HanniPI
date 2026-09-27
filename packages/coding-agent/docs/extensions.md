@@ -141,7 +141,7 @@ Use sequential execution when tools share mutable in-memory state.
 File-mutating tools should wrap the complete read-modify-write operation with `withFileMutationQueue()`.
 Truncate large model-facing results and tell the model where to read the complete output.
 
-Declare `outputSchema` and return a matching `structuredContent` when the result is data. The model still receives `content`; programmatic callers such as the `codemode` tool receive `structuredContent` instead of the text. Tools without `outputSchema` are passed to codemode scripts as their text content.
+Declare `outputSchema` and return a matching `structuredContent` when the result is data. The model still receives `content`; programmatic callers such as `exec` scripts receive `structuredContent` instead of the text. Tools without `outputSchema` are passed to scripts as their text content. To report a failure that still carries data, return the result with `isError: true` instead of throwing: the model sees an error, and scripts still receive `structuredContent`.
 
 A tool can run other tools with `ctx.executeTool(name, args, { signal, onUpdate })`. Nested calls go through argument validation and the `tool_call` and `tool_result` handlers like model-issued calls; their events carry `parentToolCallId`. They do not emit `tool_execution_*` events or add transcript entries, so the calling tool reports them itself, for example through `onUpdate` and `details`. `ctx.tools` lists the tools `ctx.executeTool()` can call. `tool_result` handlers that redact `content` should also replace `structuredContent`; replacing only `content` drops it.
 
@@ -153,8 +153,10 @@ See [`hello.ts`](../examples/extensions/hello.ts), [`todo.ts`](../examples/exten
 
 - `direct` (default): declared to the model while active, and callable from codemode scripts while active.
 - `model-only`: declared to the model while active, never callable from codemode scripts. Use it for tools that orchestrate other tools or ask the user.
-- `codemode`: callable from codemode scripts and listed in the codemode tool's description whenever registered. Not declared to the model unless activated explicitly.
-- `deferred`: like `codemode`, but not listed in the codemode tool's description.
+- `codemode`: callable from codemode scripts and listed in the `exec` tool's description whenever registered. Not declared to the model unless activated explicitly.
+- `deferred`: like `codemode`, but not listed in the `exec` tool's description.
+
+Codemode scripts are the scripts the model runs with the `exec` tool. `namespace: { name, description }` groups related tools under one heading in the `exec` description, as MCP servers do.
 - `hidden`: registered but unreachable. Re-register a tool with `exposure: "hidden"` to withdraw it, since tools cannot be unregistered.
 
 Registering a `direct` or `model-only` tool activates it; the other exposures are not activated on registration. The active set (`pi.getActiveTools()`, `pi.setActiveTools()`) is the set of tools declared to the model. `pi.getAllTools()` reports each tool's `exposure`.

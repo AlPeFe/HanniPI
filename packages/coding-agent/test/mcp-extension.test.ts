@@ -108,16 +108,14 @@ describe("MCP tools", () => {
 		expect(second).toMatch(/^mcp__s__a_b_[0-9a-f]{8}$/);
 	});
 
-	it("converts results, keeping structured content and throwing for errors", () => {
+	it("converts results, passing the CallToolResult to scripts and flagging errors", () => {
+		const blocks = [
+			{ type: "resource_link" as const, uri: "file:///a", name: "a" },
+			{ type: "resource" as const, resource: { uri: "file:///b", text: "b text" } },
+			{ type: "audio" as const, data: "", mimeType: "audio/wav" },
+		];
 		expect(
-			convertMcpResult("docs", "t", {
-				content: [
-					{ type: "resource_link", uri: "file:///a", name: "a" },
-					{ type: "resource", resource: { uri: "file:///b", text: "b text" } },
-					{ type: "audio", data: "", mimeType: "audio/wav" },
-				],
-				structuredContent: { ok: true },
-			}),
+			convertMcpResult("docs", "t", { content: blocks, structuredContent: { ok: true }, _meta: { trace: "x" } }),
 		).toEqual({
 			content: [
 				{ type: "text", text: "a: file:///a" },
@@ -125,14 +123,21 @@ describe("MCP tools", () => {
 				{ type: "text", text: "[audio audio/wav omitted]" },
 			],
 			details: { server: "docs", tool: "t" },
-			structuredContent: { ok: true },
+			// Scripts get the server's blocks as sent, without `_meta`.
+			structuredContent: { content: blocks, structuredContent: { ok: true } },
 		});
 		expect(convertMcpResult("docs", "t", { content: [], structuredContent: { n: 1 } }).content).toEqual([
 			{ type: "text", text: '{\n  "n": 1\n}' },
 		]);
-		expect(() => convertMcpResult("docs", "t", { content: [{ type: "text", text: "nope" }], isError: true })).toThrow(
-			"nope",
-		);
+		expect(convertMcpResult("docs", "t", { content: [{ type: "text", text: "nope" }], isError: true })).toEqual({
+			content: [{ type: "text", text: "nope" }],
+			details: { server: "docs", tool: "t" },
+			structuredContent: { content: [{ type: "text", text: "nope" }], isError: true },
+			isError: true,
+		});
+		expect(convertMcpResult("docs", "t", { content: [], isError: true }).content).toEqual([
+			{ type: "text", text: "MCP tool docs/t returned an error" },
+		]);
 	});
 });
 

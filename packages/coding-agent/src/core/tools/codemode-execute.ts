@@ -1,5 +1,5 @@
 /**
- * Runs one codemode script in the sandbox. Split from codemode.ts and loaded through
+ * Runs one `exec` script in the sandbox. Split from codemode.ts and loaded through
  * codemode-execute.lazy.ts so the sandbox runtime only loads when a script runs.
  */
 
@@ -7,15 +7,15 @@ import { randomBytes } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentTool, AgentToolCallOutcome, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { AnyModel, ClassifierContext, ImageContent, ModelType, TextContent } from "@earendil-works/pi-ai";
 import {
-	type CodemodeLog,
 	type CodemodeResult,
 	CodemodeSandbox,
 	type CodemodeTool,
 	loadQuickJSWasm,
 	parseCodemodeSource,
+	renderToolSample,
 } from "@earendil-works/pi-codemode";
 import { getCodemodeWorkerUrl, getQuickJSWasmPath } from "../../config.ts";
 import type { ExtensionToolContext } from "../extensions/types.ts";
@@ -30,8 +30,8 @@ import {
 	type CodemodeToolOptions,
 	getCodemodeCallableTools,
 	MODEL_GLOBAL_DECLARATIONS,
+	toCodemodeDeclaration,
 } from "./codemode.ts";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.ts";
 
 const ARGS_PREVIEW_CHARS = 200;
 const ERROR_PREVIEW_CHARS = 500;
@@ -123,14 +123,15 @@ export function readCodemodeStore(branch: readonly SessionEntry[]): Record<strin
 	return Object.fromEntries(store);
 }
 
-function formatLogs(logs: readonly CodemodeLog[]): string {
-	return logs.map((log) => (log.level === "log" ? log.message : `[${log.level}] ${log.message}`)).join("\n");
-}
+/** Codex's default token budget for `exec` output. */
+const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
+/** Characters per token when estimating, like Codex's truncation. */
+const CHARS_PER_TOKEN = 4;
 
-function formatValue(value: unknown): string {
-	if (value === undefined) return "";
+/** Like the script's `text()`: strings as is, other values as compact JSON. */
+function valueText(value: unknown): string {
 	if (typeof value === "string") return value;
-	return JSON.stringify(value, null, 2) ?? String(value);
+	return JSON.stringify(value) ?? String(value);
 }
 
 function formatCallSummary(calls: readonly CodemodeNestedCall[]): string {
@@ -138,7 +139,7 @@ function formatCallSummary(calls: readonly CodemodeNestedCall[]): string {
 	return `Tool calls made before the failure (they are not undone): ${calls.map((call) => `${call.name} (${call.status})`).join(", ")}`;
 }
 
-function formatFailure(result: Extract<CodemodeResult, { ok: false }>, calls: readonly CodemodeNestedCall[]): string {
+function formatError(result: Extract<CodemodeResult, { ok: false }>, calls: readonly CodemodeNestedCall[]): string {
 	const { error } = result;
 	const head =
 		error.kind === "script"
@@ -148,47 +149,62 @@ function formatFailure(result: Extract<CodemodeResult, { ok: false }>, calls: re
 				: error.kind === "aborted"
 					? `Script aborted: ${error.message}`
 					: `Script sandbox failed: ${error.message}`;
-	const parts = [head, formatCallSummary(calls)];
-	if (result.logs.length > 0) parts.push(`Console:\n${formatLogs(result.logs)}`);
-	return parts.join("\n\n");
+	return `${head}\n\n${formatCallSummary(calls)}`;
 }
 
-/**
- * Write the full return value to a temp file, like bash does for truncated output. Always JSON,
- * including string values, so the file can be processed with jq.
- */
-async function spillReturnValue(value: unknown): Promise<{ path: string } | { error: string }> {
-	const path = join(tmpdir(), `pi-codemode-${randomBytes(8).toString("hex")}.json`);
+/** Write the full text output to a temp file, like bash does for truncated output. */
+async function spillOutput(text: string): Promise<{ path: string } | { error: string }> {
+	const path = join(tmpdir(), `pi-exec-${randomBytes(8).toString("hex")}.txt`);
 	try {
-		await writeFile(path, `${JSON.stringify(value, null, 2)}\n`);
+		await writeFile(path, text);
 		return { path };
 	} catch (error) {
 		return { error: error instanceof Error ? error.message : String(error) };
 	}
 }
 
-async function formatOutput(
-	value: unknown,
-	valueText: string,
-	logs: readonly CodemodeLog[],
-): Promise<{ text: string; fullOutputPath?: string }> {
-	const parts: string[] = [];
-	if (valueText) parts.push(valueText);
-	if (logs.length > 0) parts.push(`Console:\n${formatLogs(logs)}`);
-	if (parts.length === 0) return { text: "(no return value)" };
-	const joined = parts.join("\n\n");
-	const truncation = truncateHead(joined);
-	if (!truncation.truncated) return { text: joined };
-	const head = `${truncation.content}\n\n[Output truncated to ${truncation.outputLines} of ${truncation.totalLines} lines (${formatSize(DEFAULT_MAX_BYTES)} / ${DEFAULT_MAX_LINES} line limit).`;
-	if (value === undefined) return { text: `${head} Return less data.]` };
-	const spilled = await spillReturnValue(value);
-	if ("error" in spilled) {
-		return { text: `${head} Could not save the full return value: ${spilled.error}. Return less data.]` };
-	}
+/**
+ * Apply the token budget like Codex: when the combined text exceeds it, the text items become one
+ * item that keeps the start and end of the text, and images follow it. The full text is written to
+ * a temp file.
+ */
+async function truncateOutput(
+	items: (TextContent | ImageContent)[],
+	maxTokens: number,
+): Promise<{ items: (TextContent | ImageContent)[]; fullOutputPath?: string }> {
+	const texts = items.filter((item): item is TextContent => item.type === "text").map((item) => item.text);
+	const combined = texts.join("\n");
+	const budget = maxTokens * CHARS_PER_TOKEN;
+	if (texts.length === 0 || combined.length <= budget) return { items };
+	const headChars = Math.floor(budget / 2);
+	const tailChars = budget - headChars;
+	const removed = combined.length - headChars - tailChars;
+	const head = combined.slice(0, headChars);
+	const tail = tailChars > 0 ? combined.slice(-tailChars) : "";
+	let text = `Warning: truncated output (original token count: ${Math.ceil(combined.length / CHARS_PER_TOKEN)})\nTotal output lines: ${combined.split("\n").length}\n\n${head}…${Math.ceil(removed / CHARS_PER_TOKEN)} tokens truncated…${tail}`;
+	const spilled = await spillOutput(combined);
+	text +=
+		"path" in spilled
+			? `\n\n[Full output: ${spilled.path} (read with offset/limit)]`
+			: `\n\n[Could not save the full output: ${spilled.error}]`;
 	return {
-		text: `${head} Full return value as JSON: ${spilled.path} (use jq, or read with offset/limit)]`,
-		fullOutputPath: spilled.path,
+		items: [{ type: "text", text }, ...items.filter((item) => item.type === "image")],
+		...("path" in spilled ? { fullOutputPath: spilled.path } : {}),
 	};
+}
+
+/**
+ * The value a script receives for a nested call, following Codex: a tool that declares
+ * `outputSchema` resolves to its `structuredContent`, also for error results that carry one (such
+ * as MCP results with `isError`); any other tool resolves to its text content. Other failures
+ * reject with the tool's error text.
+ */
+function toScriptValue(tool: AgentTool<any>, outcome: AgentToolCallOutcome): unknown {
+	const { result } = outcome;
+	if (tool.outputSchema && result.structuredContent !== undefined) return result.structuredContent;
+	const text = textOf(result);
+	if (outcome.isError) throw new Error(text || `Tool "${tool.name}" failed`);
+	return text;
 }
 
 /**
@@ -203,32 +219,17 @@ export async function executeCodemode(
 	ctx: ExtensionToolContext,
 	options: CodemodeToolOptions = {},
 ): Promise<AgentToolResult<CodemodeToolDetails>> {
+	const startedAt = performance.now();
 	const { code, options: sourceOptions } = parseCodemodeSource(input.code);
-	const timeoutMs = sourceOptions.timeout === undefined ? Number.POSITIVE_INFINITY : sourceOptions.timeout * 1000;
 	const calls: CodemodeNestedCall[] = [];
-	const images: ImageContent[] = [];
-	const attached = new Set<number>();
-	let logs: CodemodeLog[] = [];
 
-	const snapshot = (): CodemodeToolDetails => ({ calls: calls.map((call) => ({ ...call })), logs: [...logs] });
+	const snapshot = (): CodemodeToolDetails => ({ calls: calls.map((call) => ({ ...call })) });
 	const publish = () => onUpdate?.({ content: [], details: snapshot() });
-
-	const project = (tool: AgentTool<any>, result: AgentToolResult<unknown>): unknown => {
-		if (tool.outputSchema && result.structuredContent !== undefined) return result.structuredContent;
-		const parts: string[] = [];
-		for (const block of result.content ?? []) {
-			if (block.type === "text") {
-				parts.push(block.text);
-			} else {
-				images.push(block);
-				parts.push(`[image:${images.length} ${block.mimeType}]`);
-			}
-		}
-		return parts.join("\n");
-	};
 
 	const sandboxTools: CodemodeTool[] = getCodemodeCallableTools(ctx.tools).map((tool) => ({
 		name: tool.name,
+		// ALL_TOOLS entries carry the declaration, like Codex.
+		description: renderToolSample(toCodemodeDeclaration(tool)),
 		execute: async (args, { signal: callSignal }) => {
 			const record: CodemodeNestedCall = {
 				id: `${toolCallId}/?`,
@@ -238,46 +239,25 @@ export async function executeCodemode(
 			};
 			calls.push(record);
 			publish();
-			const startedAt = performance.now();
+			const callStartedAt = performance.now();
 			const outcome = await ctx.executeTool(tool.name, args, { signal: callSignal });
 			record.id = outcome.toolCall.id;
-			record.durationMs = performance.now() - startedAt;
+			record.durationMs = performance.now() - callStartedAt;
 			if (outcome.isError) {
-				const message = textOf(outcome.result) || `Tool "${tool.name}" failed`;
 				record.status = callSignal.aborted ? "cancelled" : "error";
-				record.error = truncateText(message, ERROR_PREVIEW_CHARS);
-				publish();
-				throw new Error(message);
+				record.error = truncateText(textOf(outcome.result) || `Tool "${tool.name}" failed`, ERROR_PREVIEW_CHARS);
+			} else {
+				record.status = "ok";
 			}
-			record.status = "ok";
 			publish();
-			return project(tool, outcome.result);
+			return toScriptValue(tool, outcome);
 		},
 	}));
 
-	const modelGlobals = options.models ? createModelGlobals(options.models, toolCallId, calls, publish) : [];
-
 	const sandbox = new CodemodeSandbox({
 		tools: sandboxTools,
-		globals: [
-			...modelGlobals,
-			{
-				name: "image",
-				execute: (ref) => {
-					if (typeof ref !== "string") throw new Error("image() expects a string containing [image:N] references");
-					let found = false;
-					for (const match of ref.matchAll(/image:(\d+)/g)) {
-						const index = Number(match[1]);
-						if (index < 1 || index > images.length) continue;
-						found = true;
-						attached.add(index);
-					}
-					if (!found) throw new Error(`No known image reference in ${JSON.stringify(truncateText(ref, 80))}`);
-					return null;
-				},
-			},
-		],
-		timeoutMs,
+		globals: options.models ? createModelGlobals(options.models, toolCallId, calls, publish) : [],
+		timeoutMs: sourceOptions.timeoutMs ?? Number.POSITIVE_INFINITY,
 		memoryLimitBytes: CODEMODE_MEMORY_LIMIT_BYTES,
 		wasm: loadQuickJSWasm(getQuickJSWasmPath()),
 		workerUrl: getCodemodeWorkerUrl(),
@@ -291,30 +271,35 @@ export async function executeCodemode(
 	} finally {
 		await sandbox.close();
 	}
-	logs = result.logs;
 	// Calls still marked running were cut off by the script ending, a timeout, or an abort.
 	for (const call of calls) {
 		if (call.status === "running") call.status = "cancelled";
 	}
 
-	if (!result.ok) {
-		throw new Error(formatFailure(result, calls));
-	}
-	const { set, delete: deleted } = result.storeWrites;
-	if (Object.keys(set).length > 0 || deleted.length > 0) {
-		options.appendEntry?.(CODEMODE_STORE_ENTRY_TYPE, { set, delete: deleted });
+	const items: (TextContent | ImageContent)[] = result.output.map((item) =>
+		item.type === "text" ? { type: "text", text: item.text } : item,
+	);
+	if (result.ok) {
+		const { set, delete: deleted } = result.storeWrites;
+		if (Object.keys(set).length > 0 || deleted.length > 0) {
+			options.appendEntry?.(CODEMODE_STORE_ENTRY_TYPE, { set, delete: deleted });
+		}
+		// pi extension: a returned value is appended like text().
+		if (result.value !== undefined) items.push({ type: "text", text: valueText(result.value) });
+	} else {
+		items.push({ type: "text", text: `Script error:\n${formatError(result, calls)}` });
 	}
 
-	const valueText = formatValue(result.value);
-	const output = await formatOutput(result.value, valueText, result.logs);
-	const content: (TextContent | ImageContent)[] = [{ type: "text", text: output.text }];
-	for (const index of [...attached].sort((a, b) => a - b)) {
-		content.push(images[index - 1]);
-	}
+	const truncated = await truncateOutput(items, sourceOptions.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS);
+	const wallTime = ((performance.now() - startedAt) / 1000).toFixed(1);
+	const header = `${result.ok ? "Script completed" : "Script failed"}\nWall time ${wallTime} seconds\nOutput:\n`;
 	const details = snapshot();
-	if (valueText && typeof result.value !== "string") details.jsonLines = valueText.split("\n").length;
-	if (output.fullOutputPath) details.fullOutputPath = output.fullOutputPath;
-	return { content, details };
+	if (truncated.fullOutputPath) details.fullOutputPath = truncated.fullOutputPath;
+	return {
+		content: [{ type: "text", text: header }, ...truncated.items],
+		details,
+		...(result.ok ? {} : { isError: true }),
+	};
 }
 
 /**

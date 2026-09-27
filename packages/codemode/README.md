@@ -1,8 +1,8 @@
 # @earendil-works/pi-codemode
 
-Runs model-written JavaScript in a QuickJS VM (compiled to WebAssembly) where the only capability is calling injected tools. Nested tool calls never enter the LLM context; only the script's return value and logs do.
+Runs model-written JavaScript in a QuickJS VM (compiled to WebAssembly) where the only capability is calling injected tools. Nested tool calls never enter the LLM context; only the script's output and return value do.
 
-The coding agent uses it for its built-in `codemode` tool. It has no pi dependencies and can be used on its own to expose any functions (remote APIs, MCP servers, application services) to model-written scripts.
+The script-facing API follows the `exec` tool of OpenAI Codex (`tools`, `ALL_TOOLS`, `text`, `image`, `exit`, `store`, `load`, and the `// @exec:` pragma), so models trained on Codex can use it unchanged. The coding agent uses it for its built-in `exec` tool. It has no pi dependencies and can be used on its own to expose any functions (remote APIs, MCP servers, application services) to model-written scripts.
 
 ## Usage
 
@@ -23,11 +23,12 @@ const sandbox = new CodemodeSandbox({
 });
 
 const result = await sandbox.execute(`
-	const text = await tools.read({ path: "package.json" });
-	console.log("bytes", text.length);
-	return JSON.parse(text).name;
+	const source = await tools.read({ path: "package.json" });
+	text("bytes " + source.length);
+	return JSON.parse(source).name;
 `);
 
+console.log(result.output); // [{ type: "text", text: "bytes 1234" }]
 if (result.ok) console.log(result.value); // "@earendil-works/pi-codemode"
 else console.error(result.error.kind, result.error.message);
 
@@ -36,8 +37,11 @@ await sandbox.close();
 
 `code` is the body of an async function: `return` and top-level `await` work. Inside the script:
 
-- `tools.<name>(args)` returns a promise. Arguments and results make a JSON round trip. A tool that throws rejects with an `Error` carrying the same message.
-- `console.log/info/warn/error/debug` are captured into `result.logs`.
+- `tools.<name>(args)` returns a promise. Arguments and results make a JSON round trip. A tool that throws rejects with an `Error` carrying the same message. Tool names are also exposed as identifiers: characters that are not valid in identifiers become `_` (`toCodemodeIdentifier`), so `my-tool` is `tools.my_tool` as well as `tools["my-tool"]`.
+- `ALL_TOOLS` lists `{ name, description }` for every tool, with `name` as the identifier.
+- `text(value)` appends a text item to `result.output`; values other than strings are JSON-stringified. `console.log/info/warn/error/debug` append text items too.
+- `image(urlOrItem)` appends an image item. It accepts a base64 `data:` URL, `{ image_url }`, or an MCP `ImageContent` block (`{ type: "image", data, mimeType }`). Remote URLs are rejected.
+- `exit()` ends the script successfully right away, keeping its output and store writes.
 - `globals` passed to the sandbox are called as top-level functions, for example a host helper `image(ref)`. They behave like tools but are not recorded in `result.calls`. A name like `models.classify` puts the function on a frozen `models` object. With `spread: true`, `execute` receives all call arguments as an array instead of the first one, and `signature` replaces the declaration generated from the schemas.
 - `store(key, value)` and `load(key)` read and write JSON values synchronously. See [Store](#store).
 - Nothing else: no timers, `fetch`, `process`, `require`, modules, or `WebAssembly`. `eval` and `Function` work but only produce more code inside the same VM.
@@ -62,15 +66,15 @@ if (result.ok) {
 
 ## Source format
 
-`parseCodemodeSource()` accepts a script whose first line may set options:
+`parseCodemodeSource()` accepts a script whose first line may be a Codex `exec` pragma:
 
 ```js
-// @options {"timeout": 30}
-const text = await tools.read({ path: "package.json" });
-return JSON.parse(text).name;
+// @exec: {"max_output_tokens": 2000, "timeout_ms": 30000}
+const source = await tools.read({ path: "package.json" });
+text(JSON.parse(source).name);
 ```
 
-The only option is `timeout` (seconds). The options line is replaced by an empty line, so line numbers in stack traces still match the input. Invalid JSON, unknown keys, or an options line without code throw `CodemodeSourceError`. `CODEMODE_SOURCE_GRAMMAR` is the matching Lark grammar for providers that support grammar-constrained tool input. Both are also available from the lightweight `@earendil-works/pi-codemode/source` entry.
+Supported fields are `yield_time_ms` and `max_output_tokens` from Codex, and `timeout_ms`, a hard deadline. The sandbox does not act on them; the caller decides. The pragma line is replaced by an empty line, so line numbers in stack traces still match the input. Empty input, invalid JSON, unknown fields, or a pragma without code throw `CodemodeSourceError` with Codex's messages. `CODEMODE_SOURCE_GRAMMAR` is Codex's Lark grammar for providers that support grammar-constrained tool input. Both are also available from the lightweight `@earendil-works/pi-codemode/source` entry.
 
 ## Bundled hosts
 
@@ -113,7 +117,7 @@ Schemas only shape the declarations; values are not validated against them. Loca
 | `aborted` | `options.signal` fired or `close()` was called; the worker was terminated   |
 | `sandbox` | the worker or VM failed, for example a wasm trap or a missing worker file   |
 
-`result.calls` lists every tool call with `status: "ok" | "error" | "cancelled"`. A call that is still running when the script returns (not awaited) is aborted through the tool's `signal` and reported as `cancelled`.
+`result.output` holds the text and image items in the order the script produced them, also for failed executions. `result.calls` lists every tool call with `status: "ok" | "error" | "cancelled"`. A call that is still running when the script returns (not awaited) is aborted through the tool's `signal` and reported as `cancelled`.
 
 ## How it works
 

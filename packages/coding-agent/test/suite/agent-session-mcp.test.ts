@@ -127,23 +127,28 @@ describe("AgentSession MCP integration", () => {
 		return message.content.map((block) => (block.type === "text" ? block.text : `<${block.type}>`)).join("\n");
 	}
 
-	it("exposes codemode-only MCP tools through codemode and hides them from the model", async () => {
+	it("exposes codemode-only MCP tools through exec and hides them from the model", async () => {
 		const { harness, calls } = await setup("codemode");
 		const searchName = createMcpToolName("docs", "search");
+		// Written like a script for Codex: MCP tools resolve to their CallToolResult, errors included.
 		harness.setResponses([
 			fauxAssistantMessage(
 				[
-					fauxToolCall("codemode", {
+					fauxToolCall("exec", {
 						code: `
-							const [a, b] = await Promise.all([
+							const [a, b] = await Promise.allSettled([
 								tools.${searchName}({ query: "mcp" }),
 								tools.${searchName}({ query: "pi" }),
 							]);
-							let failure;
-							try { await tools.mcp__docs__fail({}); } catch (error) { failure = error.message; }
+							const failure = await tools.mcp__docs__fail({});
 							const shot = await tools.mcp__docs__shot({});
-							image(shot);
-							return { hits: [...a.hits, ...b.hits], failure, shot };
+							image(shot.content[0]);
+							text(JSON.stringify({
+								hits: [...a.value.structuredContent.hits, ...b.value.structuredContent.hits],
+								failed: failure.isError,
+								failure: failure.content[0].text,
+								found: ALL_TOOLS.filter((tool) => tool.name.includes("search")).map((tool) => tool.name),
+							}));
 						`,
 					}),
 				],
@@ -154,24 +159,43 @@ describe("AgentSession MCP integration", () => {
 
 		await harness.session.prompt("search the docs");
 
-		// Codemode was activated for the codemode-exposed server; MCP tools are never declared.
-		expect(harness.session.getActiveToolNames()).toEqual(["codemode"]);
-		expect(declaredToolNames(harness)).toEqual(["codemode"]);
+		// Exec was activated for the codemode-exposed server; MCP tools are never declared.
+		expect(harness.session.getActiveToolNames()).toEqual(["exec"]);
+		expect(declaredToolNames(harness)).toEqual(["exec"]);
 		expect(nestedToolNames(harness)).toEqual([searchName, "mcp__docs__fail", "mcp__docs__shot"]);
-		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "codemode");
-		expect(codemode?.description).toContain(`${searchName}(args: {`);
-		expect(codemode?.description).toContain("}): Promise<{\n    hits: string[];\n  }>;");
+		const exec = harness.session.agent.state.tools.find((tool) => tool.name === "exec");
+		expect(exec?.description).toContain("Shared MCP Types:\n```ts\ntype Role =");
+		expect(exec?.description).toContain("## mcp__docs\nTools in the mcp__docs namespace.\n\n### `mcp__docs__search`");
+		expect(exec?.description).toContain(
+			`declare const tools: { ${searchName}(args: { query: string; }): Promise<CallToolResult<{ hits: Array<string>; }>>; };`,
+		);
 
-		const result = toolResult(harness, "codemode");
+		const result = toolResult(harness, "exec");
 		expect(result.isError).toBe(false);
-		const [json] = text(result).split("\n<image>");
-		expect(JSON.parse(json)).toEqual({
+		// Output items keep the order the script produced them in.
+		expect(result.content[1]).toEqual({ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" });
+		expect(JSON.parse((result.content[2] as { text: string }).text)).toEqual({
 			hits: ["mcp guide", "mcp faq", "pi guide", "pi faq"],
+			failed: true,
 			failure: "server exploded",
-			shot: "[image:1 image/png]",
+			found: [searchName],
 		});
-		expect(result.content.at(-1)?.type).toBe("image");
+		expect(result.content).toHaveLength(3);
 		expect(calls).toEqual(['search:{"query":"mcp"}', 'search:{"query":"pi"}', "fail:{}", "shot:{}"]);
+	});
+
+	it("reports MCP isError results to the model as errors", async () => {
+		const { harness } = await setup("direct");
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("mcp__docs__fail", {})], { stopReason: "toolUse" }),
+			fauxAssistantMessage("done"),
+		]);
+
+		await harness.session.prompt("go");
+
+		const result = toolResult(harness, "mcp__docs__fail");
+		expect(result.isError).toBe(true);
+		expect(text(result)).toBe("server exploded");
 	});
 
 	it("keeps codemode-only MCP tools callable across tree navigation", async () => {
@@ -180,7 +204,7 @@ describe("AgentSession MCP integration", () => {
 		harness.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage("two")]);
 		await harness.session.prompt("first");
 		await harness.session.prompt("second");
-		expect(harness.session.getActiveToolNames()).toEqual(["codemode"]);
+		expect(harness.session.getActiveToolNames()).toEqual(["exec"]);
 		expect(nestedToolNames(harness)).toContain(searchName);
 
 		const firstAssistant = harness.sessionManager
@@ -189,9 +213,9 @@ describe("AgentSession MCP integration", () => {
 		if (!firstAssistant) throw new Error("No assistant entry");
 		await harness.session.navigateTree(firstAssistant.id);
 
-		expect(harness.session.getActiveToolNames()).toEqual(["codemode"]);
+		expect(harness.session.getActiveToolNames()).toEqual(["exec"]);
 		expect(nestedToolNames(harness)).toContain(searchName);
-		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "codemode");
+		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "exec");
 		expect(codemode?.description).toContain(`${searchName}(args: {`);
 	});
 
@@ -222,7 +246,7 @@ describe("AgentSession MCP integration", () => {
 		await harness.session.prompt("go");
 
 		expect(declaredToolNames(harness)).toEqual(["mcp__docs__search", "mcp__docs__fail", "mcp__docs__shot"]);
-		expect(harness.session.getActiveToolNames()).not.toContain("codemode");
+		expect(harness.session.getActiveToolNames()).not.toContain("exec");
 		const result = toolResult(harness, "mcp__docs__search");
 		expect(text(result)).toBe("direct guide\ndirect faq");
 	});
@@ -265,13 +289,13 @@ describe("AgentSession MCP integration", () => {
 		await listChanged();
 		expect(nestedToolNames(harness)).toEqual(["mcp__docs__search", "mcp__docs__shot"]);
 		expect(harness.session.getAllTools().find((tool) => tool.name === "mcp__docs__fail")?.exposure).toBe("hidden");
-		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "codemode");
+		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "exec");
 		expect(codemode?.description).not.toContain("mcp__docs__fail");
 
 		tools = SERVER_TOOLS;
 		await listChanged();
 		expect(nestedToolNames(harness)).toContain("mcp__docs__fail");
-		expect(harness.session.getActiveToolNames()).toEqual(["codemode"]);
+		expect(harness.session.getActiveToolNames()).toEqual(["exec"]);
 	});
 
 	it("keeps deferred MCP tools callable from codemode but out of its description", async () => {
@@ -279,7 +303,7 @@ describe("AgentSession MCP integration", () => {
 		const searchName = createMcpToolName("docs", "search");
 		harness.setResponses([
 			fauxAssistantMessage(
-				[fauxToolCall("codemode", { code: `return await tools.${searchName}({ query: "d" });` })],
+				[fauxToolCall("exec", { code: `return (await tools.${searchName}({ query: "d" })).structuredContent;` })],
 				{
 					stopReason: "toolUse",
 				},
@@ -289,12 +313,12 @@ describe("AgentSession MCP integration", () => {
 
 		await harness.session.prompt("go");
 
-		expect(harness.session.getActiveToolNames()).toEqual(["codemode"]);
-		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "codemode");
+		expect(harness.session.getActiveToolNames()).toEqual(["exec"]);
+		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "exec");
 		expect(codemode?.description).not.toContain(searchName);
-		const result = toolResult(harness, "codemode");
+		const result = toolResult(harness, "exec");
 		expect(result.isError).toBe(false);
-		expect(JSON.parse(text(result))).toEqual({ hits: ["d guide", "d faq"] });
+		expect(JSON.parse((result.content[1] as { text: string }).text)).toEqual({ hits: ["d guide", "d faq"] });
 		expect(calls).toEqual(['search:{"query":"d"}']);
 	});
 
@@ -311,10 +335,10 @@ describe("AgentSession MCP integration", () => {
 		const { harness } = await setup("direct");
 		harness.setResponses([fauxAssistantMessage("ready")]);
 		await harness.session.prompt("start");
-		harness.session.setActiveToolsByName(["codemode", "mcp__docs__search"]);
+		harness.session.setActiveToolsByName(["exec", "mcp__docs__search"]);
 
 		expect(nestedToolNames(harness)).toEqual(["mcp__docs__search"]);
-		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "codemode");
+		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "exec");
 		expect(codemode?.description).toContain("mcp__docs__search");
 		expect(codemode?.description).not.toContain("mcp__docs__fail");
 	});

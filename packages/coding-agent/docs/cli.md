@@ -136,9 +136,15 @@ Default enabled tools are `read`, `bash`, `edit`, and `write`, unless `defaultTo
 | `grep` | Search file contents |
 | `find` | Find paths using glob patterns |
 | `ls` | List directory contents |
-| `codemode` | Run JavaScript that calls the other active tools, for example in parallel with `Promise.all`; only the script's return value and console output reach the model |
+| `exec` | Run JavaScript that calls the other tools (codemode), for example in parallel with `Promise.allSettled`; only the script's output reaches the model |
 
-`codemode` scripts run in a QuickJS sandbox that can only reach the other tools. A script may start with an options line such as `// @options {"timeout": 30}`; `timeout` is in seconds and unset by default. `store(key, value)` and `load(key)` keep JSON values across codemode calls: each successful script that stores values appends a `codemode-store` custom entry to the session, so resumed sessions keep the values and each branch sees only the values written on its path. Scripts can also use `models`: `getModelsOfType`, `getAvailableOfType`, and `getModelOfType` list the model catalog, and `classify(model, context)` runs a classifier model with the session's credentials, at most four at a time per script. Like `bash` output, a codemode result larger than 50KB or 2000 lines is truncated; the full return value is written to a `.json` temp file whose path is included in the result.
+`exec` follows the `exec` tool of OpenAI Codex, so models trained on Codex can use it unchanged. Scripts run in a QuickJS sandbox that can only reach the other tools, through `tools.<name>(args)`; `ALL_TOOLS` lists them. Output comes from `text(value)`, `image(dataUrlOrImageContent)`, `console.*`, and a top-level `return value`; `exit()` ends the script early. The result starts with `Script completed` or `Script failed`, the wall time, and the output; a failed script keeps its partial output, followed by `Script error:` and the error.
+
+A script may start with a pragma line such as `// @exec: {"max_output_tokens": 2000, "timeout_ms": 60000}`. `max_output_tokens` (default 10000) limits the output: longer output keeps its start and end, and the full text is written to a temp file whose path is included in the result. `timeout_ms` is a hard deadline, unset by default. `yield_time_ms` is accepted for compatibility, but scripts always run to completion.
+
+Tools with an output schema resolve to structured values: `bash` to `{ output, exit_code, wall_time_seconds }`, also for non-zero exit codes, and MCP tools to their `CallToolResult`. Other tools resolve to their text output.
+
+`store(key, value)` and `load(key)` keep JSON values across `exec` calls: each successful script that stores values appends a `codemode-store` custom entry to the session, so resumed sessions keep the values and each branch sees only the values written on its path. Scripts can also use `models`: `getModelsOfType`, `getAvailableOfType`, and `getModelOfType` list the model catalog, and `classify(model, context)` runs a classifier model with the session's credentials, at most four at a time per script.
 
 <a id="resource-options"></a>
 

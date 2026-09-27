@@ -13,12 +13,13 @@ export type CodemodeJsonSchema = { [key: string]: unknown } | boolean;
 
 export interface CodemodeTool {
 	/**
-	 * The script calls this as `tools.<name>(args)` (or `tools["<name>"](args)` for names that are
-	 * not identifiers). Globals are called as `<name>(args)` and must be identifiers, or
+	 * The script calls tools as `tools.<id>(args)`, where `<id>` is the name with characters that
+	 * are not valid in identifiers replaced by `_` (see `toCodemodeIdentifier`), and also as
+	 * `tools["<name>"](args)`. Globals are called as `<name>(args)` and must be identifiers, or
 	 * `<namespace>.<member>`, which groups them into a frozen namespace object.
 	 */
 	name: string;
-	/** Shown as a doc comment in {@link renderDeclarations}. */
+	/** Shown as a doc comment in {@link renderDeclarations}, and listed in `ALL_TOOLS` for tools. */
 	description?: string;
 	/** Schema of the single argument. Rendered as the parameter type; `unknown` when omitted. */
 	inputSchema?: CodemodeJsonSchema;
@@ -39,12 +40,11 @@ export interface CodemodeTool {
 	execute(args: unknown, context: CodemodeToolContext): Promise<unknown> | unknown;
 }
 
-export type CodemodeLogLevel = "log" | "info" | "warn" | "error" | "debug";
-
-export interface CodemodeLog {
-	level: CodemodeLogLevel;
-	message: string;
-}
+/**
+ * One item of the script's output, in the order the script produced it: `text()` and `console.*`
+ * produce text items, `image()` image items. `data` is base64.
+ */
+export type CodemodeOutputItem = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 
 export type CodemodeCallStatus = "ok" | "error" | "cancelled";
 
@@ -78,17 +78,24 @@ export interface CodemodeStoreWrites {
 	delete: string[];
 }
 
+/** `output` is kept for failed executions too, up to the failure. `exit()` completes with `value: undefined`. */
 export type CodemodeResult =
-	| { ok: true; value: unknown; logs: CodemodeLog[]; calls: CodemodeCall[]; storeWrites: CodemodeStoreWrites }
-	| { ok: false; error: CodemodeError; logs: CodemodeLog[]; calls: CodemodeCall[] };
+	| {
+			ok: true;
+			value: unknown;
+			output: CodemodeOutputItem[];
+			calls: CodemodeCall[];
+			storeWrites: CodemodeStoreWrites;
+	  }
+	| { ok: false; error: CodemodeError; output: CodemodeOutputItem[]; calls: CodemodeCall[] };
 
 export interface CodemodeSandboxOptions {
 	tools?: CodemodeTool[];
 	/**
 	 * Functions exposed as top-level identifiers instead of on `tools`, for host helpers such as
 	 * attaching an image to the result. They behave like tools (JSON round trip, promise result)
-	 * but are not recorded in `result.calls`. Names must be identifiers and may not shadow
-	 * `tools`, `console`, `store`, or `load`.
+	 * but are not recorded in `result.calls`. Names must be identifiers and may not shadow the
+	 * built-in globals (`tools`, `ALL_TOOLS`, `console`, `text`, `image`, `exit`, `store`, `load`).
 	 */
 	globals?: CodemodeTool[];
 	/**

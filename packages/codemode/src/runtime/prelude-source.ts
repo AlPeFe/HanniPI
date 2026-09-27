@@ -3,32 +3,46 @@
  *
  * The VM is its own wasm instance, so nothing here guards a realm boundary.
  * The prelude keeps the host bridge in a closure so the script cannot call it
- * directly, and builds `tools`, `console`, and globals on top of it. Tool
- * arguments and results cross as JSON strings and are parsed on this side.
+ * directly, and builds `tools`, `ALL_TOOLS`, the output helpers (`text`, `image`,
+ * `exit`, `console`), and globals on top of it. Tool arguments and results cross
+ * as JSON strings and are parsed on this side.
+ *
+ * Output helpers follow Codex's `exec`: `text(value)` appends a text item (non-strings are
+ * JSON-stringified), `image(urlOrItem)` appends an image from a base64 `data:` URL, an
+ * `{ image_url }` object, or an MCP `ImageContent` block, and `exit()` ends the script
+ * successfully. `console.*` appends text items like `text()`.
  *
  * `store(key, value)` and `load(key)` are synchronous: they work on a snapshot of
  * JSON text passed in as `storeJson`, and the keys the script wrote are reported
  * with a successful "done".
  *
- * Evaluates to a function `(bridge, toolNamesJson, globalsJson, storeJson) => { settle, run, stalled }`.
+ * Evaluates to a function `(bridge, toolsJson, globalsJson, storeJson) => { settle, run, stalled }`.
+ * `toolsJson` lists `{ name, jsName, description }`: `tools[jsName]` and `tools[name]` call the
+ * tool, and `ALL_TOOLS` lists `{ name: jsName, description }`.
  * `stalled()` reports a script that has not finished while no host call is pending: with no timers
  * or I/O in the VM, nothing can ever resume it.
  * `globalsJson` lists `{ name, spread }`; `a.b` names are grouped into a frozen `a` object.
  * `bridge(kind, a, b, c)` with kind "call" or "global" (id, name, argsJson),
- * "log" (level, message) or "done" (ok, valueJsonOrErrorJson, writesJson).
+ * "output" ("text", text) or ("image", data, mimeType), or "done" (ok, valueJsonOrErrorJson, writesJson).
  */
 export const MAX_STORE_VALUE_CHARS = 256 * 1024;
 export const MAX_STORE_TOTAL_CHARS = 1024 * 1024;
 
-export const PRELUDE_SOURCE: string = `(function (bridge, toolNamesJson, globalsJson, storeJson) {
+const IMAGE_HELPER_EXPECTS =
+	"image expects a non-empty image URL string, an object with image_url, or a raw MCP image block";
+
+export const PRELUDE_SOURCE: string = `(function (bridge, toolsJson, globalsJson, storeJson) {
 	"use strict";
 	const stringify = JSON.stringify;
 	const parse = JSON.parse;
 	const promiseThen = Promise.prototype.then;
 	const ErrorCtor = Error;
+	const TypeErrorCtor = TypeError;
 	const pending = new Map();
 	let nextId = 1;
 	let finished = false;
+	// Thrown by exit() to unwind the script after it already reported success.
+	const EXIT = Object.freeze({});
 
 	function done(ok, payload, writes) {
 		if (finished) return;
@@ -86,10 +100,18 @@ export const PRELUDE_SOURCE: string = `(function (bridge, toolNamesJson, globals
 	}
 
 	const tools = Object.create(null);
-	for (const name of parse(toolNamesJson)) {
-		tools[name] = caller("call", name);
+	const allTools = [];
+	for (const { name, jsName, description } of parse(toolsJson)) {
+		const fn = caller("call", name);
+		// The first tool wins when two names normalize to the same identifier.
+		if (!(jsName in tools)) {
+			tools[jsName] = fn;
+			allTools.push(Object.freeze({ name: jsName, description }));
+		}
+		if (!(name in tools)) tools[name] = fn;
 	}
 	Object.freeze(tools);
+	Object.freeze(allTools);
 
 	const namespaces = new Map();
 	for (const { name, spread } of parse(globalsJson)) {
@@ -162,16 +184,86 @@ export const PRELUDE_SOURCE: string = `(function (bridge, toolNamesJson, globals
 	Object.defineProperty(globalThis, "store", { value: store, enumerable: true });
 	Object.defineProperty(globalThis, "load", { value: load, enumerable: true });
 
+	// Like Codex: primitives become their string form, everything else JSON.
+	function outputText(value) {
+		if (value === undefined || value === null || typeof value !== "object" && typeof value !== "function") {
+			return String(value);
+		}
+		const json = stringify(value);
+		return json === undefined ? String(value) : json;
+	}
+
+	function text(value) {
+		let rendered;
+		try {
+			rendered = outputText(value);
+		} catch (error) {
+			throw new TypeErrorCtor(error instanceof ErrorCtor ? error.message : String(error));
+		}
+		if (!finished) bridge("output", "text", rendered);
+	}
+
+	function imageUrl(value) {
+		if (typeof value === "string") return value;
+		if (typeof value !== "object" || value === null || Array.isArray(value)) {
+			throw new TypeErrorCtor(${JSON.stringify(IMAGE_HELPER_EXPECTS)});
+		}
+		if (value.image_url !== undefined) {
+			if (typeof value.image_url !== "string") throw new TypeErrorCtor(${JSON.stringify(IMAGE_HELPER_EXPECTS)});
+			return value.image_url;
+		}
+		if (typeof value.type !== "string") throw new TypeErrorCtor(${JSON.stringify(IMAGE_HELPER_EXPECTS)});
+		if (value.type !== "image") {
+			throw new TypeErrorCtor('image only accepts MCP image blocks, got "' + value.type + '"');
+		}
+		if (typeof value.data !== "string" || value.data === "") throw new TypeErrorCtor("image expected MCP image data");
+		if (value.data.toLowerCase().startsWith("data:")) return value.data;
+		const mimeType = typeof value.mimeType === "string" && value.mimeType ? value.mimeType : "application/octet-stream";
+		return "data:" + mimeType + ";base64," + value.data;
+	}
+
+	function image(value) {
+		const url = imageUrl(value);
+		if (url === "") throw new TypeErrorCtor(${JSON.stringify(IMAGE_HELPER_EXPECTS)});
+		const colon = url.indexOf(":");
+		const scheme = colon === -1 ? "" : url.slice(0, colon).toLowerCase();
+		if (scheme === "http" || scheme === "https") {
+			throw new TypeErrorCtor("remote image URLs are not supported in tool outputs. Pass a base64 data URI instead");
+		}
+		const comma = url.indexOf(",");
+		const header = comma === -1 ? [] : url.slice(colon + 1, comma).split(";");
+		if (scheme !== "data" || comma === -1 || header.slice(1).every((part) => part.toLowerCase() !== "base64")) {
+			throw new TypeErrorCtor("invalid image output. Pass a base64 data URI instead");
+		}
+		if (!finished) bridge("output", "image", url.slice(comma + 1), header[0] || "application/octet-stream");
+	}
+
+	function exit() {
+		let writesJson;
+		try {
+			writesJson = serializeWrites();
+		} catch (error) {
+			done(false, describeError(error));
+			throw EXIT;
+		}
+		done(true, undefined, writesJson);
+		throw EXIT;
+	}
+
 	const console = {};
 	for (const level of ["log", "info", "warn", "error", "debug"]) {
 		console[level] = (...args) => {
-			bridge("log", level, args.map(format).join(" "));
+			if (!finished) bridge("output", "text", args.map(format).join(" "));
 		};
 	}
 	Object.freeze(console);
 
 	Object.defineProperty(globalThis, "tools", { value: tools, enumerable: true });
+	Object.defineProperty(globalThis, "ALL_TOOLS", { value: allTools, enumerable: true });
 	Object.defineProperty(globalThis, "console", { value: console, enumerable: true });
+	Object.defineProperty(globalThis, "text", { value: text, enumerable: true });
+	Object.defineProperty(globalThis, "image", { value: image, enumerable: true });
+	Object.defineProperty(globalThis, "exit", { value: exit, enumerable: true });
 
 	return {
 		settle(id, ok, payload) {

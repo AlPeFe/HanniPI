@@ -100,6 +100,8 @@ export class McpServerConnection implements McpToolCaller {
 	state: ServerState = "connecting";
 	error: string | undefined;
 	tools: McpTool[] = [];
+	/** Server instructions from `initialize`, describing its tools as a group. */
+	instructions: string | undefined;
 	/** Last OAuth challenge from the server; sign-in uses its resource metadata URL and scope. */
 	challenge: OAuthChallenge | undefined;
 	private client: McpClient | undefined;
@@ -260,6 +262,7 @@ export class McpServerConnection implements McpToolCaller {
 			if (client.connectionState !== "connected") throw new Error("connection closed during setup");
 			this.client = client;
 			this.tools = tools;
+			this.instructions = client.instructions?.trim() || undefined;
 			this.state = "connected";
 			this.error = undefined;
 			this.onTools(this);

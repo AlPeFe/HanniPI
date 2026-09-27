@@ -29,7 +29,7 @@ describe("script execution", () => {
 		expect(await sandbox.execute("return { a: 1, b: [true, 'x'] }")).toMatchObject({
 			ok: true,
 			value: { a: 1, b: [true, "x"] },
-			logs: [],
+			output: [],
 			calls: [],
 		});
 		expect(await sandbox.execute("return 'plain'")).toMatchObject({ ok: true, value: "plain" });
@@ -42,19 +42,88 @@ describe("script execution", () => {
 		expect(result).toMatchObject({ ok: true, value: 42 });
 	});
 
-	it("captures console output in order", async () => {
+	it("collects text(), image(), and console output in order", async () => {
 		const sandbox = createSandbox();
 		const result = await sandbox.execute(`
 			console.log("hello", 1, { a: 1 });
-			console.warn("careful");
+			text({ json: true });
+			text(undefined);
+			text(7);
+			image("data:image/png;base64,AAAA");
+			image({ image_url: "data:image/jpeg;base64,BBBB" });
+			image({ type: "image", data: "CCCC", mimeType: "image/gif" });
 			console.error(new Error("bad"));
 			return null;
 		`);
 		expect(result.ok).toBe(true);
-		expect(result.logs.map((log) => log.level)).toEqual(["log", "warn", "error"]);
-		expect(result.logs[0].message).toBe('hello 1 {"a":1}');
-		expect(result.logs[1].message).toBe("careful");
-		expect(result.logs[2].message).toMatch(/^Error: bad/);
+		expect(result.output.slice(0, -1)).toEqual([
+			{ type: "text", text: 'hello 1 {"a":1}' },
+			{ type: "text", text: '{"json":true}' },
+			{ type: "text", text: "undefined" },
+			{ type: "text", text: "7" },
+			{ type: "image", data: "AAAA", mimeType: "image/png" },
+			{ type: "image", data: "BBBB", mimeType: "image/jpeg" },
+			{ type: "image", data: "CCCC", mimeType: "image/gif" },
+		]);
+		expect(result.output.at(-1)).toMatchObject({ type: "text", text: expect.stringMatching(/^Error: bad/) });
+	});
+
+	it("rejects invalid text() and image() arguments like Codex", async () => {
+		const sandbox = createSandbox();
+		const result = await sandbox.execute(`
+			const errors = [];
+			const circular = {};
+			circular.self = circular;
+			for (const run of [
+				() => text(circular),
+				() => image(""),
+				() => image("https://example.com/a.png"),
+				() => image("data:image/png,raw"),
+				() => image({ type: "text", text: "x" }),
+				() => image({ type: "image", data: "" }),
+				() => image(42),
+			]) {
+				try { run(); errors.push("no error"); } catch (error) { errors.push(error.name + ": " + error.message); }
+			}
+			return errors;
+		`);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.output).toEqual([]);
+		const errors = result.value as string[];
+		expect(errors[0]).toMatch(/^TypeError: .*circular/);
+		expect(errors.slice(1)).toEqual([
+			"TypeError: image expects a non-empty image URL string, an object with image_url, or a raw MCP image block",
+			"TypeError: remote image URLs are not supported in tool outputs. Pass a base64 data URI instead",
+			"TypeError: invalid image output. Pass a base64 data URI instead",
+			'TypeError: image only accepts MCP image blocks, got "text"',
+			"TypeError: image expected MCP image data",
+			"TypeError: image expects a non-empty image URL string, an object with image_url, or a raw MCP image block",
+		]);
+	});
+
+	it("ends the script successfully on exit(), keeping output and store writes", async () => {
+		const sandbox = createSandbox([echo]);
+		const result = await sandbox.execute(`
+			text("before");
+			store("k", 1);
+			await tools.echo(1);
+			try { exit(); } catch {}
+			text("after");
+			return "unreachable";
+		`);
+		expect(result).toMatchObject({
+			ok: true,
+			value: undefined,
+			output: [{ type: "text", text: "before" }],
+			storeWrites: { set: { k: 1 }, delete: [] },
+		});
+	});
+
+	it("keeps output produced before a failure", async () => {
+		const sandbox = createSandbox();
+		const result = await sandbox.execute('text("partial");\nthrow new Error("boom")');
+		expect(result).toMatchObject({ ok: false, output: [{ type: "text", text: "partial" }] });
 	});
 
 	it("reports syntax errors with the script's line number", async () => {
@@ -83,8 +152,11 @@ describe("script execution", () => {
 		if (result.ok) return;
 		expect(result.error.stack).toMatch(/^RangeError: outer\n {4}at .*codemode\.js:2/);
 		expect(result.error.stack).not.toContain("codemode-prelude.js");
-		expect(result.logs[0].message).toMatch(/^Error: inner\n {4}at .*codemode\.js:1/);
-		expect(result.logs[0].message).not.toContain("codemode-prelude.js");
+		expect(result.output[0]).toMatchObject({
+			type: "text",
+			text: expect.stringMatching(/^Error: inner\n {4}at .*codemode\.js:1/),
+		});
+		expect(JSON.stringify(result.output)).not.toContain("codemode-prelude.js");
 	});
 
 	it("reports non-Error throws", async () => {
@@ -140,6 +212,31 @@ describe("tools", () => {
 			return { values: [a, b, c], names: Object.keys(tools) };
 		`);
 		expect(result).toMatchObject({ ok: true, value: { values: [1, 2, 3], names: ["echo", "delay"] } });
+	});
+
+	it("exposes tools under normalized identifiers and lists them in ALL_TOOLS", async () => {
+		const sandbox = createSandbox([
+			{ name: "my-tool", description: "Dashes", execute: () => "dash" },
+			{ name: "my_tool", description: "Shadowed", execute: () => "underscore" },
+			{ name: "mcp__docs__search", execute: () => "mcp" },
+		]);
+		const result = await sandbox.execute(`
+			try { ALL_TOOLS.push({}); } catch {}
+			return {
+				all: ALL_TOOLS,
+				calls: [await tools.my_tool(), await tools["my-tool"](), await tools.mcp__docs__search()],
+			};
+		`);
+		expect(result).toMatchObject({
+			ok: true,
+			value: {
+				all: [
+					{ name: "my_tool", description: "Dashes" },
+					{ name: "mcp__docs__search", description: "" },
+				],
+				calls: ["dash", "dash", "mcp"],
+			},
+		});
 	});
 
 	it("passes undefined arguments and results through", async () => {

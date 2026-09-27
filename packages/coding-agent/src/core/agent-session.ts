@@ -1342,7 +1342,17 @@ export class AgentSession {
 		// codemode tool has model access, so overrides do not declare `models`.
 		if (codemodeIndex !== -1 && this._toolDefinitions.get(CODEMODE_TOOL_NAME)?.sourceInfo.source === "builtin") {
 			const listed = nestedTools.filter((tool) => this._getToolExposure(tool.name) !== "deferred");
-			const description = createCodemodeDescription(listed, { models: this._baseToolsOverride === undefined });
+			const namespaces = new Map(
+				listed.flatMap((tool) => {
+					const namespace = this._toolDefinitions.get(tool.name)?.definition.namespace;
+					return namespace ? [[tool.name, namespace] as const] : [];
+				}),
+			);
+			const description = createCodemodeDescription(listed, {
+				models: this._baseToolsOverride === undefined,
+				namespaces,
+				hasDeferredTools: listed.length < nestedTools.length,
+			});
 			tools[codemodeIndex] = { ...tools[codemodeIndex], description };
 		}
 		this.agent.state.tools = tools;

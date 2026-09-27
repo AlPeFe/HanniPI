@@ -1,6 +1,6 @@
 /**
  * Worker thread entry. One worker runs one script inside a fresh QuickJS VM
- * (a separate wasm instance), relays tool calls and logs to the host, and
+ * (a separate wasm instance), relays tool calls and output to the host, and
  * reports the result. The host terminates the worker when the script settles,
  * times out, or is aborted; the worker exists so that a spinning script never
  * blocks the host thread.
@@ -74,8 +74,14 @@ async function main(data: WorkerData): Promise<void> {
 					args: c === undefined || c.isUndefined ? undefined : c.toString(),
 				});
 				break;
-			case "log":
-				post({ type: "log", level: a.toString(), message: b.toString() });
+			case "output":
+				post({
+					type: "output",
+					item:
+						a.toString() === "image"
+							? { type: "image", data: b.toString(), mimeType: c.toString() }
+							: { type: "text", text: b.toString() },
+				});
 				break;
 			case "done":
 				if (a.toBoolean()) {
@@ -100,7 +106,7 @@ async function main(data: WorkerData): Promise<void> {
 				vm.evalCode(PRELUDE_SOURCE, "codemode-prelude.js"),
 				vm.undefined,
 				bridge,
-				vm.newString(JSON.stringify(data.toolNames)),
+				vm.newString(JSON.stringify(data.tools)),
 				vm.newString(JSON.stringify(data.globals)),
 				vm.newString(JSON.stringify(data.store)),
 			),

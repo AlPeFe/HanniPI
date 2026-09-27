@@ -179,6 +179,7 @@ export type {
 	ToolExecutionUpdateEvent,
 	ToolExposure,
 	ToolInfo,
+	ToolNamespace,
 	ToolRenderResultOptions,
 	ToolResultEvent,
 	ToolResultEventResult,

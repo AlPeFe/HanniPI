@@ -99,6 +99,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		const registerTools = (connection: McpServerConnection) => {
 			const { name: server, config } = connection.entry;
 			const exposure = config.exposure ?? "codemode";
+			const namespaceName = `mcp__${server}`;
+			const namespace = {
+				name: namespaceName,
+				description: connection.instructions ?? `Tools in the ${namespaceName} namespace.`,
+			};
 			const previous = serverTools.get(server) ?? new Set<string>();
 			const current = new Set<string>();
 			for (const tool of connection.tools) {
@@ -114,6 +119,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 					tool,
 					name,
 					exposure,
+					namespace,
 					timeoutMs: connection.timeoutMs,
 					getClient: async () => connection,
 				});
@@ -129,7 +135,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			}
 		};
 
-		/** Codemode-exposed tools are unreachable without the codemode tool, so turn it on. */
+		/** Codemode-exposed tools are unreachable without the exec tool, so turn it on. */
 		const ensureCodemodeActive = (ctx: ExtensionContext) => {
 			const needsCodemode = connections.some((connection) => {
 				const exposure = connection.entry.config.exposure ?? "codemode";
@@ -145,8 +151,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			warnedUnreachable = true;
 			ctx.ui.notify(
 				available
-					? "MCP tools are only reachable from codemode, but codemode is inactive and autoEnableCodemode is false; they cannot be called."
-					: "MCP tools are only reachable from codemode, but the codemode tool is not available; they cannot be called.",
+					? "MCP tools are only reachable from the exec tool, but exec is inactive and autoEnableCodemode is false; they cannot be called."
+					: "MCP tools are only reachable from the exec tool, but it is not available; they cannot be called.",
 				"warning",
 			);
 		};

@@ -468,20 +468,29 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 }
 
 /**
- * How the model reaches a tool.
+ * How the model reaches a tool. "Codemode scripts" are the scripts the model runs with the `exec`
+ * tool.
  *
  * - `direct`: declared to the model while active, and callable from codemode scripts while active.
  * - `model-only`: declared to the model while active, never callable from codemode scripts. Use it
  *   for orchestrating or interactive tools.
- * - `codemode`: callable from codemode scripts whenever registered, and listed in the codemode
+ * - `codemode`: callable from codemode scripts whenever registered, and listed in the `exec`
  *   tool's description. Not declared to the model unless explicitly activated.
- * - `deferred`: like `codemode`, but not listed in the codemode tool's description.
+ * - `deferred`: like `codemode`, but not listed in the `exec` tool's description.
  * - `hidden`: registered but unreachable. Activating it has no effect.
  *
  * `direct` and `model-only` tools are activated when they are registered; the others are not.
  * The active tool set (`getActiveTools`/`setActiveTools`) is the set declared to the model.
  */
 export type ToolExposure = "direct" | "model-only" | "codemode" | "deferred" | "hidden";
+
+/** A group of related tools, such as the tools of one MCP server. The `exec` tool's description lists them together. */
+export interface ToolNamespace {
+	/** For example `mcp__docs`. */
+	name: string;
+	/** Shown once above the group's tools. */
+	description?: string;
+}
 
 /**
  * Tool definition for registerTool().
@@ -517,6 +526,9 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	 * How the model reaches the tool. Default: `"direct"`. See {@link ToolExposure}.
 	 */
 	exposure?: ToolExposure;
+
+	/** Group the tool belongs to, for example its MCP server. */
+	namespace?: ToolNamespace;
 
 	/**
 	 * Per-tool execution mode override.

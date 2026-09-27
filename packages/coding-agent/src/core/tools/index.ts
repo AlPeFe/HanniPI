@@ -106,7 +106,7 @@ import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } fro
 
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
-export type ToolName = "read" | "bash" | "powershell" | "edit" | "write" | "grep" | "find" | "ls" | "codemode";
+export type ToolName = "read" | "bash" | "powershell" | "edit" | "write" | "grep" | "find" | "ls" | "exec";
 export const allToolNames: Set<ToolName> = new Set([
 	"read",
 	"bash",
@@ -116,7 +116,7 @@ export const allToolNames: Set<ToolName> = new Set([
 	"grep",
 	"find",
 	"ls",
-	"codemode",
+	"exec",
 ]);
 
 export interface ToolsOptions {
@@ -149,7 +149,7 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createFindToolDefinition(cwd, options?.find);
 		case "ls":
 			return createLsToolDefinition(cwd, options?.ls);
-		case "codemode":
+		case "exec":
 			return createCodemodeToolDefinition(options?.codemode);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
@@ -174,7 +174,7 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createFindTool(cwd, options?.find);
 		case "ls":
 			return createLsTool(cwd, options?.ls);
-		case "codemode":
+		case "exec":
 			return createCodemodeTool([], options?.codemode);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
@@ -209,7 +209,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		grep: createGrepToolDefinition(cwd, options?.grep),
 		find: createFindToolDefinition(cwd, options?.find),
 		ls: createLsToolDefinition(cwd, options?.ls),
-		codemode: createCodemodeToolDefinition(options?.codemode),
+		exec: createCodemodeToolDefinition(options?.codemode),
 	};
 }
 
@@ -241,6 +241,6 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		grep: createGrepTool(cwd, options?.grep),
 		find: createFindTool(cwd, options?.find),
 		ls: createLsTool(cwd, options?.ls),
-		codemode: createCodemodeTool([], options?.codemode),
+		exec: createCodemodeTool([], options?.codemode),
 	};
 }

@@ -1,9 +1,11 @@
 /**
  * Adapts MCP tools to pi tool definitions.
  *
- * Results map onto pi's model-facing content (text and images). `structuredContent` is passed
- * through for tools that declare an `outputSchema`, so codemode scripts receive the data instead
- * of the text. MCP errors (`isError`) become thrown errors, which pi reports as failed calls.
+ * Results map onto pi's model-facing content (text and images). Like Codex, `exec` scripts receive
+ * the whole `CallToolResult` without `_meta` (`content` blocks as sent by the server,
+ * `structuredContent`, `isError`): it is the tool's `structuredContent`, and every MCP tool
+ * declares a `CallToolResult` output schema. MCP errors (`isError`) are error results for the
+ * model, but scripts still resolve to the result.
  */
 
 import { createHash } from "node:crypto";
@@ -11,7 +13,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ImageContent, JsonValue, TextContent } from "@earendil-works/pi-ai";
 import type { CallToolResult, ContentBlock, McpRequestOptions, Tool as McpTool } from "@earendil-works/pi-mcp";
 import type { TSchema } from "typebox";
-import type { ToolDefinition } from "../../core/extensions/types.ts";
+import type { ToolDefinition, ToolNamespace } from "../../core/extensions/types.ts";
 import type { McpExposure } from "./config.ts";
 
 /** Provider tool names are limited to 64 characters of `[A-Za-z0-9_-]`. */
@@ -75,24 +77,44 @@ function textOf(content: readonly (TextContent | ImageContent)[]): string {
 		.join("\n");
 }
 
-/** Convert an MCP result, throwing for `isError` results. */
+/**
+ * Output schema of every MCP tool: the `CallToolResult` scripts receive, with the tool's own output
+ * schema as `structuredContent`. The shape matches what Codex detects to render
+ * `CallToolResult<T>` declarations.
+ */
+export function createMcpResultSchema(structuredContentSchema: Record<string, unknown> | undefined): TSchema {
+	return {
+		type: "object",
+		properties: {
+			content: { type: "array", items: { type: "object" } },
+			...(structuredContentSchema ? { structuredContent: structuredContentSchema } : {}),
+			isError: { type: "boolean" },
+			_meta: { type: "object" },
+		},
+		required: ["content"],
+	} as unknown as TSchema;
+}
+
+/** Convert an MCP result. `isError` results become error results that keep the structured result. */
 export function convertMcpResult(
 	server: string,
 	tool: string,
 	result: CallToolResult,
 ): AgentToolResult<McpToolDetails> {
 	const content = result.content.map(blockToContent);
-	if (result.isError) {
-		throw new Error(textOf(content) || `MCP tool ${server}/${tool} returned an error`);
+	if (result.isError && textOf(content) === "") {
+		content.push({ type: "text", text: `MCP tool ${server}/${tool} returned an error` });
 	}
 	// Servers should mirror structured results as text; fall back to JSON when they do not.
 	if (content.length === 0 && result.structuredContent !== undefined) {
 		content.push({ type: "text", text: JSON.stringify(result.structuredContent, null, 2) });
 	}
+	const { _meta: _ignored, ...scriptResult } = result;
 	return {
 		content,
 		details: { server, tool },
-		...(result.structuredContent === undefined ? {} : { structuredContent: result.structuredContent as JsonValue }),
+		structuredContent: scriptResult as unknown as JsonValue,
+		...(result.isError ? { isError: true } : {}),
 	};
 }
 
@@ -113,6 +135,7 @@ export function createMcpToolDefinition(options: {
 	tool: McpTool;
 	name: string;
 	exposure: McpExposure;
+	namespace: ToolNamespace;
 	timeoutMs: number;
 	getClient: () => Promise<McpToolCaller>;
 }): ToolDefinition<TSchema, McpToolDetails> {
@@ -123,8 +146,9 @@ export function createMcpToolDefinition(options: {
 		label: `${server}/${tool.name}`,
 		description: tool.description?.trim() || title || `MCP tool ${tool.name} from server ${server}`,
 		parameters: toParameters(tool.inputSchema),
-		...(tool.outputSchema ? { outputSchema: tool.outputSchema as unknown as TSchema } : {}),
+		outputSchema: createMcpResultSchema(tool.outputSchema),
 		exposure: options.exposure,
+		namespace: options.namespace,
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const client = await options.getClient();
 			const result = await client.callTool(tool.name, (params ?? {}) as Record<string, unknown>, {
