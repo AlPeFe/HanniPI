@@ -137,10 +137,15 @@ Default enabled tools are `read`, `bash`, `edit`, and `write`, unless `defaultTo
 | `find` | Find paths using glob patterns |
 | `ls` | List directory contents |
 | `exec` | Run JavaScript that calls the other tools (codemode), for example in parallel with `Promise.allSettled`; only the script's output reaches the model |
+| `tool_search` | Search tools that are not declared to the model (`codemode` and `deferred` exposure, such as MCP tools) and declare the matches for the next call |
 
 `exec` follows the `exec` tool of OpenAI Codex, so models trained on Codex can use it unchanged. Scripts run in a QuickJS sandbox that can only reach the other tools, through `tools.<name>(args)`; `ALL_TOOLS` lists them. Output comes from `text(value)`, `image(dataUrlOrImageContent)`, `console.*`, and a top-level `return value`; `exit()` ends the script early. The result starts with `Script completed` or `Script failed`, the wall time, and the output; a failed script keeps its partial output, followed by `Script error:` and the error.
 
 A script may start with a pragma line such as `// @exec: {"max_output_tokens": 2000, "timeout_ms": 60000}`. `max_output_tokens` (default 10000) limits the output: longer output keeps its start and end, and the full text is written to a temp file whose path is included in the result. `timeout_ms` is a hard deadline, unset by default. `yield_time_ms` is accepted for compatibility, but scripts always run to completion.
+
+The `exec` description lists the callable tools with their TypeScript declarations, grouped by namespace (for example one MCP server). Declarations share a budget of 3000 estimated tokens (`codemode.inlineBudget` in [settings](settings.md#tools)); every namespace is still listed with its tool count, and the description says whether the list is complete. Scripts find the rest with `await searchTools(query, { limit, namespace })`, which ranks tools with BM25, and `await describeTool(name)`, or by filtering `ALL_TOOLS`.
+
+`tool_search` is off by default; enable it with `--tools` or `defaultTools`. It uses the same ranking over tools that are not declared yet and declares the matches for the next model call. Loaded tools are recorded in the session like other tool changes, so they stay declared on that branch.
 
 Tools with an output schema resolve to structured values: `bash` to `{ output, exit_code, wall_time_seconds }`, also for non-zero exit codes, and MCP tools to their `CallToolResult`. Other tools resolve to their text output.
 

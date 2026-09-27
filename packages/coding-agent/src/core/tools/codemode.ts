@@ -57,6 +57,8 @@ export type CodemodeModelRuntime = Pick<
 >;
 
 export interface CodemodeToolOptions {
+	/** Namespace of a tool, for `searchTools()` ranking and its `namespace` filter. */
+	getToolNamespace?: (toolName: string) => ToolNamespace | undefined;
 	/** Exposes the `models` namespace to scripts. Without it, `models` is not declared. */
 	models?: CodemodeModelRuntime;
 	/**
@@ -126,6 +128,8 @@ const DESCRIPTION_INTRO = `Run JavaScript code to orchestrate/compose tool calls
 - \`store(key: string, value: any)\`: stores a serializable value under a string key for later \`exec\` calls in the same session. Storing \`undefined\` deletes the key. Writes are kept only if the script succeeds.
 - \`load(key: string)\`: returns the stored value for a string key, or \`undefined\` if it is missing.
 - \`ALL_TOOLS\`: metadata for the enabled nested tools as \`{ name, description }\` entries.
+- \`searchTools(query: string, options?: { limit?: number; namespace?: string })\`: resolves to the nested tools that best match the query (BM25, default limit 8), as \`{ name, description }\` entries like \`ALL_TOOLS\`.
+- \`describeTool(name: string)\`: resolves to the description and declaration of a nested tool, or \`undefined\`.
 - \`console.log(...)\` and the other \`console\` methods append a text item like \`text()\`.
 - \`return value\` at the top level appends the value like \`text()\`.`;
 
@@ -189,7 +193,12 @@ export const MODEL_GLOBAL_DECLARATIONS: readonly Omit<CodemodeTool, "execute">[]
 ];
 
 const DEFERRED_TOOLS_GUIDANCE = `Some deferred nested tools may be omitted from this description. They are still available on the global \`tools\` object and listed in \`ALL_TOOLS\`.
-To find one, filter \`ALL_TOOLS\` by \`name\` and \`description\`.`;
+To find one, call \`await searchTools(query)\`, or filter \`ALL_TOOLS\` by \`name\` and \`description\`.`;
+
+/** Default for {@link CodemodeDescriptionOptions.inlineBudget}, in estimated tokens. */
+export const DEFAULT_CODEMODE_INLINE_BUDGET = 3000;
+/** Characters per token when estimating the cost of a tool section. */
+const CHARS_PER_TOKEN = 4;
 
 /** What a script sees of a tool. Tools without an output schema resolve to their text output. */
 export function toCodemodeDeclaration(tool: AgentTool<any>): Omit<CodemodeTool, "execute"> {
@@ -211,8 +220,13 @@ export interface CodemodeDescriptionOptions {
 	models?: boolean;
 	/** Namespace of each tool, by tool name. Tools of one namespace are listed under one heading. */
 	namespaces?: ReadonlyMap<string, ToolNamespace>;
-	/** Whether some callable tools are not listed (`deferred` exposure). Adds Codex's guidance to find them. */
-	hasDeferredTools?: boolean;
+	/** Tools that are callable but never listed with their declaration (`deferred` exposure). */
+	deferred?: ReadonlySet<string>;
+	/**
+	 * Estimated tokens (characters / 4) the tool sections may use. Tools that do not fit are left
+	 * out, like deferred tools. Unset lists every tool that is not deferred.
+	 */
+	inlineBudget?: number;
 }
 
 /** `### \`id\` (\`raw name\`)` followed by the tool's description and declaration, like Codex. */
@@ -222,18 +236,78 @@ function renderToolSection(declaration: Omit<CodemodeTool, "execute">): string {
 	return `${heading}\n${renderToolSample(declaration).trim()}`;
 }
 
+interface CatalogEntry {
+	name: string;
+	section: string;
+	cost: number;
+	deferred: boolean;
+}
+
+interface CatalogGroup {
+	namespace: ToolNamespace | undefined;
+	entries: CatalogEntry[];
+}
+
+/**
+ * Pick the tool sections that fit the budget, like OpenCode's catalog: in each round every group
+ * (tools without a namespace first, then namespaces by name) places its cheapest remaining tool; a
+ * group whose next tool does not fit drops out while the others continue. Every namespace is
+ * represented before any namespace is complete.
+ */
+function selectCatalog(groups: readonly CatalogGroup[], budget: number | undefined): Set<string> {
+	const listable = groups.map((group) => group.entries.filter((entry) => !entry.deferred));
+	if (budget === undefined) return new Set(listable.flat().map((entry) => entry.name));
+	const queues = listable.map((entries) => [...entries].sort((a, b) => a.cost - b.cost));
+	const shown = new Set<string>();
+	let remaining = budget;
+	let active = queues.filter((queue) => queue.length > 0);
+	while (active.length > 0) {
+		active = active.filter((queue) => {
+			const next = queue[0];
+			if (next.cost > remaining) return false;
+			remaining -= next.cost;
+			shown.add(next.name);
+			queue.shift();
+			return queue.length > 0;
+		});
+	}
+	return shown;
+}
+
 /**
  * Model-facing description in the layout of Codex's code-mode-only `exec` description: the helper
- * list, guidance for deferred tools, the shared MCP types when MCP tools are listed, and one section
- * per tool, grouped by namespace. The `models` API is a pi addition.
+ * list, guidance for omitted tools, the shared MCP types when MCP tools are callable, and one
+ * section per tool, grouped by namespace. Tool sections are limited to `inlineBudget`; every
+ * namespace is listed with its tool count either way, and the listing states whether it is
+ * complete. The `models` API is a pi addition.
  */
 export function createCodemodeDescription(
 	tools: readonly AgentTool<any>[],
 	options: CodemodeDescriptionOptions = {},
 ): string {
-	const sections = [DESCRIPTION_INTRO];
-	if (options.hasDeferredTools) sections.push(DEFERRED_TOOLS_GUIDANCE);
 	const declarations = getCodemodeCallableTools(tools).map(toCodemodeDeclaration);
+	const groups = new Map<string, CatalogGroup>([["", { namespace: undefined, entries: [] }]]);
+	for (const declaration of declarations) {
+		const namespace = options.namespaces?.get(declaration.name);
+		const key = namespace ? `ns:${namespace.name}` : "";
+		const group = groups.get(key) ?? { namespace, entries: [] };
+		groups.set(key, group);
+		const section = renderToolSection(declaration);
+		group.entries.push({
+			name: declaration.name,
+			section,
+			cost: Math.ceil(section.length / CHARS_PER_TOKEN),
+			deferred: options.deferred?.has(declaration.name) === true,
+		});
+	}
+	const ordered = [...groups.values()].sort((a, b) =>
+		a.namespace === undefined ? -1 : b.namespace === undefined ? 1 : a.namespace.name.localeCompare(b.namespace.name),
+	);
+	const shown = selectCatalog(ordered, options.inlineBudget);
+	const complete = shown.size === declarations.length;
+
+	const sections = [DESCRIPTION_INTRO];
+	if (!complete) sections.push(DEFERRED_TOOLS_GUIDANCE);
 	if (declarations.some((declaration) => mcpStructuredContentSchema(declaration.outputSchema) !== undefined)) {
 		sections.push(`Shared MCP Types:\n\`\`\`ts\n${MCP_TYPESCRIPT_PREAMBLE}\n\`\`\``);
 	}
@@ -244,25 +318,29 @@ export function createCodemodeDescription(
 		});
 		sections.push(`Model API:\n\`\`\`ts\n${MODEL_TYPES}\n\n${models}\n\`\`\``);
 	}
+	if (declarations.length === 0) return sections.join("\n\n");
 
-	const toolSections: string[] = [];
-	const groups = new Map<string, { namespace: ToolNamespace; declarations: Omit<CodemodeTool, "execute">[] }>();
-	for (const declaration of declarations) {
-		const namespace = options.namespaces?.get(declaration.name);
-		if (!namespace) {
-			toolSections.push(renderToolSection(declaration));
-			continue;
+	const toolSections = [
+		complete
+			? `Nested tools: COMPLETE list (${declarations.length} tools).`
+			: `Nested tools: PARTIAL - ${shown.size} of ${declarations.length} shown.`,
+	];
+	for (const { namespace, entries } of ordered) {
+		const visible = entries.filter((entry) => shown.has(entry.name));
+		if (namespace) {
+			const count = `${entries.length} tool${entries.length === 1 ? "" : "s"}`;
+			const suffix =
+				visible.length === entries.length
+					? ""
+					: visible.length === 0
+						? ", none shown"
+						: `, ${visible.length} shown`;
+			const description = namespace.description?.trim();
+			toolSections.push(`## ${namespace.name} (${count}${suffix})${description ? `\n${description}` : ""}`);
 		}
-		const group = groups.get(namespace.name) ?? { namespace, declarations: [] };
-		groups.set(namespace.name, group);
-		group.declarations.push(declaration);
+		for (const entry of visible) toolSections.push(entry.section);
 	}
-	for (const { namespace, declarations: grouped } of groups.values()) {
-		const description = namespace.description?.trim();
-		if (description) toolSections.push(`## ${namespace.name}\n${description}`);
-		for (const declaration of grouped) toolSections.push(renderToolSection(declaration));
-	}
-	if (toolSections.length > 0) sections.push(toolSections.join("\n\n"));
+	sections.push(toolSections.join("\n\n"));
 	return sections.join("\n\n");
 }
 

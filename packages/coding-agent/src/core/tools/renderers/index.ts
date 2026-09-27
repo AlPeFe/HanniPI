@@ -42,6 +42,8 @@ export function createAllToolRenderers(): Record<ToolName, ToolRenderers> {
 		find: findRenderers,
 		ls: lsRenderers,
 		exec: codemodeRenderers,
+		// Default rendering: the result lists the loaded tools.
+		tool_search: {},
 	};
 }
 

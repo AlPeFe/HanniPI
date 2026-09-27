@@ -76,8 +76,9 @@ describe("AgentSession MCP integration", () => {
 	async function setup(
 		exposure: McpExposure,
 		listTools?: () => unknown[],
-		options: { autoEnableCodemode?: boolean } = {},
+		options: { autoEnableCodemode?: boolean; builtInTools?: string[] } = {},
 	) {
+		const { builtInTools, ...configOptions } = options;
 		const calls: string[] = [];
 		const servers: ReturnType<typeof createFakeServer>["server"][] = [];
 		const entry: McpServerEntry = {
@@ -85,12 +86,13 @@ describe("AgentSession MCP integration", () => {
 			config: { url: "http://unused.invalid", exposure },
 			source: "test",
 		};
+		// `builtInTools` uses the session's own built-in tools (exec with models, tool_search).
 		const harness = await createHarness({
-			tools: [createCodemodeTool()],
-			initialActiveToolNames: [],
+			...(builtInTools ? {} : { tools: [createCodemodeTool()] }),
+			initialActiveToolNames: builtInTools ?? [],
 			extensionFactories: [
 				createMcpExtension({
-					loadConfig: () => ({ servers: [entry], errors: [], ...options }),
+					loadConfig: () => ({ servers: [entry], errors: [], ...configOptions }),
 					createTransport: () => {
 						const pair = createFakeServer(calls, listTools);
 						servers.push(pair.server);
@@ -165,7 +167,10 @@ describe("AgentSession MCP integration", () => {
 		expect(nestedToolNames(harness)).toEqual([searchName, "mcp__docs__fail", "mcp__docs__shot"]);
 		const exec = harness.session.agent.state.tools.find((tool) => tool.name === "exec");
 		expect(exec?.description).toContain("Shared MCP Types:\n```ts\ntype Role =");
-		expect(exec?.description).toContain("## mcp__docs\nTools in the mcp__docs namespace.\n\n### `mcp__docs__search`");
+		expect(exec?.description).toContain("Nested tools: COMPLETE list (3 tools).");
+		expect(exec?.description).toContain(
+			"## mcp__docs (3 tools)\nTools in the mcp__docs namespace.\n\n### `mcp__docs__search`",
+		);
 		expect(exec?.description).toContain(
 			`declare const tools: { ${searchName}(args: { query: string; }): Promise<CallToolResult<{ hits: Array<string>; }>>; };`,
 		);
@@ -341,5 +346,98 @@ describe("AgentSession MCP integration", () => {
 		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "exec");
 		expect(codemode?.description).toContain("mcp__docs__search");
 		expect(codemode?.description).not.toContain("mcp__docs__fail");
+	});
+
+	it("finds tools from scripts with searchTools() and describeTool()", async () => {
+		const { harness, calls } = await setup("deferred");
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("exec", {
+						code: `
+							const [match] = await searchTools("search the docs", { limit: 1 });
+							const none = await searchTools("docs", { namespace: "mcp__other" });
+							const declaration = await describeTool(match.name);
+							const result = await tools[match.name]({ query: "found" });
+							text(JSON.stringify({
+								name: match.name,
+								sameAsAllTools: ALL_TOOLS.find((tool) => tool.name === match.name).description === match.description,
+								none: none.length,
+								declared: declaration.includes("exec tool declaration:"),
+								missing: (await describeTool("nope")) === undefined,
+								hits: result.structuredContent.hits,
+							}));
+						`,
+					}),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("done"),
+		]);
+
+		await harness.session.prompt("go");
+
+		const result = toolResult(harness, "exec");
+		expect(result.isError).toBe(false);
+		expect(JSON.parse((result.content[1] as { text: string }).text)).toEqual({
+			name: "mcp__docs__search",
+			sameAsAllTools: true,
+			none: 0,
+			declared: true,
+			missing: true,
+			hits: ["found guide", "found faq"],
+		});
+		expect(calls).toEqual(['search:{"query":"found"}']);
+	});
+
+	it("loads searched tools with tool_search and keeps them declared on the branch", async () => {
+		const { harness, calls } = await setup("deferred", undefined, { builtInTools: ["tool_search"] });
+		const searchName = createMcpToolName("docs", "search");
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("tool_search", { query: "search the docs", limit: 1 })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage([fauxToolCall(searchName, { query: "loaded" })], { stopReason: "toolUse" }),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("find a docs tool");
+
+		const toolSearch = harness.session.agent.state.tools.find((tool) => tool.name === "tool_search");
+		expect(toolSearch?.description).toContain("- mcp__docs: Tools in the mcp__docs namespace.");
+
+		const search = toolResult(harness, "tool_search");
+		expect(text(search)).toBe(
+			`Loaded 1 tool. They are available from your next call:\n- ${searchName}: Search the docs.`,
+		);
+		// Only the loaded tool is added; earlier declarations are not repeated.
+		const loadMessages = harness.session.messages.filter(
+			(message): message is SystemMessage =>
+				message.role === "system" && (message.toolsAdded ?? []).some((tool) => tool.name === searchName),
+		);
+		expect(loadMessages).toHaveLength(1);
+		expect(loadMessages[0].toolsAdded?.map((tool) => tool.name)).toEqual([searchName]);
+		expect(text(toolResult(harness, searchName))).toBe("loaded guide\nloaded faq");
+		expect(calls).toEqual(['search:{"query":"loaded"}']);
+
+		// Loads are recorded in the transcript: navigating back before the load drops the tool,
+		// navigating to a later entry restores it.
+		const branch = harness.sessionManager.getBranch();
+		const firstUser = branch.find((entry) => entry.type === "message" && entry.message.role === "user");
+		const last = branch.at(-1);
+		if (!firstUser || !last) throw new Error("Missing entries");
+		await harness.session.navigateTree(firstUser.id);
+		expect(harness.session.getActiveToolNames()).not.toContain(searchName);
+		await harness.session.navigateTree(last.id);
+		expect(harness.session.getActiveToolNames()).toContain(searchName);
+	});
+
+	it("finds nothing to load when every matching tool is already declared", async () => {
+		const { harness } = await setup("direct", undefined, { builtInTools: ["tool_search"] });
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("tool_search", { query: "docs" })], { stopReason: "toolUse" }),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("go");
+		expect(text(toolResult(harness, "tool_search"))).toBe("No matching tools found.");
 	});
 });

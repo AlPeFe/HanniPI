@@ -100,6 +100,7 @@ import {
 	type ToolExecutionUpdateEvent,
 	type ToolExposure,
 	type ToolInfo,
+	type ToolNamespace,
 	type TreePreparation,
 	type TurnStartEvent,
 	wrapRegisteredTools,
@@ -130,9 +131,16 @@ import {
 	normalizeBuildSystemPromptOptions,
 } from "./system-prompt.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
-import { CODEMODE_TOOL_NAME, createCodemodeDescription } from "./tools/codemode.ts";
+import { CODEMODE_TOOL_NAME, createCodemodeDescription, DEFAULT_CODEMODE_INLINE_BUDGET } from "./tools/codemode.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
+import {
+	Bm25Ranker,
+	createToolSearchDescription,
+	createToolSearchDocument,
+	TOOL_SEARCH_TOOL_NAME,
+	type ToolSearchResultTool,
+} from "./tools/tool-search.ts";
 import { addUsageToTotals, createUsageTotals } from "./usage-totals.ts";
 
 // ============================================================================
@@ -1340,20 +1348,32 @@ export class AgentSession {
 		// Extension tools named codemode are left alone; built-in slots (including SDK base tool
 		// overrides) named codemode are assumed to be the codemode tool. Only the session's own
 		// codemode tool has model access, so overrides do not declare `models`.
-		if (codemodeIndex !== -1 && this._toolDefinitions.get(CODEMODE_TOOL_NAME)?.sourceInfo.source === "builtin") {
-			const listed = nestedTools.filter((tool) => this._getToolExposure(tool.name) !== "deferred");
+		if (codemodeIndex !== -1 && this._isBuiltInTool(CODEMODE_TOOL_NAME)) {
 			const namespaces = new Map(
-				listed.flatMap((tool) => {
+				nestedTools.flatMap((tool) => {
 					const namespace = this._toolDefinitions.get(tool.name)?.definition.namespace;
 					return namespace ? [[tool.name, namespace] as const] : [];
 				}),
 			);
-			const description = createCodemodeDescription(listed, {
+			const description = createCodemodeDescription(nestedTools, {
 				models: this._baseToolsOverride === undefined,
 				namespaces,
-				hasDeferredTools: listed.length < nestedTools.length,
+				deferred: new Set(
+					nestedTools.filter((tool) => this._getToolExposure(tool.name) === "deferred").map((tool) => tool.name),
+				),
+				inlineBudget: this.settingsManager.getCodemodeInlineBudget() ?? DEFAULT_CODEMODE_INLINE_BUDGET,
 			});
 			tools[codemodeIndex] = { ...tools[codemodeIndex], description };
+		}
+		const toolSearchIndex = tools.findIndex((tool) => tool.name === TOOL_SEARCH_TOOL_NAME);
+		if (toolSearchIndex !== -1 && this._isBuiltInTool(TOOL_SEARCH_TOOL_NAME)) {
+			const sources = new Map<string, ToolNamespace>();
+			for (const tool of this._getSearchableTools()) {
+				const namespace = this._toolDefinitions.get(tool.name)?.definition.namespace;
+				if (namespace && !sources.has(namespace.name)) sources.set(namespace.name, namespace);
+			}
+			const description = createToolSearchDescription([...sources.values()]);
+			tools[toolSearchIndex] = { ...tools[toolSearchIndex], description };
 		}
 		this.agent.state.tools = tools;
 		this.agent.state.nestedTools = nestedTools;
@@ -3292,6 +3312,36 @@ export class AgentSession {
 		this.setActiveToolsByName([...new Set(nextActiveToolNames)]);
 	}
 
+	private _isBuiltInTool(name: string): boolean {
+		return this._toolDefinitions.get(name)?.sourceInfo.source === "builtin";
+	}
+
+	/** Registered tools that `tool_search` can load: `codemode` and `deferred` exposure. */
+	private _getSearchableTools(): AgentTool[] {
+		return [...this._toolRegistry.values()].filter((tool) => {
+			const exposure = this._getToolExposure(tool.name);
+			return exposure === "codemode" || exposure === "deferred";
+		});
+	}
+
+	/**
+	 * `tool_search`: rank the searchable tools that are not declared yet and activate the matches, so
+	 * the next model call declares them. Activation is recorded in the transcript like any tool change.
+	 */
+	private _searchAndLoadTools(query: string, limit: number): ToolSearchResultTool[] {
+		const active = this.getActiveToolNames();
+		const candidates = this._getSearchableTools().filter((tool) => !active.includes(tool.name));
+		const documents = candidates.map((tool) =>
+			createToolSearchDocument(tool, this._toolDefinitions.get(tool.name)?.definition.namespace),
+		);
+		const matches = new Bm25Ranker().rank(query, documents, limit);
+		if (matches.length > 0) this.setActiveToolsByName([...active, ...matches.map((match) => match.name)]);
+		return matches.map((match) => ({
+			name: match.name,
+			description: this._toolRegistry.get(match.name)?.description ?? "",
+		}));
+	}
+
 	/** Whether registering the tool activates it, which declares it to the model. */
 	private _isActivatedOnRegistration(name: string): boolean {
 		const exposure = this._getToolExposure(name);
@@ -3319,7 +3369,9 @@ export class AgentSession {
 					codemode: {
 						appendEntry: (customType, data) => this._appendCustomEntry(customType, data),
 						models: this._modelRuntime,
+						getToolNamespace: (name) => this._toolDefinitions.get(name)?.definition.namespace,
 					},
+					toolSearch: { searchAndLoad: (query, limit) => this._searchAndLoadTools(query, limit) },
 				});
 
 		this._baseToolDefinitions = new Map(

@@ -86,6 +86,11 @@ export interface WarningSettings {
 	anthropicExtraUsage?: boolean; // default: true
 }
 
+export interface CodemodeSettings {
+	/** Estimated tokens (characters / 4) the exec description may spend on tool declarations. Default: 3000. */
+	inlineBudget?: number;
+}
+
 export type DefaultProjectTrust = "ask" | "always" | "never";
 
 export type TransportSetting = Transport;
@@ -151,6 +156,7 @@ export interface Settings {
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	markdown?: MarkdownSettings;
 	warnings?: WarningSettings;
+	codemode?: CodemodeSettings;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
@@ -1301,6 +1307,12 @@ export class SettingsManager {
 		this.globalSettings.fullscreenCopyOnSelect = enabled;
 		this.markModified("fullscreenCopyOnSelect");
 		this.save();
+	}
+
+	/** Token budget for tool declarations in the exec description, or undefined for the default. */
+	getCodemodeInlineBudget(): number | undefined {
+		const budget = this.settings.codemode?.inlineBudget;
+		return typeof budget === "number" && Number.isFinite(budget) && budget >= 0 ? budget : undefined;
 	}
 
 	getImageAutoResize(): boolean {

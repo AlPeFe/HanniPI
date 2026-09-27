@@ -16,6 +16,7 @@ import {
 	loadQuickJSWasm,
 	parseCodemodeSource,
 	renderToolSample,
+	toCodemodeIdentifier,
 } from "@earendil-works/pi-codemode";
 import { getCodemodeWorkerUrl, getQuickJSWasmPath } from "../../config.ts";
 import type { ExtensionToolContext } from "../extensions/types.ts";
@@ -32,6 +33,7 @@ import {
 	MODEL_GLOBAL_DECLARATIONS,
 	toCodemodeDeclaration,
 } from "./codemode.ts";
+import { Bm25Ranker, createToolSearchDocument, DEFAULT_TOOL_SEARCH_LIMIT } from "./tool-search.ts";
 
 const ARGS_PREVIEW_CHARS = 200;
 const ERROR_PREVIEW_CHARS = 500;
@@ -226,10 +228,12 @@ export async function executeCodemode(
 	const snapshot = (): CodemodeToolDetails => ({ calls: calls.map((call) => ({ ...call })) });
 	const publish = () => onUpdate?.({ content: [], details: snapshot() });
 
-	const sandboxTools: CodemodeTool[] = getCodemodeCallableTools(ctx.tools).map((tool) => ({
+	const callable = getCodemodeCallableTools(ctx.tools);
+	// ALL_TOOLS entries carry the declaration, like Codex.
+	const samples = new Map(callable.map((tool) => [tool.name, renderToolSample(toCodemodeDeclaration(tool))]));
+	const sandboxTools: CodemodeTool[] = callable.map((tool) => ({
 		name: tool.name,
-		// ALL_TOOLS entries carry the declaration, like Codex.
-		description: renderToolSample(toCodemodeDeclaration(tool)),
+		description: samples.get(tool.name),
 		execute: async (args, { signal: callSignal }) => {
 			const record: CodemodeNestedCall = {
 				id: `${toolCallId}/?`,
@@ -256,7 +260,10 @@ export async function executeCodemode(
 
 	const sandbox = new CodemodeSandbox({
 		tools: sandboxTools,
-		globals: options.models ? createModelGlobals(options.models, toolCallId, calls, publish) : [],
+		globals: [
+			...createDiscoveryGlobals(callable, samples, options),
+			...(options.models ? createModelGlobals(options.models, toolCallId, calls, publish) : []),
+		],
 		timeoutMs: sourceOptions.timeoutMs ?? Number.POSITIVE_INFINITY,
 		memoryLimitBytes: CODEMODE_MEMORY_LIMIT_BYTES,
 		wasm: loadQuickJSWasm(getQuickJSWasmPath()),
@@ -300,6 +307,52 @@ export async function executeCodemode(
 		details,
 		...(result.ok ? {} : { isError: true }),
 	};
+}
+
+/** `searchTools()` and `describeTool()`: ranked search and lookup over the script's nested tools. */
+function createDiscoveryGlobals(
+	tools: readonly AgentTool<any>[],
+	samples: ReadonlyMap<string, string>,
+	options: CodemodeToolOptions,
+): CodemodeTool[] {
+	const ranker = new Bm25Ranker();
+	const entry = (name: string) => ({ name: toCodemodeIdentifier(name), description: samples.get(name) ?? "" });
+	return [
+		{
+			name: "searchTools",
+			spread: true,
+			execute: (args) => {
+				const [query, searchOptions] = args as [unknown, { limit?: unknown; namespace?: unknown } | undefined];
+				if (typeof query !== "string") throw new Error("searchTools() expects a query string");
+				const limit = searchOptions?.limit ?? DEFAULT_TOOL_SEARCH_LIMIT;
+				if (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0) {
+					throw new Error("searchTools() limit must be a positive integer");
+				}
+				const namespace = searchOptions?.namespace;
+				if (namespace !== undefined && namespace !== null && typeof namespace !== "string") {
+					throw new Error("searchTools() namespace must be a string");
+				}
+				const documents = tools.flatMap((tool) => {
+					const toolNamespace = options.getToolNamespace?.(tool.name);
+					if (namespace && toolNamespace?.name !== namespace) return [];
+					return [createToolSearchDocument(tool, toolNamespace)];
+				});
+				return ranker.rank(query, documents, limit).map((match) => entry(match.name));
+			},
+		},
+		{
+			name: "describeTool",
+			spread: true,
+			execute: (args) => {
+				const [name] = args as unknown[];
+				if (typeof name !== "string") throw new Error("describeTool() expects a tool name");
+				const tool = tools.find(
+					(candidate) => candidate.name === name || toCodemodeIdentifier(candidate.name) === name,
+				);
+				return tool ? samples.get(tool.name) : undefined;
+			},
+		},
+	];
 }
 
 /**

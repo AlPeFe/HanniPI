@@ -75,6 +75,21 @@ export {
 	type ReadToolOptions,
 } from "./read.ts";
 export {
+	Bm25Ranker,
+	createToolSearchDescription,
+	createToolSearchDocument,
+	createToolSearchToolDefinition,
+	DEFAULT_TOOL_SEARCH_LIMIT,
+	TOOL_SEARCH_TOOL_NAME,
+	type ToolRanker,
+	type ToolSearchDocument,
+	type ToolSearchInput,
+	type ToolSearchMatch,
+	type ToolSearchResultTool,
+	type ToolSearchToolDetails,
+	type ToolSearchToolOptions,
+} from "./tool-search.ts";
+export {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	formatSize,
@@ -102,11 +117,23 @@ import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.ts";
 import { createPowerShellTool, createPowerShellToolDefinition, type PowerShellToolOptions } from "./powershell.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.ts";
+import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
+import { createToolSearchToolDefinition, type ToolSearchToolOptions } from "./tool-search.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./write.ts";
 
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
-export type ToolName = "read" | "bash" | "powershell" | "edit" | "write" | "grep" | "find" | "ls" | "exec";
+export type ToolName =
+	| "read"
+	| "bash"
+	| "powershell"
+	| "edit"
+	| "write"
+	| "grep"
+	| "find"
+	| "ls"
+	| "exec"
+	| "tool_search";
 export const allToolNames: Set<ToolName> = new Set([
 	"read",
 	"bash",
@@ -117,6 +144,7 @@ export const allToolNames: Set<ToolName> = new Set([
 	"find",
 	"ls",
 	"exec",
+	"tool_search",
 ]);
 
 export interface ToolsOptions {
@@ -129,6 +157,7 @@ export interface ToolsOptions {
 	find?: FindToolOptions;
 	ls?: LsToolOptions;
 	codemode?: CodemodeToolOptions;
+	toolSearch?: ToolSearchToolOptions;
 }
 
 export function createToolDefinition(toolName: ToolName, cwd: string, options?: ToolsOptions): ToolDef {
@@ -151,6 +180,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createLsToolDefinition(cwd, options?.ls);
 		case "exec":
 			return createCodemodeToolDefinition(options?.codemode);
+		case "tool_search":
+			return createToolSearchToolDefinition(options?.toolSearch);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -176,6 +207,8 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createLsTool(cwd, options?.ls);
 		case "exec":
 			return createCodemodeTool([], options?.codemode);
+		case "tool_search":
+			return wrapToolDefinition(createToolSearchToolDefinition(options?.toolSearch));
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -210,6 +243,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		find: createFindToolDefinition(cwd, options?.find),
 		ls: createLsToolDefinition(cwd, options?.ls),
 		exec: createCodemodeToolDefinition(options?.codemode),
+		tool_search: createToolSearchToolDefinition(options?.toolSearch),
 	};
 }
 
@@ -242,5 +276,6 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		find: createFindTool(cwd, options?.find),
 		ls: createLsTool(cwd, options?.ls),
 		exec: createCodemodeTool([], options?.codemode),
+		tool_search: wrapToolDefinition(createToolSearchToolDefinition(options?.toolSearch)),
 	};
 }

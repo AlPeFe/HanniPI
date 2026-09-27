@@ -69,8 +69,8 @@ OAuth applies to HTTP servers without an `Authorization` header. For authorizati
 
 Each server's tools are registered as `mcp__<server>__<tool>`. The `exposure` setting controls how the model reaches them:
 
-- `codemode` (default): the tools are callable from [`exec`](cli.md#tools) scripts and listed in the `exec` tool's description, but are not declared to the model. Large MCP tool lists stay out of the model's tool declarations, and scripts can call several MCP tools, in parallel if needed, while returning only the part of the result the model needs. Pi activates the `exec` tool when such a server connects.
-- `deferred`: like `codemode`, but the tools are not listed in the `exec` tool's description either. Scripts can still call them by name and find them in `ALL_TOOLS`.
+- `codemode` (default): the tools are callable from [`exec`](cli.md#tools) scripts and listed in the `exec` tool's description, but are not declared to the model. Large MCP tool lists stay out of the model's tool declarations, and scripts can call several MCP tools, in parallel if needed, while returning only the part of the result the model needs. Pi activates the `exec` tool when such a server connects. Large servers do not fill the description: declarations share a token budget, and scripts find the remaining tools with `searchTools()` (see [`exec`](cli.md#tools)).
+- `deferred`: like `codemode`, but the tools are not listed in the `exec` tool's description either. Scripts can still call them by name and find them with `searchTools()` or in `ALL_TOOLS`. With the `tool_search` tool enabled, the model can also load them as declared tools.
 - `direct`: the tools are declared to the model like built-in tools, and are also callable from codemode.
 - `hidden`: the tools are registered but cannot be called.
 
