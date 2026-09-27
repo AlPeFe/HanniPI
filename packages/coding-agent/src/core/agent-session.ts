@@ -1481,13 +1481,21 @@ export class AgentSession {
 		};
 	}
 
-	/** Restore the active tool loadout declared by the session transcript, if it declares one. */
+	/**
+	 * Restore the active tool loadout declared by the session transcript, if it declares one.
+	 * Nested-only tools are never declared to the model, so the transcript does not record them;
+	 * the currently active ones are kept so codemode can still call them.
+	 */
 	private _restoreToolsFromTranscript(): void {
 		const current = getCurrentSystemMessage(this.sessionManager.buildSessionContext().messages);
 		if (!current) return;
-		const toolNames = (current.toolsAdded ?? [])
+		const declaredNames = (current.toolsAdded ?? [])
 			.map((tool) => tool.name)
 			.filter((name) => this._toolRegistry.has(name));
+		const nestedOnlyNames = this.agent.state.tools
+			.filter((tool) => tool.nestedOnly && this._toolRegistry.has(tool.name))
+			.map((tool) => tool.name);
+		const toolNames = [...new Set([...declaredNames, ...nestedOnlyNames])];
 		this.agent.state.tools = this._resolveActiveTools(toolNames);
 		this._rebuildSystemPrompt(toolNames);
 	}

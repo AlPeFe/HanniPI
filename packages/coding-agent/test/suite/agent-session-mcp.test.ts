@@ -166,6 +166,25 @@ describe("AgentSession MCP integration", () => {
 		expect(calls).toEqual(['search:{"query":"mcp"}', 'search:{"query":"pi"}', "fail:{}", "shot:{}"]);
 	});
 
+	it("keeps codemode-only MCP tools active across tree navigation", async () => {
+		const { harness } = await setup("codemode");
+		const searchName = createMcpToolName("docs", "search");
+		harness.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage("two")]);
+		await harness.session.prompt("first");
+		await harness.session.prompt("second");
+		expect(harness.session.getActiveToolNames()).toEqual(expect.arrayContaining([searchName, "codemode"]));
+
+		const firstAssistant = harness.sessionManager
+			.getBranch()
+			.find((entry) => entry.type === "message" && entry.message.role === "assistant");
+		if (!firstAssistant) throw new Error("No assistant entry");
+		await harness.session.navigateTree(firstAssistant.id);
+
+		expect(harness.session.getActiveToolNames()).toEqual(expect.arrayContaining([searchName, "codemode"]));
+		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "codemode");
+		expect(codemode?.description).toContain(`${searchName}(args: {`);
+	});
+
 	it("rejects direct model calls to codemode-only MCP tools", async () => {
 		const { harness, calls } = await setup("codemode");
 		harness.setResponses([

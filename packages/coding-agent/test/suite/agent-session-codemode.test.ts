@@ -311,6 +311,19 @@ describe("codemode options and store", () => {
 		expect(resultText(invalid)).toContain('Unknown @options key "yield"');
 	});
 
+	it("limits script memory so runaway allocations fail inside the script", async () => {
+		const harness = await setup();
+		const result = await run(
+			harness,
+			'// @options {"timeout": 30}\nlet a = [];\ntry { while (true) a.push("x".repeat(1 << 20) + a.length); } catch (error) { const n = a.length; a = null; return { n, error: String(error) }; }',
+		);
+		expect(result.isError).toBe(false);
+		const { n, error } = JSON.parse(resultText(result)) as { n: number; error: string };
+		expect(error).toContain("out of memory");
+		// Each entry holds at least 1 MiB, so the limit stops the script well before wasm32's 4 GiB.
+		expect(n).toBeLessThan(512);
+	});
+
 	it("spills truncated return values to a JSON temp file", async () => {
 		const harness = await setup();
 		const result = await run(

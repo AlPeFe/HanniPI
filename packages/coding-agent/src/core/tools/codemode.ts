@@ -109,6 +109,7 @@ const DESCRIPTION_INTRO = `Run JavaScript that calls other tools. Use it to chai
 - A failing or blocked tool call rejects with an Error carrying the tool's error text. Catch it to continue.
 - \`console.log/info/warn/error/debug\` output is returned together with the result.
 - \`store(key, value)\` saves a JSON-serializable value for later codemode calls in this session; \`load(key)\` reads it back (or \`undefined\`). Storing \`undefined\` deletes the key. Writes are kept only if the script succeeds.
+- Scripts have a 256 MB memory limit; exceeding it throws \`InternalError: out of memory\`. Filter or aggregate large data instead of accumulating it.
 - Nothing else is available: no filesystem, network, process, timers, require, or import. Use tools instead.
 - Calls that are still running when the script returns are cancelled; await everything you start.
 - Tool calls are real and have side effects. If the script fails partway, earlier calls are not undone.`;

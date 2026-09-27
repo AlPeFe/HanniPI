@@ -37,6 +37,12 @@ const ARGS_PREVIEW_CHARS = 200;
 const ERROR_PREVIEW_CHARS = 500;
 /** Classifier calls one script may have in flight; `Promise.all` over many items queues the rest. */
 const MAX_CONCURRENT_MODEL_CALLS = 4;
+/**
+ * Heap limit for the QuickJS VM. The worker shares pi's process, so without a limit a runaway
+ * script can grow to wasm32's 4 GiB and take the session down. Overruns throw
+ * `InternalError: out of memory` inside the script.
+ */
+const CODEMODE_MEMORY_LIMIT_BYTES = 256 * 1024 * 1024;
 const MODEL_TYPES: ReadonlySet<string> = new Set<ModelType>(["chat", "image", "classifier"]);
 
 function truncateText(text: string, maxChars: number): string {
@@ -269,6 +275,7 @@ export async function executeCodemode(
 			},
 		],
 		timeoutMs,
+		memoryLimitBytes: CODEMODE_MEMORY_LIMIT_BYTES,
 		wasm: loadQuickJSWasm(getQuickJSWasmPath()),
 		workerUrl: getCodemodeWorkerUrl(),
 	});
