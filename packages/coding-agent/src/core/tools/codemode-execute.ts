@@ -157,13 +157,13 @@ function formatFailure(result: Extract<CodemodeResult, { ok: false }>, calls: re
  * Write the full return value to a temp file, like bash does for truncated output. Always JSON,
  * including string values, so the file can be processed with jq.
  */
-async function spillReturnValue(value: unknown): Promise<string | undefined> {
+async function spillReturnValue(value: unknown): Promise<{ path: string } | { error: string }> {
 	const path = join(tmpdir(), `pi-codemode-${randomBytes(8).toString("hex")}.json`);
 	try {
 		await writeFile(path, `${JSON.stringify(value, null, 2)}\n`);
-		return path;
-	} catch {
-		return undefined;
+		return { path };
+	} catch (error) {
+		return { error: error instanceof Error ? error.message : String(error) };
 	}
 }
 
@@ -180,11 +180,14 @@ async function formatOutput(
 	const truncation = truncateHead(joined);
 	if (!truncation.truncated) return { text: joined };
 	const head = `${truncation.content}\n\n[Output truncated to ${truncation.outputLines} of ${truncation.totalLines} lines (${formatSize(DEFAULT_MAX_BYTES)} / ${DEFAULT_MAX_LINES} line limit).`;
-	const fullOutputPath = value === undefined ? undefined : await spillReturnValue(value);
-	if (!fullOutputPath) return { text: `${head} Return less data.]` };
+	if (value === undefined) return { text: `${head} Return less data.]` };
+	const spilled = await spillReturnValue(value);
+	if ("error" in spilled) {
+		return { text: `${head} Could not save the full return value: ${spilled.error}. Return less data.]` };
+	}
 	return {
-		text: `${head} Full return value as JSON: ${fullOutputPath} (use jq, or read with offset/limit)]`,
-		fullOutputPath,
+		text: `${head} Full return value as JSON: ${spilled.path} (use jq, or read with offset/limit)]`,
+		fullOutputPath: spilled.path,
 	};
 }
 

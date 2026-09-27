@@ -101,6 +101,22 @@ describe("consumeSseStream", () => {
 		await consumeSseStream(stream, { onEvent: (event) => events.push(event) });
 		expect(events).toEqual([{ id: "7", data: '{"one":\n1}' }]);
 	});
+
+	it("rejects events whose data lines exceed the limit without a blank line", async () => {
+		const encoder = new TextEncoder();
+		let sent = 0;
+		const stream = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				// Never sends a blank line, so the event is never dispatched.
+				if (sent++ > 1000) controller.close();
+				else controller.enqueue(encoder.encode("data: xxxxxxxxxxxxxxxx\n"));
+			},
+		});
+		await expect(consumeSseStream(stream, { maxEventBytes: 256, onEvent: () => {} })).rejects.toThrow(
+			"MCP SSE event exceeds 256 bytes",
+		);
+		expect(sent).toBeLessThan(100);
+	});
 });
 
 describe("StreamableHttpTransport", () => {

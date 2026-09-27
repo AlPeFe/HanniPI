@@ -39,6 +39,9 @@ export async function consumeSseStream(stream: ReadableStream<Uint8Array>, optio
 	let eventName: string | undefined;
 	let eventId: string | undefined;
 	let dataLines: string[] = [];
+	// Bytes of the pending event's data, including the "\n" joins, so events streamed as many
+	// short `data:` lines without a terminating blank line cannot grow without bound.
+	let dataBytes = 0;
 	const maxEventBytes = options.maxEventBytes ?? DEFAULT_MAX_MESSAGE_BYTES;
 
 	const dispatch = () => {
@@ -48,11 +51,11 @@ export async function consumeSseStream(stream: ReadableStream<Uint8Array>, optio
 			return;
 		}
 		const data = dataLines.join("\n");
-		if (Buffer.byteLength(data) > maxEventBytes) throw new Error(`MCP SSE event exceeds ${maxEventBytes} bytes`);
 		options.onEvent({ ...(eventName ? { event: eventName } : {}), data, ...(eventId ? { id: eventId } : {}) });
 		eventName = undefined;
 		eventId = undefined;
 		dataLines = [];
+		dataBytes = 0;
 	};
 
 	const processLine = (rawLine: string) => {
@@ -66,8 +69,11 @@ export async function consumeSseStream(stream: ReadableStream<Uint8Array>, optio
 		const field = colon < 0 ? line : line.slice(0, colon);
 		let value = colon < 0 ? "" : line.slice(colon + 1);
 		if (value.startsWith(" ")) value = value.slice(1);
-		if (field === "data") dataLines.push(value);
-		else if (field === "event") eventName = value;
+		if (field === "data") {
+			dataBytes += Buffer.byteLength(value) + (dataLines.length > 0 ? 1 : 0);
+			if (dataBytes > maxEventBytes) throw new Error(`MCP SSE event exceeds ${maxEventBytes} bytes`);
+			dataLines.push(value);
+		} else if (field === "event") eventName = value;
 		else if (field === "id" && !value.includes("\0")) {
 			eventId = value;
 			options.onId?.(value);
