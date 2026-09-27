@@ -163,19 +163,28 @@ describe("AgentSession codemode tool", () => {
 			["stats", "ok"],
 		]);
 		expect(details.calls.every((call) => call.id.startsWith(`${result.toolCallId}/`))).toBe(true);
-		// Nested calls never become transcript tool results or top-level tool events.
+		// Nested calls never become transcript tool results; their events carry the parent id.
 		const toolResults = harness.session.messages.filter((message) => message.role === "toolResult");
 		expect(toolResults).toHaveLength(1);
-		const started = harness.eventsOfType("tool_execution_start").map((event) => event.toolName);
-		expect(started).toEqual(["exec"]);
+		const started = harness
+			.eventsOfType("tool_execution_start")
+			.map((event) => `${event.toolName}:${event.parentToolCallId ? "nested" : "top"}`);
+		expect(started).toEqual(["exec:top", "echo:nested", "echo:nested", "stats:nested"]);
 		const updates = harness.eventsOfType("tool_execution_update");
 		expect(updates.length).toBeGreaterThan(0);
 	});
 
-	it("routes nested calls through extension hooks", async () => {
+	it("routes nested calls through extension hooks and events, and records them on the result", async () => {
 		const seen: string[] = [];
+		const executions: string[] = [];
 		const harness = await setup([
 			(pi) => {
+				pi.on("tool_execution_start", (event) => {
+					executions.push(`start ${event.toolName}:${event.parentToolCallId ?? "top"}`);
+				});
+				pi.on("tool_execution_end", (event) => {
+					executions.push(`end ${event.toolName}:${event.parentToolCallId ?? "top"}:${event.isError}`);
+				});
 				pi.on("tool_call", (event) => {
 					seen.push(`${event.toolName}:${event.parentToolCallId ?? "top"}`);
 					if (event.toolName === "echo" && (event.input as { text: string }).text === "forbidden") {
@@ -224,6 +233,38 @@ describe("AgentSession codemode tool", () => {
 		});
 		const details = result.details as unknown as CodemodeToolDetails;
 		expect(details.calls.map((call) => call.status)).toEqual(["error", "ok"]);
+		expect(executions).toEqual([
+			"start exec:top",
+			`start echo:${parent}`,
+			`end echo:${parent}:true`,
+			`start stats:${parent}`,
+			`end stats:${parent}:false`,
+			"end exec:top:false",
+		]);
+		// The durable record keeps full arguments, never results.
+		expect(result.nestedCalls).toEqual({
+			calls: [
+				{
+					id: `${parent}/1`,
+					name: "echo",
+					arguments: { text: "forbidden" },
+					status: "error",
+					durationMs: expect.any(Number),
+					error: "echo of forbidden text is blocked",
+				},
+				{ id: `${parent}/2`, name: "stats", arguments: {}, status: "ok", durationMs: expect.any(Number) },
+			],
+			complete: true,
+		});
+		// The record is persisted with the session.
+		const persisted = harness.sessionManager
+			.getBranch()
+			.find((entry) => entry.type === "message" && entry.message.role === "toolResult");
+		expect(
+			persisted?.type === "message" && persisted.message.role === "toolResult" && persisted.message.nestedCalls,
+		).toEqual(result.nestedCalls);
+		// Only the model-issued call shows up as a top-level tool row.
+		expect(harness.eventsOfType("tool_execution_start").filter((event) => !event.parentToolCallId)).toHaveLength(1);
 	});
 
 	it("attaches only the images the script passes to image(), in output order", async () => {

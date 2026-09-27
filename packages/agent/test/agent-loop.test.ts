@@ -4,13 +4,22 @@ import {
 	EventStream,
 	type Message,
 	type Model,
+	type ToolResultMessage,
 	type UserMessage,
 } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { agentLoop, agentLoopContinue, runAgentLoop } from "../src/agent-loop.ts";
 import { setDefaultStreamFn } from "../src/index.ts";
-import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool } from "../src/types.ts";
+import { NESTED_CALL_LIMITS, NestedCallRecorder } from "../src/nested-calls.ts";
+import type {
+	AgentContext,
+	AgentEvent,
+	AgentLoopConfig,
+	AgentMessage,
+	AgentTool,
+	AgentToolCall,
+} from "../src/types.ts";
 
 // Mock stream for testing - mimics MockAssistantStream
 class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
@@ -2099,7 +2108,7 @@ describe("nested tool calls", () => {
 		};
 	}
 
-	it("runs nested calls through validation and hooks without emitting events", async () => {
+	it("runs nested calls through validation and hooks, emitting events with the parent id", async () => {
 		const echoSchema = Type.Object({ value: Type.String() });
 		const echo: AgentTool<typeof echoSchema> = {
 			name: "echo",
@@ -2191,10 +2200,16 @@ describe("nested tool calls", () => {
 			"before call-1/3 parent=call-1",
 			"after call-1 parent=-",
 		]);
-		const toolEventIds = events
+		const toolEvents = events
 			.filter((event) => event.type.startsWith("tool_execution"))
-			.map((event) => (event as { toolCallId: string }).toolCallId);
-		expect(new Set(toolEventIds)).toEqual(new Set(["call-1"]));
+			.map((event) => event as { toolCallId: string; parentToolCallId?: string });
+		expect(new Set(toolEvents.map((event) => event.toolCallId))).toEqual(
+			new Set(["call-1", "call-1/1", "call-1/2", "call-1/3", "call-1/4"]),
+		);
+		expect(
+			toolEvents.every((event) => (event.toolCallId === "call-1") === (event.parentToolCallId === undefined)),
+		).toBe(true);
+		expect(toolEvents.filter((event) => event.parentToolCallId === "call-1")).not.toHaveLength(0);
 	});
 
 	it("lets afterToolCall replace or clear structured content", async () => {
@@ -2359,5 +2374,92 @@ describe("nestedTools", () => {
 		);
 		expect(directEnd?.isError).toBe(true);
 		expect(directEnd?.result.content[0].text).toBe("Tool hidden not found");
+
+		// Nested calls emit events with the parent's id and are recorded on its result message.
+		const nestedEvents = events
+			.filter(
+				(event): event is Extract<AgentEvent, { type: "tool_execution_start" | "tool_execution_end" }> =>
+					(event.type === "tool_execution_start" || event.type === "tool_execution_end") &&
+					event.parentToolCallId !== undefined,
+			)
+			.map((event) => [event.type, event.toolCallId, event.toolName, event.parentToolCallId]);
+		expect(nestedEvents).toEqual([
+			["tool_execution_start", "nested/1", "hidden", "nested"],
+			["tool_execution_end", "nested/1", "hidden", "nested"],
+			["tool_execution_start", "nested/2", "runner", "nested"],
+			["tool_execution_end", "nested/2", "runner", "nested"],
+		]);
+		const runnerResult = events.find(
+			(event): event is Extract<AgentEvent, { type: "message_end" }> =>
+				event.type === "message_end" &&
+				event.message.role === "toolResult" &&
+				event.message.toolCallId === "nested",
+		)?.message as ToolResultMessage | undefined;
+		expect(runnerResult?.nestedCalls).toEqual({
+			calls: [
+				{ id: "nested/1", name: "hidden", arguments: {}, status: "ok", durationMs: expect.any(Number) },
+				{
+					id: "nested/2",
+					name: "runner",
+					arguments: {},
+					status: "error",
+					durationMs: expect.any(Number),
+					error: "Tool runner not found",
+				},
+			],
+			complete: true,
+		});
+		const directResult = events.find(
+			(event): event is Extract<AgentEvent, { type: "message_end" }> =>
+				event.type === "message_end" &&
+				event.message.role === "toolResult" &&
+				event.message.toolCallId === "direct",
+		)?.message as ToolResultMessage | undefined;
+		expect(directResult && "nestedCalls" in directResult).toBe(false);
+	});
+});
+
+describe("NestedCallRecorder", () => {
+	const call = (id: string, args: AgentToolCall["arguments"]): AgentToolCall => ({
+		type: "toolCall",
+		id,
+		name: "t",
+		arguments: args,
+	});
+
+	it("omits oversized arguments and drops calls beyond the limit", () => {
+		const recorder = new NestedCallRecorder();
+		expect(recorder.snapshot()).toBeUndefined();
+		const small = recorder.start(call("a", { x: 1 }));
+		recorder.finish(small, false, "");
+		expect(recorder.snapshot()).toEqual({
+			calls: [{ id: "a", name: "t", arguments: { x: 1 }, status: "ok", durationMs: expect.any(Number) }],
+			complete: true,
+		});
+
+		const big = recorder.start(call("b", { text: "x".repeat(NESTED_CALL_LIMITS.maxArgumentBytesPerCall) }));
+		recorder.finish(big, true, "e".repeat(1000));
+		const snapshot = recorder.snapshot();
+		expect(snapshot?.complete).toBe(false);
+		expect(snapshot?.calls[1]).toMatchObject({ id: "b", status: "error" });
+		expect(snapshot?.calls[1].arguments).toBeUndefined();
+		expect(snapshot?.calls[1].argumentsBytes).toBeGreaterThan(NESTED_CALL_LIMITS.maxArgumentBytesPerCall);
+		expect(snapshot?.calls[1].error).toHaveLength(NESTED_CALL_LIMITS.maxErrorChars);
+
+		for (let i = 0; i < NESTED_CALL_LIMITS.maxCalls; i++)
+			recorder.finish(recorder.start(call(`c${i}`, {})), false, "");
+		expect(recorder.snapshot()?.calls).toHaveLength(NESTED_CALL_LIMITS.maxCalls);
+	});
+
+	it("caps the total argument size and marks unfinished calls incomplete", () => {
+		const recorder = new NestedCallRecorder();
+		const chunk = { text: "x".repeat(7000) };
+		const records = Array.from({ length: 6 }, (_, i) => recorder.start(call(`c${i}`, chunk)));
+		const snapshot = recorder.snapshot();
+		// 32 KiB fits four 7000-byte argument objects.
+		expect(snapshot?.calls.filter((entry) => entry.arguments !== undefined)).toHaveLength(4);
+		expect(snapshot?.calls.every((entry) => entry.status === "unfinished")).toBe(true);
+		expect(snapshot?.complete).toBe(false);
+		expect(records).toHaveLength(6);
 	});
 });

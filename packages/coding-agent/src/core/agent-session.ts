@@ -1158,6 +1158,7 @@ export class AgentSession {
 				toolCallId: event.toolCallId,
 				toolName: event.toolName,
 				args: event.args,
+				...(event.parentToolCallId ? { parentToolCallId: event.parentToolCallId } : {}),
 			};
 			await this._extensionRunner.emit(extensionEvent);
 		} else if (event.type === "tool_execution_update") {
@@ -1167,6 +1168,7 @@ export class AgentSession {
 				toolName: event.toolName,
 				args: event.args,
 				partialResult: event.partialResult,
+				...(event.parentToolCallId ? { parentToolCallId: event.parentToolCallId } : {}),
 			};
 			await this._extensionRunner.emit(extensionEvent);
 		} else if (event.type === "tool_execution_end") {
@@ -1176,6 +1178,7 @@ export class AgentSession {
 				toolName: event.toolName,
 				result: event.result,
 				isError: event.isError,
+				...(event.parentToolCallId ? { parentToolCallId: event.parentToolCallId } : {}),
 			};
 			await this._extensionRunner.emit(extensionEvent);
 		}

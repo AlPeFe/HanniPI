@@ -586,6 +586,8 @@ export class Agent {
 				break;
 
 			case "tool_execution_start": {
+				// Only calls issued by the model count as pending; nested calls belong to their parent.
+				if (event.parentToolCallId) break;
 				const pendingToolCalls = new Set(this._state.pendingToolCalls);
 				pendingToolCalls.add(event.toolCallId);
 				this._state.pendingToolCalls = pendingToolCalls;
@@ -593,6 +595,7 @@ export class Agent {
 			}
 
 			case "tool_execution_end": {
+				if (event.parentToolCallId) break;
 				const pendingToolCalls = new Set(this._state.pendingToolCalls);
 				pendingToolCalls.delete(event.toolCallId);
 				this._state.pendingToolCalls = pendingToolCalls;

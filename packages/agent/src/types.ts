@@ -471,7 +471,7 @@ export interface AgentToolCallOutcome {
 export interface AgentNestedToolCallOptions {
 	/** Defaults to the calling tool's signal. */
 	signal?: AbortSignal;
-	/** Receives partial results of the nested tool. No agent events are emitted for nested calls. */
+	/** Receives partial results of the nested tool, in addition to `tool_execution_update` events. */
 	onUpdate?: AgentToolUpdateCallback;
 }
 
@@ -484,8 +484,9 @@ export interface AgentToolContext {
 	/**
 	 * Run another tool through the same pipeline as a model-issued call: argument preparation,
 	 * schema validation, `beforeToolCall`, execution, and `afterToolCall`. The hooks see
-	 * `parentToolCall` set to the calling tool's call. No `tool_execution_*` events are emitted;
-	 * the calling tool reports nested calls itself, for example through `onUpdate`.
+	 * `parentToolCall` set to the calling tool's call, and `tool_execution_*` events carry
+	 * `parentToolCallId`. The call is recorded (bounded, without its result) as `nestedCalls` on the
+	 * model-issued call's tool result message.
 	 *
 	 * Never rejects for tool failures: unknown tools, validation errors, blocked calls, and thrown
 	 * errors come back as `isError: true`.
@@ -574,6 +575,22 @@ export type AgentEvent =
 	| { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
 	| { type: "message_end"; message: AgentMessage }
 	// Tool execution lifecycle
-	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
-	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
-	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean };
+	// Tool execution lifecycle. Calls made by another tool through `executeTool` carry the calling
+	// tool's call id as `parentToolCallId`; they never become tool result messages.
+	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any; parentToolCallId?: string }
+	| {
+			type: "tool_execution_update";
+			toolCallId: string;
+			toolName: string;
+			args: any;
+			partialResult: any;
+			parentToolCallId?: string;
+	  }
+	| {
+			type: "tool_execution_end";
+			toolCallId: string;
+			toolName: string;
+			result: any;
+			isError: boolean;
+			parentToolCallId?: string;
+	  };
