@@ -49,6 +49,7 @@ import {
 	resetApiProviders,
 	streamSimple,
 } from "@earendil-works/pi-ai/compat";
+import { renderToolSample } from "@earendil-works/pi-codemode/declarations";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { processImage } from "../utils/image-process.ts";
@@ -131,7 +132,12 @@ import {
 	normalizeBuildSystemPromptOptions,
 } from "./system-prompt.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
-import { CODEMODE_TOOL_NAME, createCodemodeDescription, DEFAULT_CODEMODE_INLINE_BUDGET } from "./tools/codemode.ts";
+import {
+	CODEMODE_TOOL_NAME,
+	createCodemodeDescription,
+	DEFAULT_CODEMODE_INLINE_BUDGET,
+	toCodemodeDeclaration,
+} from "./tools/codemode.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import {
@@ -414,6 +420,8 @@ export class AgentSession {
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
+	/** Declared tools that requests hide because exec lists them (`codemode.mode: "only"`). */
+	private _codemodeOnlyHiddenTools: ReadonlySet<string> = new Set();
 	private _toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
 	private _toolPromptSnippets: Map<string, string> = new Map();
 	private _toolPromptGuidelines: Map<string, string[]> = new Map();
@@ -449,6 +457,7 @@ export class AgentSession {
 		this._installAgentNextTurnRefresh();
 		this._installAgentRequestProjection();
 		this._installAgentBoundaryHooks();
+		this._installCodemodeOnlyProjection();
 		this._installAgentForcedPromptProjection();
 
 		this._buildRuntime({
@@ -1329,8 +1338,15 @@ export class AgentSession {
 	 *
 	 * Declared tools are the registered, non-hidden active ones. Tools callable from codemode are the
 	 * active `direct` tools plus every registered `codemode` or `deferred` tool, so the latter do not
-	 * depend on the transcript's tool declarations. The built-in codemode tool gets a description
-	 * declaring the callable tools except `deferred` ones, so it changes with the loadout.
+	 * depend on the transcript's tool declarations.
+	 *
+	 * While the built-in exec tool is active, `codemode.mode` decides how tools that are both
+	 * declared and callable from scripts are presented, like Codex's tool modes:
+	 * - `on`: their descriptions get the exec declaration appended, and the exec description lists
+	 *   only the callable tools without `direct` exposure.
+	 * - `only`: the exec description lists every callable tool, and requests hide the declarations
+	 *   of active `direct` tools (see {@link _installCodemodeOnlyProjection}). The transcript still
+	 *   declares them, so the active set survives `/tree` and resume.
 	 */
 	private _applyToolLoadout(toolNames: string[]): AgentTool[] {
 		const tools = [...new Set(toolNames)].flatMap((name) => {
@@ -1348,18 +1364,37 @@ export class AgentSession {
 		// Extension tools named codemode are left alone; built-in slots (including SDK base tool
 		// overrides) named codemode are assumed to be the codemode tool. Only the session's own
 		// codemode tool has model access, so overrides do not declare `models`.
-		if (codemodeIndex !== -1 && this._isBuiltInTool(CODEMODE_TOOL_NAME)) {
+		const execActive = codemodeIndex !== -1 && this._isBuiltInTool(CODEMODE_TOOL_NAME);
+		const mode = this.settingsManager.getCodemodeMode();
+		const isDirect = (tool: AgentTool) => this._getToolExposure(tool.name) === "direct";
+		this._codemodeOnlyHiddenTools = new Set(
+			execActive && mode === "only"
+				? nestedTools.filter((tool) => isDirect(tool) && declared.has(tool.name)).map((tool) => tool.name)
+				: [],
+		);
+		if (execActive && mode === "on") {
+			const callable = new Set(nestedTools.map((tool) => tool.name));
+			for (const [index, tool] of tools.entries()) {
+				if (callable.has(tool.name)) {
+					tools[index] = { ...tool, description: renderToolSample(toCodemodeDeclaration(tool)) };
+				}
+			}
+		}
+		if (execActive) {
+			// Listing by exposure, not by the active set, keeps the exec description unchanged when
+			// tool_search loads a tool, so loads do not redeclare exec.
+			const listed = mode === "only" ? nestedTools : nestedTools.filter((tool) => !isDirect(tool));
 			const namespaces = new Map(
-				nestedTools.flatMap((tool) => {
+				listed.flatMap((tool) => {
 					const namespace = this._toolDefinitions.get(tool.name)?.definition.namespace;
 					return namespace ? [[tool.name, namespace] as const] : [];
 				}),
 			);
-			const description = createCodemodeDescription(nestedTools, {
+			const description = createCodemodeDescription(listed, {
 				models: this._baseToolsOverride === undefined,
 				namespaces,
 				deferred: new Set(
-					nestedTools.filter((tool) => this._getToolExposure(tool.name) === "deferred").map((tool) => tool.name),
+					listed.filter((tool) => this._getToolExposure(tool.name) === "deferred").map((tool) => tool.name),
 				),
 				inlineBudget: this.settingsManager.getCodemodeInlineBudget() ?? DEFAULT_CODEMODE_INLINE_BUDGET,
 			});
@@ -1516,6 +1551,31 @@ export class AgentSession {
 	 * collapse into one head holding the forced text and the current tools. Runs after the
 	 * `context` extension handlers.
 	 */
+	/**
+	 * In `codemode.mode: "only"`, remove the declarations of tools that exec lists from every
+	 * request. The whole transcript is filtered with the current set, so the projected declarations
+	 * stay consistent across requests and only change when the loadout or mode does.
+	 */
+	private _installCodemodeOnlyProjection(): void {
+		const previousTransformContext = this.agent.transformContext;
+		this.agent.transformContext = async (messages, signal) => {
+			const transformed = previousTransformContext ? await previousTransformContext(messages, signal) : messages;
+			const hidden = this._codemodeOnlyHiddenTools;
+			if (hidden.size === 0) return transformed;
+			return transformed.map((message) => {
+				if (message.role !== "system" || (!message.toolsAdded && !message.toolsRemoved)) return message;
+				const { toolsAdded, toolsRemoved, ...rest } = message;
+				const added = toolsAdded?.filter((tool) => !hidden.has(tool.name)) ?? [];
+				const removed = toolsRemoved?.filter((tool) => !hidden.has(tool.name)) ?? [];
+				return {
+					...rest,
+					...(added.length > 0 ? { toolsAdded: added } : {}),
+					...(removed.length > 0 ? { toolsRemoved: removed } : {}),
+				};
+			});
+		};
+	}
+
 	private _installAgentForcedPromptProjection(): void {
 		const previousTransformContext = this.agent.transformContext;
 		this.agent.transformContext = async (messages, signal) => {

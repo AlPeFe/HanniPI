@@ -86,7 +86,18 @@ export interface WarningSettings {
 	anthropicExtraUsage?: boolean; // default: true
 }
 
+/**
+ * How the exec tool presents tools while it is active, like Codex's tool modes.
+ * - `on`: declared tools that scripts can call get their exec declaration appended to their
+ *   description; the exec description lists only the tools without `direct` exposure.
+ * - `only`: the exec description lists every tool scripts can call, and active `direct` tools are
+ *   not declared to the model.
+ */
+export type CodemodeMode = "on" | "only";
+
 export interface CodemodeSettings {
+	/** Default: `on`. */
+	mode?: CodemodeMode;
 	/** Estimated tokens (characters / 4) the exec description may spend on tool declarations. Default: 3000. */
 	inlineBudget?: number;
 }
@@ -1307,6 +1318,10 @@ export class SettingsManager {
 		this.globalSettings.fullscreenCopyOnSelect = enabled;
 		this.markModified("fullscreenCopyOnSelect");
 		this.save();
+	}
+
+	getCodemodeMode(): CodemodeMode {
+		return this.settings.codemode?.mode === "only" ? "only" : "on";
 	}
 
 	/** Token budget for tool declarations in the exec description, or undefined for the default. */

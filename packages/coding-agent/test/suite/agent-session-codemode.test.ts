@@ -91,26 +91,39 @@ describe("AgentSession codemode tool", () => {
 		return harness;
 	}
 
-	it("declares the other active tools in its description, like Codex", async () => {
+	it("appends exec declarations to the declared tools in codemode.mode on, like Codex", async () => {
 		const harness = await setup();
-		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "exec");
-		expect(codemode?.description).toContain(
-			"### `echo`\nEcho text back.\n\nSecond paragraph.\n\nexec tool declaration:\n```ts\ndeclare const tools: { echo(args: {\n  // Text to echo\n  text: string;\n}): Promise<string>; };\n```",
+		const find = (name: string) => harness.session.agent.state.tools.find((tool) => tool.name === name);
+		expect(find("echo")?.description).toBe(
+			"Echo text back.\n\nSecond paragraph.\n\nexec tool declaration:\n```ts\ndeclare const tools: { echo(args: {\n  // Text to echo\n  text: string;\n}): Promise<string>; };\n```",
 		);
-		expect(codemode?.description).toContain(
+		expect(find("stats")?.description).toContain(
 			"declare const tools: { stats(args: { [key: string]: unknown; }): Promise<{ files: number; names: Array<string>; }>; };",
 		);
-		expect(codemode?.description).toContain(
-			"- `image(imageUrlOrItem: string | { image_url: string } | ImageContent)`",
-		);
-		expect(codemode?.description).not.toContain("Shared MCP Types");
-		expect(codemode?.description).not.toContain("Some deferred nested tools");
-		expect(codemode?.description).not.toMatch(/\bexec\(args/);
+		const exec = find("exec")?.description ?? "";
+		expect(exec).toContain("- `image(imageUrlOrItem: string | { image_url: string } | ImageContent)`");
+		// Declared tools are not listed a second time.
+		expect(exec).not.toContain("### `echo`");
+		expect(exec).not.toContain("Nested tools:");
+		expect(exec).not.toContain("Shared MCP Types");
+		expect(exec).not.toMatch(/\bexec\(args/);
 
+		harness.session.setActiveToolsByName(["echo"]);
+		expect(find("echo")?.description).toBe("Echo text back.\n\nSecond paragraph.");
+	});
+
+	it("lists the callable tools in the exec description in codemode.mode only", async () => {
+		const harness = await setup();
+		harness.settingsManager.applyOverrides({ codemode: { mode: "only" } });
 		harness.session.setActiveToolsByName(["echo", "exec"]);
-		const narrowed = harness.session.agent.state.tools.find((tool) => tool.name === "exec");
-		expect(narrowed?.description).toContain("echo(args");
-		expect(narrowed?.description).not.toContain("stats(args");
+		const find = (name: string) => harness.session.agent.state.tools.find((tool) => tool.name === name);
+		expect(find("echo")?.description).toBe("Echo text back.\n\nSecond paragraph.");
+		const exec = find("exec")?.description ?? "";
+		expect(exec).toContain("Nested tools: COMPLETE list (1 tool).");
+		expect(exec).toContain(
+			"### `echo`\nEcho text back.\n\nSecond paragraph.\n\nexec tool declaration:\n```ts\ndeclare const tools: { echo(args: {",
+		);
+		expect(exec).not.toContain("stats(args");
 	});
 
 	it("runs nested calls in parallel and returns only the script result", async () => {

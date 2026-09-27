@@ -1,4 +1,4 @@
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, getCurrentTools, type TranscriptContext } from "@earendil-works/pi-ai";
 import type { SystemMessage, ToolResultMessage } from "@earendil-works/pi-ai/compat";
 import { type JsonRpcRequest, LATEST_PROTOCOL_VERSION } from "@earendil-works/pi-mcp";
 import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
@@ -343,9 +343,41 @@ describe("AgentSession MCP integration", () => {
 		harness.session.setActiveToolsByName(["exec", "mcp__docs__search"]);
 
 		expect(nestedToolNames(harness)).toEqual(["mcp__docs__search"]);
-		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "exec");
-		expect(codemode?.description).toContain("mcp__docs__search");
-		expect(codemode?.description).not.toContain("mcp__docs__fail");
+		// codemode.mode "on": the declared tool carries its exec declaration.
+		const search = harness.session.agent.state.tools.find((tool) => tool.name === "mcp__docs__search");
+		expect(search?.description).toContain(
+			"Search the docs.\n\nexec tool declaration:\n```ts\ndeclare const tools: { mcp__docs__search(",
+		);
+	});
+
+	it("presents tools per codemode.mode, hiding direct tools from requests in only mode", async () => {
+		const requestTools: string[][] = [];
+		const record = (context: TranscriptContext) => {
+			requestTools.push(getCurrentTools(context.messages).map((tool) => tool.name));
+			return fauxAssistantMessage("ok");
+		};
+		const { harness } = await setup("codemode", undefined, { builtInTools: ["read", "tool_search"] });
+		harness.setResponses([record]);
+		await harness.session.prompt("on");
+		const exec = () => harness.session.agent.state.tools.find((tool) => tool.name === "exec")?.description ?? "";
+		const read = () => harness.session.agent.state.tools.find((tool) => tool.name === "read")?.description ?? "";
+		// on: read is declared with its exec declaration; exec lists only the MCP tools.
+		expect(read()).toContain("exec tool declaration:");
+		expect(exec()).not.toContain("### `read`");
+		expect(exec()).toContain("### `mcp__docs__search`");
+		expect(requestTools[0]).toEqual(expect.arrayContaining(["read", "exec", "tool_search"]));
+
+		harness.settingsManager.applyOverrides({ codemode: { mode: "only" } });
+		harness.session.setActiveToolsByName(harness.session.getActiveToolNames());
+		harness.setResponses([record]);
+		await harness.session.prompt("only");
+		// only: exec lists read, read keeps its plain description and is hidden from the request,
+		// while it stays active (declared in the transcript).
+		expect(exec()).toContain("### `read`");
+		expect(read()).not.toContain("exec tool declaration:");
+		expect(harness.session.getActiveToolNames()).toContain("read");
+		expect(requestTools[1]).not.toContain("read");
+		expect(requestTools[1]).toEqual(expect.arrayContaining(["exec", "tool_search"]));
 	});
 
 	it("finds tools from scripts with searchTools() and describeTool()", async () => {

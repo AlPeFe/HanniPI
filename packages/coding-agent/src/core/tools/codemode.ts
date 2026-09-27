@@ -322,7 +322,7 @@ export function createCodemodeDescription(
 
 	const toolSections = [
 		complete
-			? `Nested tools: COMPLETE list (${declarations.length} tools).`
+			? `Nested tools: COMPLETE list (${declarations.length} tool${declarations.length === 1 ? "" : "s"}).`
 			: `Nested tools: PARTIAL - ${shown.size} of ${declarations.length} shown.`,
 	];
 	for (const { namespace, entries } of ordered) {

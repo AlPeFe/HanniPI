@@ -143,6 +143,8 @@ Default enabled tools are `read`, `bash`, `edit`, and `write`, unless `defaultTo
 
 A script may start with a pragma line such as `// @exec: {"max_output_tokens": 2000, "timeout_ms": 60000}`. `max_output_tokens` (default 10000) limits the output: longer output keeps its start and end, and the full text is written to a temp file whose path is included in the result. `timeout_ms` is a hard deadline, unset by default. `yield_time_ms` is accepted for compatibility, but scripts always run to completion.
 
+While `exec` is active, `codemode.mode` in [settings](settings.md#tools) decides how the other tools are presented. With `on` (default) declared tools keep being declared and their descriptions show how to call them from scripts. With `only` they are hidden from the model and listed in the `exec` description instead, so the model calls them through scripts, like Codex's code-mode-only models.
+
 The `exec` description lists the callable tools with their TypeScript declarations, grouped by namespace (for example one MCP server). Declarations share a budget of 3000 estimated tokens (`codemode.inlineBudget` in [settings](settings.md#tools)); every namespace is still listed with its tool count, and the description says whether the list is complete. Scripts find the rest with `await searchTools(query, { limit, namespace })`, which ranks tools with BM25, and `await describeTool(name)`, or by filtering `ALL_TOOLS`.
 
 `tool_search` is off by default; enable it with `--tools` or `defaultTools`. It uses the same ranking over tools that are not declared yet and declares the matches for the next model call. Loaded tools are recorded in the session like other tool changes, so they stay declared on that branch.
