@@ -16,13 +16,13 @@
  * }
  * ```
  *
- * HTTP servers without an `Authorization` header use OAuth when they answer 401 (`/mcp login`).
+ * HTTP servers without an `Authorization` header use OAuth when they answer 401 (sign in with `/mcp`).
  *
  * The top-level `autoEnableCodemode` (default true) activates the exec tool when a server
  * whose tools are only reachable from codemode connects. A project value overrides the global one.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CONFIG_DIR_NAME } from "../../config.ts";
 
@@ -81,6 +81,8 @@ export interface McpServerEntry {
 	config: McpServerConfig;
 	/** Config file that defined the entry. */
 	source: string;
+	/** Whether the entry comes from the global or the project `mcp.json`. */
+	scope?: "global" | "project";
 }
 
 export interface LoadedMcpConfig {
@@ -159,7 +161,7 @@ interface McpConfigState {
 	errors: string[];
 }
 
-function readConfigFile(path: string, state: McpConfigState): void {
+function readConfigFile(path: string, scope: "global" | "project", state: McpConfigState): void {
 	const { servers, errors } = state;
 	if (!existsSync(path)) return;
 	let parsed: unknown;
@@ -181,18 +183,48 @@ function readConfigFile(path: string, state: McpConfigState): void {
 			errors.push(`${path}: ${config}`);
 			continue;
 		}
-		servers.set(name, { name, config, source: path });
+		servers.set(name, { name, config, source: path, scope });
 	}
 }
 
-/** Load global and (when trusted) project MCP configuration. Disabled servers are omitted. */
+/**
+ * Load global and (when trusted) project MCP configuration. Disabled servers are included with
+ * `enabled: false`, so they can be enabled again.
+ */
 export function loadMcpConfig(options: { agentDir: string; cwd: string; projectTrusted: boolean }): LoadedMcpConfig {
 	const state: McpConfigState = { servers: new Map(), errors: [] };
-	readConfigFile(join(options.agentDir, "mcp.json"), state);
-	if (options.projectTrusted) readConfigFile(join(options.cwd, CONFIG_DIR_NAME, "mcp.json"), state);
+	readConfigFile(join(options.agentDir, "mcp.json"), "global", state);
+	if (options.projectTrusted) readConfigFile(join(options.cwd, CONFIG_DIR_NAME, "mcp.json"), "project", state);
 	return {
-		servers: [...state.servers.values()].filter((entry) => entry.config.enabled !== false),
+		servers: [...state.servers.values()],
 		...(state.autoEnableCodemode === undefined ? {} : { autoEnableCodemode: state.autoEnableCodemode }),
 		errors: state.errors,
 	};
+}
+
+/** Settings `/mcp` changes. `enabled: true` and `exposure: "codemode"` are the defaults and remove the key. */
+export interface McpServerConfigPatch {
+	enabled?: boolean;
+	exposure?: McpExposure;
+}
+
+/**
+ * Change one server's settings in the `mcp.json` that defines it. Other content is kept; the file is
+ * rewritten with its indentation.
+ */
+export function updateMcpServerConfig(path: string, name: string, patch: McpServerConfigPatch): void {
+	const text = readFileSync(path, "utf8");
+	const parsed: unknown = JSON.parse(text);
+	const server = isRecord(parsed) && isRecord(parsed.mcpServers) ? parsed.mcpServers[name] : undefined;
+	if (!isRecord(server)) throw new Error(`${path} does not define MCP server "${name}"`);
+	if (patch.enabled !== undefined) {
+		if (patch.enabled) delete server.enabled;
+		else server.enabled = false;
+	}
+	if (patch.exposure !== undefined) {
+		if (patch.exposure === "codemode") delete server.exposure;
+		else server.exposure = patch.exposure;
+	}
+	const indent = /^([ \t]+)\S/m.exec(text)?.[1] ?? "  ";
+	writeFileSync(path, `${JSON.stringify(parsed, null, indent)}\n`);
 }

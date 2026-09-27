@@ -3,7 +3,7 @@
  *
  * Connections never start a browser flow on their own. They send the stored access token and, after
  * a 401, try the stored refresh token. When that is not possible they fail with
- * `McpOAuthAuthorizationRequiredError`, and the user signs in with `/mcp login <server>`, which runs
+ * `McpOAuthAuthorizationRequiredError`, and the user signs in through `/mcp`, which runs
  * the authorization code flow (PKCE, dynamic client registration) against a loopback callback.
  *
  * Credentials live in `<agent-dir>/mcp-auth.json`, keyed by server URL.

@@ -58,7 +58,7 @@ function isTransientConnectError(error: unknown): boolean {
 }
 
 function signInRequiredMessage(name: string): string {
-	return `MCP server "${name}" requires sign-in. Run /mcp login ${name}.`;
+	return `MCP server "${name}" requires sign-in. Run /mcp to sign in.`;
 }
 
 /** HTTP servers authenticate with OAuth unless the config supplies an `Authorization` header. */
@@ -113,6 +113,7 @@ export class McpServerConnection implements McpToolCaller {
 	private readonly createTransport: McpTransportFactory;
 	private readonly authProvider: AuthProvider | undefined;
 	private readonly onTools: (connection: McpServerConnection) => void;
+	private readonly onChange: ((connection: McpServerConnection) => void) | undefined;
 
 	constructor(options: {
 		entry: McpServerEntry;
@@ -120,11 +121,14 @@ export class McpServerConnection implements McpToolCaller {
 		createTransport: McpTransportFactory;
 		credentials: McpOAuthCredentialStore;
 		onTools: (connection: McpServerConnection) => void;
+		/** Called when `state`, `error`, or `tools` change. */
+		onChange?: (connection: McpServerConnection) => void;
 	}) {
 		this.entry = options.entry;
 		this.cwd = options.cwd;
 		this.createTransport = options.createTransport;
 		this.onTools = options.onTools;
+		this.onChange = options.onChange;
 		const url = this.oauthUrl;
 		this.authProvider = url
 			? createMcpAuthProvider({
@@ -215,6 +219,11 @@ export class McpServerConnection implements McpToolCaller {
 	private markNeedsAuth(): void {
 		this.state = "needs-auth";
 		this.error = undefined;
+		this.changed();
+	}
+
+	private changed(): void {
+		this.onChange?.(this);
 	}
 
 	private async dropClient(client: McpClient): Promise<void> {
@@ -224,6 +233,7 @@ export class McpServerConnection implements McpToolCaller {
 
 	private async open(): Promise<McpClient> {
 		this.state = "connecting";
+		this.changed();
 		const retries = "url" in this.entry.config ? CONNECT_RETRY_DELAYS_MS : [];
 		for (let attempt = 0; ; attempt++) {
 			this.stderrTail = undefined;
@@ -266,6 +276,7 @@ export class McpServerConnection implements McpToolCaller {
 			this.state = "connected";
 			this.error = undefined;
 			this.onTools(this);
+			this.changed();
 			return client;
 		} catch (error) {
 			await client.close().catch(() => undefined);
@@ -283,6 +294,7 @@ export class McpServerConnection implements McpToolCaller {
 		}
 		this.state = this.closed ? "closed" : "failed";
 		this.error = this.stderrTail ? `${errorMessage(error)}\n${this.stderrTail}` : errorMessage(error);
+		this.changed();
 		return new Error(`MCP server "${this.entry.name}" failed to connect: ${this.error}`);
 	}
 
@@ -293,6 +305,7 @@ export class McpServerConnection implements McpToolCaller {
 		this.state = "disconnected";
 		const stderr = stdio?.stderr.trim().slice(-STDERR_TAIL_CHARS);
 		this.error = stderr ? `Connection closed\n${stderr}` : "Connection closed";
+		this.changed();
 	}
 
 	private async refreshTools(client: McpClient): Promise<void> {
@@ -304,11 +317,13 @@ export class McpServerConnection implements McpToolCaller {
 		} catch (error) {
 			this.error = `Failed to refresh tools: ${errorMessage(error)}`;
 		}
+		this.changed();
 	}
 
 	async close(): Promise<void> {
 		this.closed = true;
 		this.state = "closed";
+		this.changed();
 		const client = this.client;
 		this.client = undefined;
 		await client?.close().catch(() => undefined);

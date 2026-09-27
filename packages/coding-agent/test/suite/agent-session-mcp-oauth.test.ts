@@ -261,7 +261,8 @@ describe("AgentSession MCP OAuth", () => {
 		const { harness, server, notifications, backend } = await setup("follow");
 
 		await harness.session.prompt("/mcp");
-		expect(notifications).toContain('MCP server "issues" requires sign-in. Run /mcp login issues.');
+		// Startup problems are reported once, pointing to /mcp.
+		expect(notifications).toContain("MCP servers need attention:\n  issues: needs sign-in\nRun /mcp to fix.");
 		expect(notifications.at(-1)).toBe("issues: needs sign-in, run /mcp login issues (direct)");
 
 		await harness.session.prompt("/mcp login issues");
@@ -280,7 +281,7 @@ describe("AgentSession MCP OAuth", () => {
 		expect(notifications.at(-1)).toBe('Signed out of MCP server "issues".');
 		const result = await callWhoami(harness);
 		expect(result.isError).toBe(true);
-		expect(text(result)).toBe('MCP server "issues" requires sign-in. Run /mcp login issues.');
+		expect(text(result)).toBe('MCP server "issues" requires sign-in. Run /mcp to sign in.');
 	});
 
 	it("accepts a pasted redirect URL when the browser cannot reach the callback", async () => {

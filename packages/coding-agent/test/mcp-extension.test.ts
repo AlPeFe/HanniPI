@@ -53,9 +53,11 @@ describe("MCP config", () => {
 		);
 
 		const trusted = loadMcpConfig({ ...paths, projectTrusted: true });
-		expect(trusted.servers.map((server) => [server.name, server.config])).toEqual([
-			["shared", { command: "project-cmd", exposure: "direct" }],
-			["remote", { url: "https://example.com/mcp", headers: { Authorization: TOKEN_HEADER } }],
+		// Disabled servers are kept so /mcp can enable them again.
+		expect(trusted.servers.map((server) => [server.name, server.scope, server.config])).toEqual([
+			["shared", "project", { command: "project-cmd", exposure: "direct" }],
+			["remote", "global", { url: "https://example.com/mcp", headers: { Authorization: TOKEN_HEADER } }],
+			["off", "global", { command: "x", enabled: false }],
 		]);
 		expect(trusted.errors).toHaveLength(3);
 		expect(trusted.errors[0]).toContain('server "bad" needs either "command"');
@@ -281,7 +283,7 @@ describe("MCP connections", () => {
 				return transport;
 			},
 		]);
-		await expect(connection.getClient()).rejects.toThrow('MCP server "fake" requires sign-in. Run /mcp login fake.');
+		await expect(connection.getClient()).rejects.toThrow('MCP server "fake" requires sign-in. Run /mcp to sign in.');
 		expect(connection.state).toBe("needs-auth");
 		await connection.close();
 	});
