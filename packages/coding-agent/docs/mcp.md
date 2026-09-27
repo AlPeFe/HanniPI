@@ -52,7 +52,7 @@ When asked to add an MCP server, the agent should:
 4. For a server that needs a sign-in, run `pi mcp login <server>`. It opens the authorization page in the user's browser and waits until the user approves access; tell the user to approve it. A running session uses the new credentials on its next turn.
 5. Tell the user to run `/reload` (or start a new session) so the running session connects to added or changed servers.
 
-Pi connects when a session starts. The first prompt waits until startup connections finish. HTTP connections that fail with a network error or a transient status (408, 429, 5xx) are retried twice. A server that drops its connection shows as disconnected and is reconnected on the next call. When a server announces that its tool list changed, new tools are added and withdrawn tools become unreachable until the server offers them again.
+Pi connects when a session starts. The first prompt waits up to 10 seconds for startup connections; the tools of servers that take longer become available once they connect. HTTP connections that fail with a network error or a transient status (408, 429, 5xx) are retried twice. A server that drops its connection shows as disconnected and is reconnected on the next call. When a server announces that its tool list changed, new tools are added and withdrawn tools become unreachable until the server offers them again.
 
 Config errors, servers that failed to connect, and servers that need a sign-in are reported once after startup.
 
@@ -120,6 +120,10 @@ Codemode-only tools do not depend on the active tool set, so they stay callable 
 Like in Codex, `exec` scripts receive an MCP tool's whole `CallToolResult` (`content` blocks as sent by the server, `structuredContent`, and `isError`), and the `exec` description declares it as `CallToolResult<T>`. A result with `isError` resolves in scripts and is reported to the model as an error for direct calls. `image(result.content[0])` forwards an image block to the model. The server's `instructions` describe its tools in the `exec` description.
 
 Every MCP call goes through pi's tool pipeline, so `tool_call` and `tool_result` extension handlers, including permission gates, apply to MCP tools. Calls made from `exec` scripts carry the `exec` call's id as `parentToolCallId`.
+
+## Other MCP extensions
+
+An installed extension that registers the `/mcp` command, such as `pi-mcp-adapter`, replaces the built-in MCP support: pi then neither reads `mcp.json` in sessions nor connects servers, and `/mcp` belongs to that extension. Remove the extension to use the built-in support. Likewise, an extension that registers a tool named `exec` or `tool_search` replaces the built-in tool of that name. `pi mcp` shell commands always use the built-in support.
 
 ## SDK
 

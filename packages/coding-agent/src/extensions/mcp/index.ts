@@ -28,7 +28,7 @@ import type {
 	ToolDefinition,
 } from "../../core/extensions/types.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
-import { CODEMODE_TOOL_NAME } from "../codemode/tool.ts";
+import { CODEMODE_TOOL_NAME, isCodemodeTool } from "../codemode/tool.ts";
 import {
 	type LoadedMcpConfig,
 	loadMcpConfig,
@@ -57,7 +57,14 @@ export interface McpExtensionOptions {
 	openUrl?: (url: string) => void;
 	/** Saves `/mcp` changes to the server's config file. Defaults to editing its `mcp.json`. */
 	updateConfig?: (entry: McpServerEntry, patch: McpServerConfigPatch) => void;
+	/**
+	 * How long the first prompt waits for servers that are still connecting at startup, in
+	 * milliseconds. Their tools become available when they connect. Default: 10000.
+	 */
+	startupWaitMs?: number;
 }
+
+const DEFAULT_STARTUP_WAIT_MS = 10_000;
 
 /** A configured server. Disabled servers have no connection. */
 interface McpServer {
@@ -141,6 +148,9 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		/** Whether the "codemode tools unreachable" warning was shown since the session started. */
 		let warnedUnreachable = false;
 		let pending: Promise<unknown> | undefined;
+		/** Whether a prompt already waited for the startup connections since the session started. */
+		let waitedForStartup = false;
+		const startupWaitMs = options.startupWaitMs ?? DEFAULT_STARTUP_WAIT_MS;
 		/** Bumped on every session start and shutdown so a runtime load that resolves late is dropped. */
 		let generation = 0;
 		/** Working directory of the session, for stdio servers. */
@@ -231,8 +241,10 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				const exposure = exposureOf(server.entry);
 				return server.connection?.state === "connected" && (exposure === "codemode" || exposure === "deferred");
 			});
-			if (!needsCodemode || pi.getActiveTools().includes(CODEMODE_TOOL_NAME)) return;
-			const available = pi.getAllTools().some((tool) => tool.name === CODEMODE_TOOL_NAME);
+			if (!needsCodemode) return;
+			// Another extension's tool named `exec` cannot call MCP tools, so never activate it.
+			const available = pi.getAllTools().some(isCodemodeTool);
+			if (available && pi.getActiveTools().includes(CODEMODE_TOOL_NAME)) return;
 			if (available && autoEnableCodemode) {
 				pi.setActiveTools([...pi.getActiveTools(), CODEMODE_TOOL_NAME]);
 				return;
@@ -644,6 +656,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			configErrors = loaded.errors;
 			autoEnableCodemode = loaded.autoEnableCodemode ?? true;
 			warnedUnreachable = false;
+			waitedForStartup = false;
 			sessionCwd = ctx.cwd;
 			const current = ++generation;
 			servers = loaded.servers.map((entry) => ({ entry }));
@@ -669,9 +682,23 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				.catch((error: unknown) => ctx.ui.notify(`MCP failed to load: ${errorMessage(error)}`, "error"));
 		});
 
-		// The first prompt waits for startup connections so their tools are available to it.
-		pi.on("before_agent_start", async () => {
-			await pending;
+		// The first prompt waits for startup connections so their tools are available to it, but not
+		// indefinitely: a slow or hanging server must not hold up the prompt.
+		pi.on("before_agent_start", async (_event, ctx) => {
+			const startup = pending;
+			if (!startup || waitedForStartup) return;
+			waitedForStartup = true;
+			let timer: NodeJS.Timeout | undefined;
+			const finished = await Promise.race([
+				startup.then(() => true),
+				new Promise<boolean>((resolve) => {
+					timer = setTimeout(() => resolve(false), startupWaitMs);
+				}),
+			]);
+			clearTimeout(timer);
+			if (!finished) {
+				ctx.ui.notify("MCP servers are still connecting; their tools become available once connected.", "info");
+			}
 		});
 
 		// Pick up sign-ins done outside the session, such as `pi mcp login` run by the agent.

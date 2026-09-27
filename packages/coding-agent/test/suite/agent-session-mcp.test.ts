@@ -2,13 +2,15 @@ import { fauxAssistantMessage, fauxToolCall, getCurrentTools, type TranscriptCon
 import type { SystemMessage, ToolResultMessage } from "@earendil-works/pi-ai/compat";
 import { type JsonRpcRequest, LATEST_PROTOCOL_VERSION } from "@earendil-works/pi-mcp";
 import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
+import type { ExtensionFactory } from "../../src/core/extensions/types.ts";
 import { createCodemodeExtension } from "../../src/extensions/codemode/index.ts";
 import type { McpExposure, McpServerEntry } from "../../src/extensions/mcp/config.ts";
 import { createMcpExtension } from "../../src/extensions/mcp/index.ts";
 import { createMcpToolName } from "../../src/extensions/mcp/tools.ts";
 import { createToolSearchExtension } from "../../src/extensions/tool-search/index.ts";
-import { createHarness, type Harness } from "./harness.ts";
+import { createHarness, getAssistantTexts, type Harness } from "./harness.ts";
 
 const TINY_PNG_BASE64 =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
@@ -77,9 +79,9 @@ describe("AgentSession MCP integration", () => {
 	async function setup(
 		exposure: McpExposure,
 		listTools?: () => unknown[],
-		options: { autoEnableCodemode?: boolean; builtInTools?: string[] } = {},
+		options: { autoEnableCodemode?: boolean; builtInTools?: string[]; extensionFactories?: ExtensionFactory[] } = {},
 	) {
-		const { builtInTools, ...configOptions } = options;
+		const { builtInTools, extensionFactories = [], ...configOptions } = options;
 		const calls: string[] = [];
 		const servers: ReturnType<typeof createFakeServer>["server"][] = [];
 		const entry: McpServerEntry = {
@@ -91,6 +93,7 @@ describe("AgentSession MCP integration", () => {
 		const harness = await createHarness({
 			initialActiveToolNames: builtInTools ?? [],
 			extensionFactories: [
+				...extensionFactories,
 				createCodemodeExtension(),
 				createToolSearchExtension(),
 				createMcpExtension({
@@ -336,6 +339,53 @@ describe("AgentSession MCP integration", () => {
 
 		expect(harness.session.getActiveToolNames()).toEqual([]);
 		expect(nestedToolNames(harness)).toContain("mcp__docs__search");
+	});
+
+	it("does not activate another extension's tool named exec", async () => {
+		// Registered first, so it wins over the codemode extension's exec.
+		const otherExec: ExtensionFactory = (pi) => {
+			pi.registerTool({
+				name: "exec",
+				label: "exec",
+				description: "Another extension's exec tool.",
+				parameters: Type.Object({}),
+				defaultActive: false,
+				execute: async () => ({ content: [], details: undefined }),
+			});
+		};
+		const { harness } = await setup("codemode", undefined, { extensionFactories: [otherExec] });
+		harness.setResponses([fauxAssistantMessage("ready")]);
+		await harness.session.prompt("start");
+
+		expect(harness.session.getActiveToolNames()).toEqual([]);
+	});
+
+	it("does not hold the first prompt for servers that are still connecting", async () => {
+		const entry: McpServerEntry = { name: "slow", config: { url: "http://unused.invalid" }, source: "test" };
+		const harness = await createHarness({
+			initialActiveToolNames: [],
+			extensionFactories: [
+				createCodemodeExtension(),
+				createMcpExtension({
+					loadConfig: () => ({ servers: [entry], errors: [] }),
+					// The server never answers `initialize`.
+					createTransport: () => {
+						const pair = createInMemoryTransportPair();
+						void pair.server.start();
+						return pair.client;
+					},
+					startupWaitMs: 20,
+				}),
+			],
+		});
+		harnesses.push(harness);
+		await harness.session.bindExtensions({});
+		harness.setResponses([fauxAssistantMessage("ready")]);
+
+		await harness.session.prompt("start");
+
+		expect(getAssistantTexts(harness)).toEqual(["ready"]);
+		expect(harness.session.getActiveToolNames()).toEqual([]);
 	});
 
 	it("does not let codemode call itself or inactive direct tools", async () => {

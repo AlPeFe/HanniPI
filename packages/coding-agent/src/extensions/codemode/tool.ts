@@ -34,7 +34,13 @@ import {
 } from "@earendil-works/pi-codemode/declarations";
 import { CODEMODE_SOURCE_GRAMMAR } from "@earendil-works/pi-codemode/source";
 import { type Static, Type } from "typebox";
-import type { ToolDefinition, ToolLoadout, ToolLoadoutChanges, ToolNamespace } from "../../core/extensions/types.ts";
+import type {
+	ToolDefinition,
+	ToolInfo,
+	ToolLoadout,
+	ToolLoadoutChanges,
+	ToolNamespace,
+} from "../../core/extensions/types.ts";
 import type { ModelRegistry } from "../../core/model-registry.ts";
 import type { CodemodeMode } from "../../core/settings-manager.ts";
 import { wrapToolDefinition } from "../../core/tools/tool-definition-wrapper.ts";
@@ -86,6 +92,14 @@ export const codemodeSchema = Type.Object({
 });
 
 export type CodemodeToolInput = Static<typeof codemodeSchema>;
+
+/**
+ * Whether a registered tool is this package's `exec` tool rather than another extension's tool with
+ * the same name. Compares the parameter schema, which the definition passes through by reference.
+ */
+export function isCodemodeTool(tool: Pick<ToolInfo, "name" | "parameters">): boolean {
+	return tool.name === CODEMODE_TOOL_NAME && tool.parameters === codemodeSchema;
+}
 
 export type CodemodeNestedCallStatus = "running" | "ok" | "error" | "cancelled";
 
