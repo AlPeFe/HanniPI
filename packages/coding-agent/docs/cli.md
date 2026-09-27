@@ -136,6 +136,11 @@ Default enabled tools are `read`, `bash`, `edit`, and `write`, unless `defaultTo
 | `grep` | Search file contents |
 | `find` | Find paths using glob patterns |
 | `ls` | List directory contents |
+
+Built-in extensions add two more tools. They are off by default; name them in `--tools` or `defaultTools` to enable them.
+
+| Built-in extension | Purpose |
+|---|---|
 | `exec` | Run JavaScript that calls the other tools (codemode), for example in parallel with `Promise.allSettled`; only the script's output reaches the model |
 | `tool_search` | Search tools that are not declared to the model (`codemode` and `deferred` exposure, such as MCP tools) and declare the matches for the next call |
 

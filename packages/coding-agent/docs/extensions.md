@@ -149,17 +149,19 @@ See [`hello.ts`](../examples/extensions/hello.ts), [`todo.ts`](../examples/exten
 
 ### Tool exposure
 
-`exposure` controls how the model reaches a tool:
+`exposure` controls how the model reaches a tool. "Callable" means callable from other tools through `ctx.executeTool()` (`ctx.tools`), as the `exec` tool's scripts do:
 
-- `direct` (default): declared to the model while active, and callable from codemode scripts while active.
-- `model-only`: declared to the model while active, never callable from codemode scripts. Use it for tools that orchestrate other tools or ask the user.
-- `codemode`: callable from codemode scripts and listed in the `exec` tool's description whenever registered. Not declared to the model unless activated explicitly.
-- `deferred`: like `codemode`, but not listed in the `exec` tool's description.
-
-Codemode scripts are the scripts the model runs with the `exec` tool. `namespace: { name, description }` groups related tools under one heading in the `exec` description, as MCP servers do.
+- `direct` (default): declared to the model while active, and callable while active.
+- `model-only`: declared to the model while active, never callable. Use it for tools that orchestrate other tools or ask the user.
+- `codemode`: callable whenever registered, and listed by codemode tools such as `exec`. Not declared to the model unless activated explicitly.
+- `deferred`: like `codemode`, but codemode tools do not list it; `tool_search` can find and activate it.
 - `hidden`: registered but unreachable. Re-register a tool with `exposure: "hidden"` to withdraw it, since tools cannot be unregistered.
 
-Registering a `direct` or `model-only` tool activates it; the other exposures are not activated on registration. The active set (`pi.getActiveTools()`, `pi.setActiveTools()`) is the set of tools declared to the model. `pi.getAllTools()` reports each tool's `exposure`.
+`namespace: { name, description }` groups related tools, as MCP servers do. Codemode tools list a namespace under one heading.
+
+Registering a `direct` or `model-only` tool activates it; the other exposures are not activated on registration. The active set (`pi.getActiveTools()`, `pi.setActiveTools()`) is the set of tools declared to the model. `pi.getAllTools()` reports each tool's `exposure` and `namespace`.
+
+A tool that orchestrates other tools can adjust what the model sees while it is active with `prepareLoadout(loadout)`. It runs whenever the active tools change and receives the declared tools, the callable tools, and every registered tool with its exposure and namespace. It returns replacement `descriptions` for declared tools (including its own) and `hiddenDeclarations`: active tools whose declarations requests leave out while they stay active and callable. `exec` and `tool_search` use only this hook, `exposure`, and `ctx.executeTool()`, so another tool can implement the same behavior under a different name.
 
 ### Activate tools dynamically
 

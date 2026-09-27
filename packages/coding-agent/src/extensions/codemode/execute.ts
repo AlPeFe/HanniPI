@@ -1,6 +1,6 @@
 /**
- * Runs one `exec` script in the sandbox. Split from codemode.ts and loaded through
- * codemode-execute.lazy.ts so the sandbox runtime only loads when a script runs.
+ * Runs one `exec` script in the sandbox. Split from tool.ts and loaded through
+ * execute.lazy.ts so the sandbox runtime only loads when a script runs.
  */
 
 import { randomBytes } from "node:crypto";
@@ -19,8 +19,9 @@ import {
 	toCodemodeIdentifier,
 } from "@earendil-works/pi-codemode";
 import { getCodemodeWorkerUrl, getQuickJSWasmPath } from "../../config.ts";
-import type { ToolContext } from "../extensions/types.ts";
-import type { SessionEntry } from "../session-manager.ts";
+import type { ExtensionToolContext } from "../../core/extensions/types.ts";
+import type { SessionEntry } from "../../core/session-manager.ts";
+import { Bm25Ranker, createToolSearchDocument, DEFAULT_TOOL_SEARCH_LIMIT } from "../tool-search/tool.ts";
 import {
 	CODEMODE_STORE_ENTRY_TYPE,
 	type CodemodeModelRuntime,
@@ -32,8 +33,7 @@ import {
 	getCodemodeCallableTools,
 	MODEL_GLOBAL_DECLARATIONS,
 	toCodemodeDeclaration,
-} from "./codemode.ts";
-import { Bm25Ranker, createToolSearchDocument, DEFAULT_TOOL_SEARCH_LIMIT } from "./tool-search.ts";
+} from "./tool.ts";
 
 const ARGS_PREVIEW_CHARS = 200;
 const ERROR_PREVIEW_CHARS = 500;
@@ -210,15 +210,15 @@ function toScriptValue(tool: AgentTool<any>, outcome: AgentToolCallOutcome): unk
 }
 
 /**
- * Run one script. Split from the tool definition so the execution path can be used with any
- * loop context, also outside a session (then `store()` starts empty and writes are dropped).
+ * Run one script. Without a session context (a plain Agent or a direct call) scripts cannot call
+ * tools, `store()` starts empty, and writes are dropped.
  */
 export async function executeCodemode(
 	toolCallId: string,
 	input: CodemodeToolInput,
 	signal: AbortSignal | undefined,
 	onUpdate: ((result: AgentToolResult<CodemodeToolDetails>) => void) | undefined,
-	ctx: ToolContext,
+	ctx: ExtensionToolContext | undefined,
 	options: CodemodeToolOptions = {},
 ): Promise<AgentToolResult<CodemodeToolDetails>> {
 	const startedAt = performance.now();
@@ -228,7 +228,7 @@ export async function executeCodemode(
 	const snapshot = (): CodemodeToolDetails => ({ calls: calls.map((call) => ({ ...call })) });
 	const publish = () => onUpdate?.({ content: [], details: snapshot() });
 
-	const callable = getCodemodeCallableTools(ctx.tools);
+	const callable = ctx ? getCodemodeCallableTools(ctx.tools) : [];
 	// ALL_TOOLS entries carry the declaration, like Codex.
 	const samples = new Map(callable.map((tool) => [tool.name, renderToolSample(toCodemodeDeclaration(tool))]));
 	const sandboxTools: CodemodeTool[] = callable.map((tool) => ({
@@ -244,6 +244,8 @@ export async function executeCodemode(
 			calls.push(record);
 			publish();
 			const callStartedAt = performance.now();
+			// Only tools from ctx.tools are callable, so ctx is set here.
+			if (!ctx) throw new Error("Tool calls need a session");
 			const outcome = await ctx.executeTool(tool.name, args, { signal: callSignal });
 			record.id = outcome.toolCall.id;
 			record.durationMs = performance.now() - callStartedAt;
@@ -262,7 +264,7 @@ export async function executeCodemode(
 		tools: sandboxTools,
 		globals: [
 			...createDiscoveryGlobals(callable, samples, options),
-			...(options.models ? createModelGlobals(options.models, toolCallId, calls, publish) : []),
+			...(options.models && ctx ? createModelGlobals(ctx.modelRegistry, toolCallId, calls, publish) : []),
 		],
 		timeoutMs: sourceOptions.timeoutMs ?? Number.POSITIVE_INFINITY,
 		memoryLimitBytes: CODEMODE_MEMORY_LIMIT_BYTES,
@@ -272,8 +274,7 @@ export async function executeCodemode(
 
 	let result: CodemodeResult;
 	try {
-		// Without a session (plain Agent or direct call) the store starts empty and writes are dropped.
-		const store = ctx.sessionManager ? readCodemodeStore(ctx.sessionManager.getBranch()) : {};
+		const store = ctx ? readCodemodeStore(ctx.sessionManager.getBranch()) : {};
 		result = await sandbox.execute(code, { signal, store });
 	} finally {
 		await sandbox.close();
@@ -356,7 +357,7 @@ function createDiscoveryGlobals(
 }
 
 /**
- * `models.*` for scripts: the `ModelRuntime` methods declared in {@link MODEL_GLOBAL_DECLARATIONS}.
+ * `models.*` for scripts: the model registry methods declared in {@link MODEL_GLOBAL_DECLARATIONS}.
  * Classifier calls appear as nested call rows so the renderer shows them.
  */
 function createModelGlobals(

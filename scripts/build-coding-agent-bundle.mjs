@@ -147,7 +147,7 @@ for (const entry of [
 	join(codingAgentDistDir, "index.js"),
 	join(codingAgentDistDir, "rpc-entry.js"),
 	join(codingAgentDistDir, "utils", "image-resize-worker.js"),
-	join(codingAgentDistDir, "core", "tools", "codemode-worker.js"),
+	join(codingAgentDistDir, "extensions", "codemode", "worker.js"),
 	join(aiDistDir, "api", "bedrock-converse-stream.js"),
 	join(aiDistDir, "auth", "oauth", "anthropic.js"),
 ]) {
@@ -189,7 +189,7 @@ const lazyResult = await build({
 	entryPoints: {
 		anthropic: join(aiDistDir, "auth", "oauth", "anthropic.js"),
 		"bedrock-converse-stream": join(aiDistDir, "api", "bedrock-converse-stream.js"),
-		"codemode-worker": join(codingAgentDistDir, "core", "tools", "codemode-worker.js"),
+		"codemode-worker": join(codingAgentDistDir, "extensions", "codemode", "worker.js"),
 		"github-copilot": join(aiDistDir, "auth", "oauth", "github-copilot.js"),
 		"image-resize-worker": join(codingAgentDistDir, "utils", "image-resize-worker.js"),
 		"kimi-coding": join(aiDistDir, "auth", "oauth", "kimi-coding.js"),

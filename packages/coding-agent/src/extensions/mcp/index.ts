@@ -26,8 +26,8 @@ import type {
 	ExtensionFactory,
 	ToolDefinition,
 } from "../../core/extensions/types.ts";
-import { CODEMODE_TOOL_NAME } from "../../core/tools/codemode.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
+import { CODEMODE_TOOL_NAME } from "../codemode/tool.ts";
 import { type LoadedMcpConfig, loadMcpConfig } from "./config.ts";
 import type { McpOAuthCredentialStore } from "./oauth.ts";
 import { loadMcpRuntime } from "./runtime.lazy.ts";

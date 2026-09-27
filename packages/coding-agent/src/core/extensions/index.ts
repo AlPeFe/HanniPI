@@ -70,6 +70,7 @@ export type {
 	EntryRenderOptions,
 	ExecOptions,
 	ExecResult,
+	ExecuteToolOptions,
 	Extension,
 	ExtensionActions,
 	// API
@@ -88,6 +89,7 @@ export type {
 	// Runtime
 	ExtensionRuntime,
 	ExtensionShortcut,
+	ExtensionToolContext,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
@@ -169,7 +171,6 @@ export type {
 	// Events - Tool
 	ToolCallEvent,
 	ToolCallEventResult,
-	ToolContext,
 	// Tools
 	ToolDefinition,
 	// Events - Tool Execution
@@ -180,6 +181,8 @@ export type {
 	ToolExecutionUpdateEvent,
 	ToolExposure,
 	ToolInfo,
+	ToolLoadout,
+	ToolLoadoutChanges,
 	ToolNamespace,
 	ToolRenderResultOptions,
 	ToolResultEvent,

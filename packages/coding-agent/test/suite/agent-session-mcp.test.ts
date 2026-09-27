@@ -3,10 +3,11 @@ import type { SystemMessage, ToolResultMessage } from "@earendil-works/pi-ai/com
 import { type JsonRpcRequest, LATEST_PROTOCOL_VERSION } from "@earendil-works/pi-mcp";
 import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
 import { afterEach, describe, expect, it } from "vitest";
-import { createCodemodeTool } from "../../src/core/tools/codemode.ts";
+import { createCodemodeExtension } from "../../src/extensions/codemode/index.ts";
 import type { McpExposure, McpServerEntry } from "../../src/extensions/mcp/config.ts";
 import { createMcpExtension } from "../../src/extensions/mcp/index.ts";
 import { createMcpToolName } from "../../src/extensions/mcp/tools.ts";
+import { createToolSearchExtension } from "../../src/extensions/tool-search/index.ts";
 import { createHarness, type Harness } from "./harness.ts";
 
 const TINY_PNG_BASE64 =
@@ -86,11 +87,12 @@ describe("AgentSession MCP integration", () => {
 			config: { url: "http://unused.invalid", exposure },
 			source: "test",
 		};
-		// `builtInTools` uses the session's own built-in tools (exec with models, tool_search).
+		// `builtInTools` are the built-in tools active at the start. The MCP extension activates exec.
 		const harness = await createHarness({
-			...(builtInTools ? {} : { tools: [createCodemodeTool()] }),
 			initialActiveToolNames: builtInTools ?? [],
 			extensionFactories: [
+				createCodemodeExtension(),
+				createToolSearchExtension(),
 				createMcpExtension({
 					loadConfig: () => ({ servers: [entry], errors: [], ...configOptions }),
 					createTransport: () => {
@@ -114,7 +116,7 @@ describe("AgentSession MCP integration", () => {
 	}
 
 	function nestedToolNames(harness: Harness): string[] {
-		return (harness.session.agent.state.nestedTools ?? []).map((tool) => tool.name);
+		return harness.session.getCallableToolNames();
 	}
 
 	function toolResult(harness: Harness, toolName: string): ToolResultMessage {

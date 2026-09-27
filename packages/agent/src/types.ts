@@ -79,12 +79,12 @@ export interface BeforeToolCallResult {
  * Merge semantics are field-by-field:
  * - `content`: if provided, replaces the tool result content array in full
  * - `details`: if provided, replaces the tool result details value in full
- * - `structuredContent`: if provided, replaces the structured content. If `content` is provided
- *   without it, the structured content is dropped, because it may no longer match the content.
- *   Return it along with `content` to keep it.
  * - `isError`: if provided, replaces the tool result error flag
  * - `usage`: if provided, replaces the tool result usage
  * - `terminate`: if provided, replaces the early-termination hint
+ * - `structuredContent`: if provided, replaces the structured content. If `content` is provided
+ *   without it, the structured content is dropped, because it may no longer match the content.
+ *   Return it along with `content` to keep it.
  *
  * Other omitted fields keep the original executed tool result values.
  * There is no deep merge for `content`, `details`, or `usage`.
@@ -113,11 +113,6 @@ export interface BeforeToolCallContext {
 	args: unknown;
 	/** Current agent context at the time the tool call is prepared. */
 	context: AgentContext;
-	/**
-	 * Set when another tool issued this call through {@link AgentToolContext.executeTool}.
-	 * `toolCall` is then synthesized and does not appear in `assistantMessage`.
-	 */
-	parentToolCall?: AgentToolCall;
 }
 
 /** Context passed to `afterToolCall`. */
@@ -134,8 +129,6 @@ export interface AfterToolCallContext {
 	isError: boolean;
 	/** Current agent context at the time the tool call is finalized. */
 	context: AgentContext;
-	/** Set when another tool issued this call. See {@link BeforeToolCallContext.parentToolCall}. */
-	parentToolCall?: AgentToolCall;
 }
 
 /** Context passed to completed-turn callbacks. */
@@ -407,12 +400,6 @@ export interface AgentState {
 	set tools(tools: AgentTool<any>[]);
 	get tools(): AgentTool<any>[];
 	/**
-	 * Tools callable from other tools through `executeTool`, see {@link AgentContext.nestedTools}.
-	 * `undefined` means the same as `tools`. Assigning a new array copies the top-level array.
-	 */
-	set nestedTools(tools: AgentTool<any>[] | undefined);
-	get nestedTools(): AgentTool<any>[] | undefined;
-	/**
 	 * Conversation transcript. Assigning a new array copies the top-level array.
 	 *
 	 * System messages in the transcript carry the prompt and tool declarations.
@@ -440,16 +427,15 @@ export interface AgentToolResult<T = JsonValue | undefined> {
 	/** Arbitrary structured details for logs or UI rendering. */
 	details: T;
 	/**
-	 * Machine-readable result matching the tool's `outputSchema`, for programmatic callers such as
-	 * codemode. Not sent to the model; `content` remains the model-facing result.
+	 * Machine-readable result matching the tool's `outputSchema`, for programmatic callers. Not sent
+	 * to the model; `content` remains the model-facing result.
 	 */
 	structuredContent?: JsonValue;
 	/** Usage from the final tool execution itself, if available. Not used for main LLM context accounting. */
 	usage?: Usage;
 	/**
 	 * Report a failure without throwing. The model sees `content` as an error result, like a thrown
-	 * error, but `details` and `structuredContent` are kept, so the UI and programmatic callers can
-	 * still read partial output or a structured failure (for example an MCP result with `isError`).
+	 * error, but `details` and `structuredContent` are kept for the UI and programmatic callers.
 	 */
 	isError?: boolean;
 	/**
@@ -461,36 +447,9 @@ export interface AgentToolResult<T = JsonValue | undefined> {
 
 /** Final outcome of a tool call after hooks ran. */
 export interface AgentToolCallOutcome {
-	/** The call as executed. For nested calls this is synthesized by the agent loop. */
 	toolCall: AgentToolCall;
 	result: AgentToolResult<any>;
 	isError: boolean;
-}
-
-export interface AgentNestedToolCallOptions {
-	/** Defaults to the calling tool's signal. */
-	signal?: AbortSignal;
-	/** Receives partial results of the nested tool, in addition to `tool_execution_update` events. */
-	onUpdate?: AgentToolUpdateCallback;
-}
-
-/** Loop services available to a tool while it executes. */
-export interface AgentToolContext {
-	/** The call being executed. */
-	toolCall: AgentToolCall;
-	/** Tools callable through {@link executeTool}: the run's `nestedTools`, or its `tools` when unset. */
-	tools: readonly AgentTool<any>[];
-	/**
-	 * Run another tool through the same pipeline as a model-issued call: argument preparation,
-	 * schema validation, `beforeToolCall`, execution, and `afterToolCall`. The hooks see
-	 * `parentToolCall` set to the calling tool's call, and `tool_execution_*` events carry
-	 * `parentToolCallId`. The call is recorded (bounded, without its result) as `nestedCalls` on the
-	 * model-issued call's tool result message.
-	 *
-	 * Never rejects for tool failures: unknown tools, validation errors, blocked calls, and thrown
-	 * errors come back as `isError: true`.
-	 */
-	executeTool(name: string, args: unknown, options?: AgentNestedToolCallOptions): Promise<AgentToolCallOutcome>;
 }
 
 /**
@@ -512,21 +471,18 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	prepareArguments?: (args: unknown) => Static<TParameters>;
 	/**
 	 * JSON Schema of `structuredContent` in successful results. Tools that declare it should always
-	 * set `structuredContent`; programmatic callers (such as codemode) then use it instead of the
-	 * text content.
+	 * set `structuredContent`.
 	 */
 	outputSchema?: TSchema;
 	/**
 	 * Execute the tool call. Throw on failure, or return a result with `isError: true`; do not only
 	 * describe the failure in `content`.
-	 * `context` is provided by the agent loop and absent when the tool is called directly.
 	 */
 	execute: (
 		toolCallId: string,
 		params: Static<TParameters>,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TDetails>,
-		context?: AgentToolContext,
 	) => Promise<AgentToolResult<TDetails>>;
 	/** Recovery policy for an effect whose durable intent exists but whose outcome is unknown. */
 	replay?: "never" | "safe";
@@ -544,14 +500,8 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 export interface AgentContext {
 	/** Transcript visible to the model. */
 	messages: AgentMessage[];
-	/** Tools declared to the model. Model-issued calls resolve against this list. */
+	/** Tools available for execution in this run. */
 	tools?: AgentTool<any>[];
-	/**
-	 * Tools callable through {@link AgentToolContext.executeTool}, for orchestrating tools such as
-	 * codemode. May include tools that are not declared to the model and leave out declared ones.
-	 * Defaults to `tools`.
-	 */
-	nestedTools?: AgentTool<any>[];
 }
 
 /**
@@ -574,22 +524,6 @@ export type AgentEvent =
 	| { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
 	| { type: "message_end"; message: AgentMessage }
 	// Tool execution lifecycle
-	// Tool execution lifecycle. Calls made by another tool through `executeTool` carry the calling
-	// tool's call id as `parentToolCallId`; they never become tool result messages.
-	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any; parentToolCallId?: string }
-	| {
-			type: "tool_execution_update";
-			toolCallId: string;
-			toolName: string;
-			args: any;
-			partialResult: any;
-			parentToolCallId?: string;
-	  }
-	| {
-			type: "tool_execution_end";
-			toolCallId: string;
-			toolName: string;
-			result: any;
-			isError: boolean;
-			parentToolCallId?: string;
-	  };
+	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
+	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
+	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean };

@@ -3,8 +3,8 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Text } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { ToolRenderContext } from "../src/core/extensions/types.ts";
-import type { CodemodeToolDetails } from "../src/core/tools/codemode.ts";
-import { codemodeRenderers } from "../src/core/tools/renderers/codemode.ts";
+import { codemodeRenderers } from "../src/extensions/codemode/renderer.ts";
+import type { CodemodeToolDetails } from "../src/extensions/codemode/tool.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 
 function render(result: AgentToolResult<CodemodeToolDetails | undefined>, isError = false): string {

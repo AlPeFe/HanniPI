@@ -1,47 +1,13 @@
-import type { AgentTool, AgentToolCall, AgentToolContext } from "@earendil-works/pi-agent-core";
-import type { ExtensionContext, ExtensionToolContext, ToolContext, ToolDefinition } from "../extensions/types.ts";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { ExtensionToolContext, ToolDefinition } from "../extensions/types.ts";
 
-/** Loop services for a tool executed outside the agent loop: no sibling tools, nested calls fail. */
-function createDetachedToolContext(toolCall: AgentToolCall): AgentToolContext {
-	return {
-		toolCall,
-		tools: [],
-		executeTool: async (name, args) => ({
-			toolCall: { type: "toolCall", id: `${toolCall.id}/detached`, name, arguments: (args ?? {}) as never },
-			result: {
-				content: [{ type: "text", text: "Nested tool calls are only available inside the agent loop" }],
-				details: {},
-			},
-			isError: true,
-		}),
-	};
-}
-
-/**
- * Combine the extension context, when there is one, with the agent-loop services. Property
- * descriptors are copied so the lazy getters of the extension context keep their stale-instance
- * checks.
- */
-function createToolExecutionContext(
-	base: Partial<ExtensionContext> | undefined,
-	agentContext: AgentToolContext,
-): ToolContext {
-	const context: Partial<ExtensionContext> = Object.defineProperties(
-		{},
-		base ? Object.getOwnPropertyDescriptors(base) : {},
-	);
-	// The services of this call win over any copied from a base that is itself a tool context.
-	return Object.assign(context, {
-		toolCall: agentContext.toolCall,
-		tools: agentContext.tools,
-		executeTool: agentContext.executeTool,
-	});
-}
+/** Creates the context for one tool call. */
+export type ToolContextFactory = (toolCallId: string, signal: AbortSignal | undefined) => ExtensionToolContext;
 
 /** Wrap a ToolDefinition into an AgentTool for the core runtime. */
 export function wrapToolDefinition<TDetails = unknown>(
 	definition: ToolDefinition<any, TDetails>,
-	ctxFactory?: () => ExtensionContext,
+	ctxFactory?: ToolContextFactory,
 ): AgentTool<any, TDetails> {
 	return {
 		name: definition.name,
@@ -52,27 +18,13 @@ export function wrapToolDefinition<TDetails = unknown>(
 		constrainedSampling: definition.constrainedSampling,
 		prepareArguments: definition.prepareArguments,
 		executionMode: definition.executionMode,
-		// Without a factory, the incoming context may already be a full ExtensionToolContext, for
-		// example when this AgentTool is itself registered as an extension tool; keep all of it.
-		// Otherwise (a plain Agent, or a direct call) the extension fields are missing. Only tools
-		// that accept a ToolContext, like the built-in tools, are wrapped without a factory; the
-		// cast is where ToolDefinition's ExtensionToolContext parameter meets that case.
-		execute: (toolCallId, params, signal, onUpdate, agentContext) =>
+		execute: (toolCallId, params, signal, onUpdate, ctx?: ExtensionToolContext) =>
 			definition.execute(
 				toolCallId,
 				params,
 				signal,
 				onUpdate,
-				createToolExecutionContext(
-					ctxFactory?.() ?? (agentContext as Partial<ExtensionContext> | undefined),
-					agentContext ??
-						createDetachedToolContext({
-							type: "toolCall",
-							id: toolCallId,
-							name: definition.name,
-							arguments: params as AgentToolCall["arguments"],
-						}),
-				) as ExtensionToolContext,
+				ctx ?? (ctxFactory?.(toolCallId, signal) as ExtensionToolContext),
 			),
 	};
 }
@@ -80,7 +32,7 @@ export function wrapToolDefinition<TDetails = unknown>(
 /** Wrap multiple ToolDefinitions into AgentTools for the core runtime. */
 export function wrapToolDefinitions(
 	definitions: ToolDefinition<any, any>[],
-	ctxFactory?: () => ExtensionContext,
+	ctxFactory?: ToolContextFactory,
 ): AgentTool<any>[] {
 	return definitions.map((definition) => wrapToolDefinition(definition, ctxFactory));
 }
@@ -101,7 +53,6 @@ export function createToolDefinitionFromAgentTool(tool: AgentTool<any>): ToolDef
 		constrainedSampling: tool.constrainedSampling,
 		prepareArguments: tool.prepareArguments,
 		executionMode: tool.executionMode,
-		execute: async (toolCallId, params, signal, onUpdate, ctx) =>
-			tool.execute(toolCallId, params, signal, onUpdate, ctx),
+		execute: async (toolCallId, params, signal, onUpdate) => tool.execute(toolCallId, params, signal, onUpdate),
 	};
 }

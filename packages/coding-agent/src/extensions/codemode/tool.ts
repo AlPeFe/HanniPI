@@ -34,11 +34,12 @@ import {
 } from "@earendil-works/pi-codemode/declarations";
 import { CODEMODE_SOURCE_GRAMMAR } from "@earendil-works/pi-codemode/source";
 import { type Static, Type } from "typebox";
-import type { ToolDefinition, ToolNamespace } from "../extensions/types.ts";
-import type { ModelRuntime } from "../model-runtime.ts";
-import { loadCodemodeExecutor } from "./codemode-execute.lazy.ts";
-import { codemodeRenderers } from "./renderers/codemode.ts";
-import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
+import type { ToolDefinition, ToolLoadout, ToolLoadoutChanges, ToolNamespace } from "../../core/extensions/types.ts";
+import type { ModelRegistry } from "../../core/model-registry.ts";
+import type { CodemodeMode } from "../../core/settings-manager.ts";
+import { wrapToolDefinition } from "../../core/tools/tool-definition-wrapper.ts";
+import { loadCodemodeExecutor } from "./execute.lazy.ts";
+import { codemodeRenderers } from "./renderer.ts";
 
 export const CODEMODE_TOOL_NAME = "exec";
 
@@ -50,22 +51,29 @@ export interface CodemodeStoreEntryData {
 	delete: string[];
 }
 
-/** The part of `ModelRuntime` that scripts reach through `models`. */
+/** The part of the model registry that scripts reach through `models`. */
 export type CodemodeModelRuntime = Pick<
-	ModelRuntime,
+	ModelRegistry,
 	"getModelsOfType" | "getAvailableOfType" | "getModelOfType" | "classify"
 >;
 
 export interface CodemodeToolOptions {
 	/** Namespace of a tool, for `searchTools()` ranking and its `namespace` filter. */
 	getToolNamespace?: (toolName: string) => ToolNamespace | undefined;
-	/** Exposes the `models` namespace to scripts. Without it, `models` is not declared. */
-	models?: CodemodeModelRuntime;
+	/**
+	 * Expose the `models` namespace to scripts, backed by the session's model registry
+	 * (`ctx.modelRegistry`). Without it, `models` is not declared.
+	 */
+	models?: boolean;
 	/**
 	 * Persists `store()` writes as a session custom entry. Without it, writes last only for the
 	 * current script; `load()` still reads entries already on the branch.
 	 */
 	appendEntry?: (customType: string, data: CodemodeStoreEntryData) => void;
+	/** How the tool presents the loadout while active (the `codemode.mode` setting). Default: `on`. */
+	getMode?: () => CodemodeMode;
+	/** Token budget for tool declarations in the description. Default: {@link DEFAULT_CODEMODE_INLINE_BUDGET}. */
+	getInlineBudget?: () => number | undefined;
 }
 
 const TEXT_OUTPUT_SCHEMA: CodemodeJsonSchema = { type: "string" };
@@ -344,6 +352,53 @@ export function createCodemodeDescription(
 	return sections.join("\n\n");
 }
 
+/**
+ * How the exec tool presents tools that are both declared and callable from scripts, like Codex's
+ * tool modes:
+ * - `on`: their descriptions get the exec declaration appended, and the exec description lists
+ *   only the callable tools without `direct` exposure.
+ * - `only`: the exec description lists every callable tool, and requests leave out the
+ *   declarations of active `direct` tools.
+ *
+ * Listing by exposure, not by the active set, keeps the exec description unchanged when
+ * `tool_search` loads a tool, so loads do not redeclare exec.
+ */
+function prepareCodemodeLoadout(loadout: ToolLoadout, options: CodemodeToolOptions): ToolLoadoutChanges {
+	const mode = options.getMode?.() ?? "on";
+	const isDirect = (tool: AgentTool) => loadout.getExposure(tool.name) === "direct";
+	const callable = getCodemodeCallableTools(loadout.callable);
+	const callableNames = new Set(callable.map((tool) => tool.name));
+	const descriptions: Record<string, string> = {};
+	if (mode === "on") {
+		for (const tool of loadout.declared) {
+			if (callableNames.has(tool.name)) descriptions[tool.name] = renderToolSample(toCodemodeDeclaration(tool));
+		}
+	}
+	const listed = mode === "only" ? callable : callable.filter((tool) => !isDirect(tool));
+	const namespaces = new Map(
+		listed.flatMap((tool) => {
+			const namespace = loadout.getNamespace(tool.name);
+			return namespace ? [[tool.name, namespace] as const] : [];
+		}),
+	);
+	descriptions[CODEMODE_TOOL_NAME] = createCodemodeDescription(listed, {
+		models: options.models === true,
+		namespaces,
+		deferred: new Set(
+			listed.filter((tool) => loadout.getExposure(tool.name) === "deferred").map((tool) => tool.name),
+		),
+		inlineBudget: options.getInlineBudget?.() ?? DEFAULT_CODEMODE_INLINE_BUDGET,
+	});
+	const declaredNames = new Set(loadout.declared.map((tool) => tool.name));
+	return {
+		descriptions,
+		hiddenDeclarations:
+			mode === "only"
+				? callable.filter((tool) => isDirect(tool) && declaredNames.has(tool.name)).map((tool) => tool.name)
+				: [],
+	};
+}
+
 export function createCodemodeToolDefinition(
 	options: CodemodeToolOptions = {},
 ): ToolDefinition<typeof codemodeSchema, CodemodeToolDetails | undefined> {
@@ -351,12 +406,13 @@ export function createCodemodeToolDefinition(
 		name: CODEMODE_TOOL_NAME,
 		label: CODEMODE_TOOL_NAME,
 		// Replaced with the declarations of the callable tools when the tool is activated.
-		description: createCodemodeDescription([], { models: options.models !== undefined }),
+		description: createCodemodeDescription([], { models: options.models === true }),
 		promptSnippet: codemodeToolSystemPromptContribution.snippet,
 		promptGuidelines: [...codemodeToolSystemPromptContribution.guidelines],
 		parameters: codemodeSchema,
 		// Scripts must not start other scripts.
 		exposure: "model-only",
+		prepareLoadout: (loadout) => prepareCodemodeLoadout(loadout, options),
 		// Capable models write the script as raw text instead of a JSON-escaped string.
 		constrainedSampling: { type: "grammar", variants: { openai_lark: CODEMODE_SOURCE_GRAMMAR } },
 		// The sandbox (worker, QuickJS wasm) loads on the first call, not at startup.
@@ -377,7 +433,7 @@ export function createCodemodeTool(
 	const definition = createCodemodeToolDefinition(options);
 	const tool = wrapToolDefinition(definition);
 	Object.assign(tool, {
-		description: createCodemodeDescription(tools, { models: options.models !== undefined }),
+		description: createCodemodeDescription(tools, { models: options.models === true }),
 		promptSnippet: definition.promptSnippet,
 		promptGuidelines: definition.promptGuidelines,
 	});

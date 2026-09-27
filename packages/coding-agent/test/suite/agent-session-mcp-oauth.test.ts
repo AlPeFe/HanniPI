@@ -6,7 +6,7 @@ import { LATEST_PROTOCOL_VERSION } from "@earendil-works/pi-mcp";
 import { afterEach, describe, expect, it } from "vitest";
 import { InMemoryAuthStorageBackend } from "../../src/core/auth-storage.ts";
 import type { ExtensionUIContext } from "../../src/core/extensions/index.ts";
-import { createCodemodeTool } from "../../src/core/tools/codemode.ts";
+import { createCodemodeExtension } from "../../src/extensions/codemode/index.ts";
 import type { McpServerEntry } from "../../src/extensions/mcp/config.ts";
 import { createMcpExtension } from "../../src/extensions/mcp/index.ts";
 import { McpOAuthCredentialStore } from "../../src/extensions/mcp/oauth.ts";
@@ -209,9 +209,9 @@ describe("AgentSession MCP OAuth", () => {
 		const notifications: string[] = [];
 		let redirectLocation: Promise<string> | undefined;
 		const harness: Harness = await createHarness({
-			tools: [createCodemodeTool()],
 			initialActiveToolNames: [],
 			extensionFactories: [
+				createCodemodeExtension(),
 				createMcpExtension({
 					loadConfig: () => ({ servers: [entry], errors: [] }),
 					credentials: new McpOAuthCredentialStore(backend),

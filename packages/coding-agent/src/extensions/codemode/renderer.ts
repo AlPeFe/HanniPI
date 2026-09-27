@@ -7,11 +7,11 @@
  */
 
 import { Text } from "@earendil-works/pi-tui";
-import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
-import { highlightCode, type Theme } from "../../../modes/interactive/theme/theme.ts";
-import type { ToolDefinition } from "../../extensions/types.ts";
-import type { CodemodeNestedCall, CodemodeToolDetails } from "../codemode.ts";
-import { getTextOutput, replaceTabs, str } from "../render-utils.ts";
+import type { ToolDefinition } from "../../core/extensions/types.ts";
+import { getTextOutput, replaceTabs, str } from "../../core/tools/render-utils.ts";
+import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
+import { highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
+import type { CodemodeNestedCall, CodemodeToolDetails } from "./tool.ts";
 
 const CODE_PREVIEW_LINES = 10;
 const CALL_PREVIEW_COUNT = 8;

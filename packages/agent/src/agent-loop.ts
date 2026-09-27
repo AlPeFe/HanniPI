@@ -8,16 +8,13 @@ import {
 	EventStream,
 	getCurrentTools,
 	getToolStateChanges,
-	type NestedToolCalls,
 	normalizeContext,
 	type SystemMessage,
-	type TextContent,
 	type ToolResultMessage,
 	type ToolStateChanges,
 	toToolDeclaration,
 	validateToolArguments,
 } from "@earendil-works/pi-ai";
-import { NestedCallRecorder } from "./nested-calls.ts";
 import { getDefaultStreamFn } from "./stream-fn.ts";
 import type {
 	AgentContext,
@@ -27,9 +24,7 @@ import type {
 	AgentTool,
 	AgentToolCall,
 	AgentToolCallOutcome,
-	AgentToolContext,
 	AgentToolResult,
-	AgentToolUpdateCallback,
 	PrepareNextTurnContext,
 	StreamFn,
 } from "./types.ts";
@@ -329,11 +324,10 @@ async function runLoop(
  * Declare tool loadout changes to the model.
  *
  * `context.tools` is what the runtime can execute; the transcript's system messages declare
- * what the model may call, which is exactly `context.tools`. Before each
- * request the difference becomes `toolsAdded` and `toolsRemoved` on a system message. When a
- * pending system message exists, its tool fields are treated as intent and replaced with the
- * delta between the committed transcript and the declared set, so replay always yields exactly
- * the declared tools. Otherwise a new
+ * what the model may call. Before each request the difference becomes `toolsAdded` and
+ * `toolsRemoved` on a system message. When a pending system message exists, its tool fields
+ * are treated as intent and replaced with the delta between the committed transcript and
+ * the executable set, so replay always yields exactly `context.tools`. Otherwise a new
  * system message is inserted before the first non-system pending message.
  */
 function declareToolChanges(context: AgentContext, pendingMessages: AgentMessage[]): AgentMessage[] {
@@ -520,18 +514,11 @@ async function executeToolCalls(
 	const hasSequentialToolCall = toolCalls.some(
 		(tc) => currentContext.tools?.find((t) => t.name === tc.name)?.executionMode === "sequential",
 	);
-	const nestedQueue: NestedCallQueue = { tail: Promise.resolve() };
 	if (config.toolExecution === "sequential" || hasSequentialToolCall) {
-		return executeToolCallsSequential(currentContext, assistantMessage, toolCalls, config, signal, emit, nestedQueue);
+		return executeToolCallsSequential(currentContext, assistantMessage, toolCalls, config, signal, emit);
 	}
-	return executeToolCallsParallel(currentContext, assistantMessage, toolCalls, config, signal, emit, nestedQueue);
+	return executeToolCallsParallel(currentContext, assistantMessage, toolCalls, config, signal, emit);
 }
-
-/**
- * Serializes nested calls that must not run concurrently (sequential tools, or all nested calls when
- * the loop runs sequentially). Shared by all tool calls of one assistant message.
- */
-type NestedCallQueue = { tail: Promise<void> };
 
 type ExecutedToolCallBatch = {
 	messages: ToolResultMessage[];
@@ -545,7 +532,6 @@ async function executeToolCallsSequential(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
-	nestedQueue: NestedCallQueue,
 ): Promise<ExecutedToolCallBatch> {
 	const finalizedCalls: FinalizedToolCallOutcome[] = [];
 	const messages: ToolResultMessage[] = [];
@@ -567,17 +553,7 @@ async function executeToolCallsSequential(
 				isError: preparation.isError,
 			};
 		} else {
-			const recorder = new NestedCallRecorder();
-			const executed = await executePreparedToolCall(
-				currentContext,
-				assistantMessage,
-				config,
-				preparation,
-				signal,
-				emitToolExecutionUpdate(preparation.toolCall, emit),
-				nestedQueue,
-				{ emit, recorder },
-			);
+			const executed = await executePreparedToolCall(preparation, signal, emitToolExecutionUpdate(toolCall, emit));
 			finalized = await finalizeExecutedToolCall(
 				currentContext,
 				assistantMessage,
@@ -586,7 +562,6 @@ async function executeToolCallsSequential(
 				config,
 				signal,
 			);
-			finalized.nestedCalls = recorder.snapshot();
 		}
 
 		await emitToolExecutionEnd(finalized, emit);
@@ -613,7 +588,6 @@ async function executeToolCallsParallel(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
-	nestedQueue: NestedCallQueue,
 ): Promise<ExecutedToolCallBatch> {
 	const finalizedCalls: FinalizedToolCallEntry[] = [];
 
@@ -650,18 +624,8 @@ async function executeToolCallsParallel(
 				await emitToolExecutionEnd(finalized, emit);
 				return finalized;
 			}
-			const recorder = new NestedCallRecorder();
-			const executed = await executePreparedToolCall(
-				currentContext,
-				assistantMessage,
-				config,
-				preparation,
-				signal,
-				emitToolExecutionUpdate(preparation.toolCall, emit),
-				nestedQueue,
-				{ emit, recorder },
-			);
-			const finalized: FinalizedToolCallOutcome = await finalizeExecutedToolCall(
+			const executed = await executePreparedToolCall(preparation, signal, emitToolExecutionUpdate(toolCall, emit));
+			const finalized = await finalizeExecutedToolCall(
 				currentContext,
 				assistantMessage,
 				preparation,
@@ -669,7 +633,6 @@ async function executeToolCallsParallel(
 				config,
 				signal,
 			);
-			finalized.nestedCalls = recorder.snapshot();
 			await emitToolExecutionEnd(finalized, emit);
 			return finalized;
 		});
@@ -712,13 +675,10 @@ type ExecutedToolCallOutcome = {
 	isError: boolean;
 };
 
-type FinalizedToolCallOutcome = AgentToolCallOutcome & { nestedCalls?: NestedToolCalls };
+type FinalizedToolCallOutcome = AgentToolCallOutcome;
 
-/**
- * Shared by a model-issued call and every call nested below it: events for nested calls carry
- * `parentToolCallId`, and all of them are recorded on the model-issued call's result.
- */
-type NestedCallServices = { emit: AgentEventSink; recorder: NestedCallRecorder };
+/** The `beforeToolCall` and `afterToolCall` hooks of {@link AgentLoopConfig}. */
+export type ToolCallHooks = Pick<AgentLoopConfig, "beforeToolCall" | "afterToolCall">;
 
 type ToolUpdateSink = (partialResult: AgentToolResult<any>) => Promise<void> | void;
 
@@ -746,13 +706,11 @@ async function prepareToolCall(
 	currentContext: AgentContext,
 	assistantMessage: AssistantMessage,
 	toolCall: AgentToolCall,
-	config: AgentLoopConfig,
+	config: ToolCallHooks,
 	signal: AbortSignal | undefined,
-	parentToolCall?: AgentToolCall,
+	tools: readonly AgentTool<any>[] = currentContext.tools ?? [],
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
-	const tool = (parentToolCall ? getNestedTools(currentContext) : (currentContext.tools ?? [])).find(
-		(t) => t.name === toolCall.name,
-	);
+	const tool = tools.find((t) => t.name === toolCall.name);
 	if (!tool) {
 		return {
 			kind: "immediate",
@@ -771,7 +729,6 @@ async function prepareToolCall(
 					toolCall,
 					args: validatedArgs,
 					context: currentContext,
-					...(parentToolCall ? { parentToolCall } : {}),
 				},
 				signal,
 			);
@@ -816,11 +773,6 @@ async function prepareToolCall(
 	}
 }
 
-/** Tools reachable through `executeTool`. */
-function getNestedTools(context: AgentContext): AgentTool<any>[] {
-	return context.nestedTools ?? context.tools ?? [];
-}
-
 function emitToolExecutionUpdate(toolCall: AgentToolCall, emit: AgentEventSink): ToolUpdateSink {
 	return (partialResult) =>
 		emit({
@@ -832,174 +784,41 @@ function emitToolExecutionUpdate(toolCall: AgentToolCall, emit: AgentEventSink):
 		});
 }
 
+/** Options for {@link runToolCall}. */
+export interface RunToolCallOptions extends ToolCallHooks {
+	/** Tools the call resolves against. */
+	tools: readonly AgentTool<any>[];
+	/** Passed to the hooks as the message that issued the call. */
+	assistantMessage: AssistantMessage;
+	/** Passed to the hooks as the current agent context. */
+	context: AgentContext;
+	signal?: AbortSignal;
+	onUpdate?: ToolUpdateSink;
+}
+
 /**
- * Services handed to a tool while it runs. Nested calls get ids `<parent id>/<n>` and run through
- * the same prepare, execute, and finalize steps as model-issued calls, emitting
- * `tool_execution_*` events with `parentToolCallId`. `nestedQueue` is undefined inside a call that
- * already holds the queue, so its own nested calls do not wait on themselves.
+ * Run one tool call through the same steps as a model-issued call: argument preparation, schema
+ * validation, `beforeToolCall`, execution, and `afterToolCall`. Emits no events and adds no
+ * messages. Tools that call other tools use this so the hooks (for example permission checks)
+ * apply to those calls too.
+ *
+ * Never rejects for tool failures: unknown tools, validation errors, blocked calls, and thrown
+ * errors come back as `isError: true`.
  */
-function createToolContext(
-	currentContext: AgentContext,
-	assistantMessage: AssistantMessage,
-	config: AgentLoopConfig,
-	toolCall: AgentToolCall,
-	signal: AbortSignal | undefined,
-	nestedQueue: NestedCallQueue | undefined,
-	services: NestedCallServices,
-): AgentToolContext {
-	let nextNestedId = 1;
-	return {
-		toolCall,
-		tools: getNestedTools(currentContext),
-		executeTool: (name, args, options) =>
-			executeNestedToolCall(
-				currentContext,
-				assistantMessage,
-				config,
-				toolCall,
-				{
-					type: "toolCall",
-					id: `${toolCall.id}/${nextNestedId++}`,
-					name,
-					arguments: (args ?? {}) as Record<string, any>,
-				},
-				options?.signal ?? signal,
-				options?.onUpdate,
-				nestedQueue,
-				services,
-			),
-	};
-}
-
-async function executeNestedToolCall(
-	currentContext: AgentContext,
-	assistantMessage: AssistantMessage,
-	config: AgentLoopConfig,
-	parentToolCall: AgentToolCall,
-	toolCall: AgentToolCall,
-	signal: AbortSignal | undefined,
-	onUpdate: AgentToolUpdateCallback | undefined,
-	nestedQueue: NestedCallQueue | undefined,
-	services: NestedCallServices,
-): Promise<AgentToolCallOutcome> {
-	const { emit, recorder } = services;
-	const parentToolCallId = parentToolCall.id;
-	const record = recorder.start(toolCall);
-	await emit({
-		type: "tool_execution_start",
-		toolCallId: toolCall.id,
-		toolName: toolCall.name,
-		args: toolCall.arguments,
-		parentToolCallId,
-	});
-	const outcome = await runNestedToolCall(
-		currentContext,
-		assistantMessage,
-		config,
-		parentToolCall,
-		toolCall,
-		signal,
-		onUpdate,
-		nestedQueue,
-		services,
-	);
-	recorder.finish(record, outcome.isError, errorText(outcome.result));
-	await emit({
-		type: "tool_execution_end",
-		toolCallId: outcome.toolCall.id,
-		toolName: outcome.toolCall.name,
-		result: outcome.result,
-		isError: outcome.isError,
-		parentToolCallId,
-	});
-	return outcome;
-}
-
-function errorText(result: AgentToolResult<any>): string {
-	return (result.content ?? [])
-		.filter((block): block is TextContent => block.type === "text")
-		.map((block) => block.text)
-		.join("\n");
-}
-
-async function runNestedToolCall(
-	currentContext: AgentContext,
-	assistantMessage: AssistantMessage,
-	config: AgentLoopConfig,
-	parentToolCall: AgentToolCall,
-	toolCall: AgentToolCall,
-	signal: AbortSignal | undefined,
-	onUpdate: AgentToolUpdateCallback | undefined,
-	nestedQueue: NestedCallQueue | undefined,
-	services: NestedCallServices,
-): Promise<AgentToolCallOutcome> {
-	const exclusive =
-		nestedQueue &&
-		(config.toolExecution === "sequential" ||
-			getNestedTools(currentContext).find((t) => t.name === toolCall.name)?.executionMode === "sequential");
-	let release: (() => void) | undefined;
-	if (exclusive) {
-		const previous = nestedQueue.tail;
-		nestedQueue.tail = new Promise((resolve) => {
-			release = resolve;
-		});
-		await previous;
+export async function runToolCall(toolCall: AgentToolCall, options: RunToolCallOptions): Promise<AgentToolCallOutcome> {
+	const { assistantMessage, context, signal } = options;
+	const preparation = await prepareToolCall(context, assistantMessage, toolCall, options, signal, options.tools);
+	if (preparation.kind === "immediate") {
+		return { toolCall, result: preparation.result, isError: preparation.isError };
 	}
-	try {
-		const preparation = await prepareToolCall(
-			currentContext,
-			assistantMessage,
-			toolCall,
-			config,
-			signal,
-			parentToolCall,
-		);
-		if (preparation.kind === "immediate") {
-			return { toolCall, result: preparation.result, isError: preparation.isError };
-		}
-		const executed = await executePreparedToolCall(
-			currentContext,
-			assistantMessage,
-			config,
-			preparation,
-			signal,
-			async (partialResult) => {
-				onUpdate?.(partialResult);
-				await services.emit({
-					type: "tool_execution_update",
-					toolCallId: toolCall.id,
-					toolName: toolCall.name,
-					args: toolCall.arguments,
-					partialResult,
-					parentToolCallId: parentToolCall.id,
-				});
-			},
-			exclusive ? undefined : nestedQueue,
-			services,
-		);
-		return await finalizeExecutedToolCall(
-			currentContext,
-			assistantMessage,
-			preparation,
-			executed,
-			config,
-			signal,
-			parentToolCall,
-		);
-	} finally {
-		release?.();
-	}
+	const executed = await executePreparedToolCall(preparation, signal, options.onUpdate ?? (() => {}));
+	return finalizeExecutedToolCall(context, assistantMessage, preparation, executed, options, signal);
 }
 
 async function executePreparedToolCall(
-	currentContext: AgentContext,
-	assistantMessage: AssistantMessage,
-	config: AgentLoopConfig,
 	prepared: PreparedToolCall,
 	signal: AbortSignal | undefined,
 	onUpdate: ToolUpdateSink,
-	nestedQueue: NestedCallQueue | undefined,
-	services: NestedCallServices,
 ): Promise<ExecutedToolCallOutcome> {
 	const updateEvents: Promise<void>[] = [];
 	let acceptingUpdates = true;
@@ -1013,7 +832,6 @@ async function executePreparedToolCall(
 				if (!acceptingUpdates) return;
 				updateEvents.push(Promise.resolve(onUpdate(partialResult)));
 			},
-			createToolContext(currentContext, assistantMessage, config, prepared.toolCall, signal, nestedQueue, services),
 		);
 		acceptingUpdates = false;
 		await Promise.all(updateEvents);
@@ -1035,9 +853,8 @@ async function finalizeExecutedToolCall(
 	assistantMessage: AssistantMessage,
 	prepared: PreparedToolCall,
 	executed: ExecutedToolCallOutcome,
-	config: AgentLoopConfig,
+	config: ToolCallHooks,
 	signal: AbortSignal | undefined,
-	parentToolCall?: AgentToolCall,
 ): Promise<FinalizedToolCallOutcome> {
 	let result = executed.result;
 	let isError = executed.isError;
@@ -1052,20 +869,22 @@ async function finalizeExecutedToolCall(
 					result,
 					isError,
 					context: currentContext,
-					...(parentToolCall ? { parentToolCall } : {}),
 				},
 				signal,
 			);
 			if (afterResult) {
+				// Structured content not replaced along with the content may no longer match it.
+				const structuredContent =
+					afterResult.structuredContent ?? (afterResult.content ? undefined : result.structuredContent);
 				result = {
 					...result,
 					content: afterResult.content ?? result.content,
 					details: afterResult.details ?? result.details,
-					structuredContent:
-						afterResult.structuredContent ?? (afterResult.content ? undefined : result.structuredContent),
 					usage: afterResult.usage ?? result.usage,
 					terminate: afterResult.terminate ?? result.terminate,
 				};
+				if (structuredContent === undefined) delete result.structuredContent;
+				else result.structuredContent = structuredContent;
 				isError = afterResult.isError ?? isError;
 			}
 		} catch (error) {
@@ -1108,7 +927,6 @@ function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResul
 		content: finalized.result.content ?? [],
 		details: finalized.result.details,
 		usage: finalized.result.usage,
-		...(finalized.nestedCalls ? { nestedCalls: finalized.nestedCalls } : {}),
 		isError: finalized.isError,
 		timestamp: Date.now(),
 	};

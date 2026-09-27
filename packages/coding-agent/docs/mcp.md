@@ -79,3 +79,7 @@ Codemode-only tools do not depend on the active tool set, so they stay callable 
 Like in Codex, `exec` scripts receive an MCP tool's whole `CallToolResult` (`content` blocks as sent by the server, `structuredContent`, and `isError`), and the `exec` description declares it as `CallToolResult<T>`. A result with `isError` resolves in scripts and is reported to the model as an error for direct calls. `image(result.content[0])` forwards an image block to the model. The server's `instructions` describe its tools in the `exec` description.
 
 Every MCP call goes through pi's tool pipeline, so `tool_call` and `tool_result` extension handlers, including permission gates, apply to MCP tools. Calls made from `exec` scripts carry the `exec` call's id as `parentToolCallId`.
+
+## SDK
+
+SDK sessions do not load the built-in extensions. Add the MCP extension, and the codemode extension for `codemode` and `deferred` servers, to the resource loader. See [SDK](sdk.md#codemode-mcp).

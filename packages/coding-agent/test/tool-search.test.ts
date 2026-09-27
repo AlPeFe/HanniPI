@@ -2,13 +2,13 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import type { ToolNamespace } from "../src/core/extensions/types.ts";
-import { createCodemodeDescription } from "../src/core/tools/codemode.ts";
+import { createCodemodeDescription } from "../src/extensions/codemode/tool.ts";
 import {
 	Bm25Ranker,
 	createToolSearchDescription,
 	createToolSearchDocument,
 	tokenize,
-} from "../src/core/tools/tool-search.ts";
+} from "../src/extensions/tool-search/tool.ts";
 
 function tool(name: string, description: string, properties: Record<string, unknown> = {}): AgentTool {
 	return {

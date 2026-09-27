@@ -8,9 +8,14 @@
  * like any other tool change and survives `/tree`, resume, and fork on that branch.
  */
 
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { type Static, Type } from "typebox";
-import type { ToolDefinition, ToolNamespace } from "../extensions/types.ts";
+import type {
+	ExtensionAPI,
+	ToolDefinition,
+	ToolExposure,
+	ToolInfo,
+	ToolNamespace,
+} from "../../core/extensions/types.ts";
 
 export const TOOL_SEARCH_TOOL_NAME = "tool_search";
 export const DEFAULT_TOOL_SEARCH_LIMIT = 8;
@@ -99,7 +104,10 @@ function schemaText(schema: unknown, parts: string[]): void {
  * Search text of a tool, following Codex's `default_tool_search_text`: the name, the name with `_`
  * as spaces, the description, schema descriptions and property names, and the namespace.
  */
-export function createToolSearchDocument(tool: AgentTool<any>, namespace?: ToolNamespace): ToolSearchDocument {
+export function createToolSearchDocument(
+	tool: Pick<ToolInfo, "name" | "description" | "parameters">,
+	namespace?: ToolNamespace,
+): ToolSearchDocument {
 	const parts = [tool.name, tool.name.replaceAll("_", " "), tool.description];
 	schemaText(tool.parameters, parts);
 	if (namespace) parts.push(namespace.name, namespace.description ?? "");
@@ -168,10 +176,35 @@ export interface ToolSearchToolDetails {
 
 export interface ToolSearchToolOptions {
 	/**
-	 * Search the tools that are not declared to the model and declare the matches for the next model
-	 * call. Returns the loaded tools. Without it, the tool finds nothing.
+	 * The session's tools. `tool_search` searches the tools that are not declared to the model and
+	 * activates the matches. Without it, the tool finds nothing. An `ExtensionAPI` fits.
 	 */
-	searchAndLoad?: (query: string, limit: number) => ToolSearchResultTool[];
+	tools?: Pick<ExtensionAPI, "getAllTools" | "getActiveTools" | "setActiveTools">;
+}
+
+/** Whether `tool_search` can load a tool with this exposure. */
+function isSearchable(exposure: ToolExposure): boolean {
+	return exposure === "codemode" || exposure === "deferred";
+}
+
+/**
+ * Rank the searchable tools that are not active yet and activate the matches, so the next model
+ * call declares them. Activation is recorded in the transcript like any tool change.
+ */
+function searchAndLoad(
+	tools: NonNullable<ToolSearchToolOptions["tools"]>,
+	query: string,
+	limit: number,
+): ToolSearchResultTool[] {
+	const active = tools.getActiveTools();
+	const candidates = tools.getAllTools().filter((tool) => isSearchable(tool.exposure) && !active.includes(tool.name));
+	const documents = candidates.map((tool) => createToolSearchDocument(tool, tool.namespace));
+	const matches = new Bm25Ranker().rank(query, documents, limit);
+	if (matches.length > 0) tools.setActiveTools([...active, ...matches.map((match) => match.name)]);
+	return matches.map((match) => ({
+		name: match.name,
+		description: candidates.find((tool) => tool.name === match.name)?.description ?? "",
+	}));
 }
 
 /**
@@ -203,11 +236,22 @@ export function createToolSearchToolDefinition(
 		parameters: toolSearchSchema,
 		// Searching is not something scripts need; it changes what the model sees.
 		exposure: "model-only",
+		// List the namespaces of the searchable tools.
+		prepareLoadout: (loadout) => {
+			const sources = new Map<string, ToolNamespace>();
+			for (const tool of loadout.registered) {
+				const namespace = loadout.getNamespace(tool.name);
+				if (isSearchable(loadout.getExposure(tool.name)) && namespace && !sources.has(namespace.name)) {
+					sources.set(namespace.name, namespace);
+				}
+			}
+			return { descriptions: { [TOOL_SEARCH_TOOL_NAME]: createToolSearchDescription([...sources.values()]) } };
+		},
 		async execute(_toolCallId, { query, limit }) {
 			if (query.trim() === "") throw new Error("query must not be empty");
 			const max = limit ?? DEFAULT_TOOL_SEARCH_LIMIT;
 			if (!Number.isInteger(max) || max <= 0) throw new Error("limit must be a positive integer");
-			const tools = options.searchAndLoad?.(query, max) ?? [];
+			const tools = options.tools ? searchAndLoad(options.tools, query, max) : [];
 			const text =
 				tools.length === 0
 					? "No matching tools found."

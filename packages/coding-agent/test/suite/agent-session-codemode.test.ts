@@ -5,14 +5,17 @@ import type { ToolResultMessage } from "@earendil-works/pi-ai/compat";
 import { CODEMODE_SOURCE_GRAMMAR } from "@earendil-works/pi-codemode";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
+import type { ExtensionAPI } from "../../src/core/extensions/types.ts";
 import type { CustomEntry } from "../../src/core/session-manager.ts";
+import { createToolDefinitionFromAgentTool } from "../../src/core/tools/tool-definition-wrapper.ts";
+import { readCodemodeStore } from "../../src/extensions/codemode/execute.ts";
+import { createCodemodeExtension } from "../../src/extensions/codemode/index.ts";
 import {
 	CODEMODE_STORE_ENTRY_TYPE,
 	type CodemodeToolDetails,
 	createCodemodeTool,
 	createCodemodeToolDefinition,
-} from "../../src/core/tools/codemode.ts";
-import { readCodemodeStore } from "../../src/core/tools/codemode-execute.ts";
+} from "../../src/extensions/codemode/tool.ts";
 import { createHarness, type Harness, type HarnessOptions } from "./harness.ts";
 
 const TINY_PNG_BASE64 =
@@ -83,9 +86,15 @@ describe("AgentSession codemode tool", () => {
 	});
 
 	async function setup(extensionFactories?: HarnessOptions["extensionFactories"]) {
+		// Registered by an extension so they run with the session's tool context, next to the built-in exec.
+		const registerTools = (pi: ExtensionAPI) => {
+			for (const tool of [echoTool as AgentTool, statsTool, screenshotTool]) {
+				pi.registerTool(createToolDefinitionFromAgentTool(tool));
+			}
+		};
 		const harness = await createHarness({
-			tools: [echoTool as AgentTool, statsTool, screenshotTool, createCodemodeTool() as AgentTool],
-			extensionFactories,
+			initialActiveToolNames: ["exec"],
+			extensionFactories: [createCodemodeExtension(), registerTools, ...(extensionFactories ?? [])],
 		});
 		harnesses.push(harness);
 		return harness;
@@ -352,7 +361,10 @@ describe("codemode options and store", () => {
 
 	// No tools override: the session builds its own codemode tool, including the store writer.
 	async function setup() {
-		const harness = await createHarness({ initialActiveToolNames: ["exec"] });
+		const harness = await createHarness({
+			initialActiveToolNames: ["exec"],
+			extensionFactories: [createCodemodeExtension()],
+		});
 		harnesses.push(harness);
 		return harness;
 	}
@@ -460,7 +472,10 @@ describe("codemode options and store", () => {
 	});
 
 	it("resolves bash calls to Codex-style results, also for non-zero exit codes", async () => {
-		const harness = await createHarness({ initialActiveToolNames: ["exec", "bash"] });
+		const harness = await createHarness({
+			initialActiveToolNames: ["exec", "bash"],
+			extensionFactories: [createCodemodeExtension()],
+		});
 		harnesses.push(harness);
 		const result = await run(
 			harness,
@@ -498,14 +513,7 @@ describe("codemode options and store", () => {
 
 	it("runs without a session, starting from an empty store", async () => {
 		const tool = createCodemodeTool();
-		const toolCall = { type: "toolCall" as const, id: "direct", name: tool.name, arguments: {} };
-		const result = await tool.execute("direct", { code: increment }, undefined, undefined, {
-			toolCall,
-			tools: [],
-			executeTool: async () => {
-				throw new Error("unexpected nested call");
-			},
-		});
+		const result = await tool.execute("direct", { code: increment });
 		expect(result.content[1]).toEqual({ type: "text", text: "1" });
 	});
 
@@ -568,7 +576,10 @@ describe("codemode models", () => {
 	}
 
 	async function setup() {
-		const harness = await createHarness({ initialActiveToolNames: ["exec"] });
+		const harness = await createHarness({
+			initialActiveToolNames: ["exec"],
+			extensionFactories: [createCodemodeExtension()],
+		});
 		harnesses.push(harness);
 		const observed: ClassifyObservation[] = [];
 		let active = 0;

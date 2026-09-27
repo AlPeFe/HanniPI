@@ -81,7 +81,6 @@ export type AgentInitialState = Partial<
 
 function createMutableAgentState(initialState?: AgentInitialState): MutableAgentState {
 	let tools = initialState?.tools?.slice() ?? [];
-	let nestedTools = initialState?.nestedTools?.slice();
 	let messages = initialState?.messages?.slice() ?? [];
 	const initialMessage = createInitialSystemMessage(initialState?.systemPrompt, tools.map(toToolDeclaration));
 	if (messages[0]?.role !== "system" && initialMessage) messages.unshift(initialMessage);
@@ -97,12 +96,6 @@ function createMutableAgentState(initialState?: AgentInitialState): MutableAgent
 		},
 		set tools(nextTools: AgentTool<any>[]) {
 			tools = nextTools.slice();
-		},
-		get nestedTools() {
-			return nestedTools;
-		},
-		set nestedTools(nextTools: AgentTool<any>[] | undefined) {
-			nestedTools = nextTools?.slice();
 		},
 		get messages() {
 			return messages;
@@ -278,7 +271,7 @@ export class Agent {
 	/**
 	 * Current agent state.
 	 *
-	 * Assigning `state.tools`, `state.nestedTools`, or `state.messages` copies the provided top-level array.
+	 * Assigning `state.tools` or `state.messages` copies the provided top-level array.
 	 */
 	get state(): AgentState {
 		return this._state;
@@ -468,7 +461,6 @@ export class Agent {
 		return {
 			messages: this._state.messages.slice(),
 			tools: this._state.tools.slice(),
-			...(this._state.nestedTools ? { nestedTools: this._state.nestedTools.slice() } : {}),
 		};
 	}
 
@@ -586,8 +578,6 @@ export class Agent {
 				break;
 
 			case "tool_execution_start": {
-				// Only calls issued by the model count as pending; nested calls belong to their parent.
-				if (event.parentToolCallId) break;
 				const pendingToolCalls = new Set(this._state.pendingToolCalls);
 				pendingToolCalls.add(event.toolCallId);
 				this._state.pendingToolCalls = pendingToolCalls;
@@ -595,7 +585,6 @@ export class Agent {
 			}
 
 			case "tool_execution_end": {
-				if (event.parentToolCallId) break;
 				const pendingToolCalls = new Set(this._state.pendingToolCalls);
 				pendingToolCalls.delete(event.toolCallId);
 				this._state.pendingToolCalls = pendingToolCalls;

@@ -516,6 +516,11 @@ export class SettingsManager {
 		return settings as Settings;
 	}
 
+	/** A copy of the effective settings: global and project settings merged, with overrides. */
+	getSettings(): Settings {
+		return structuredClone(this.settings);
+	}
+
 	getGlobalSettings(): Settings {
 		return structuredClone(this.globalSettings);
 	}
@@ -1318,16 +1323,6 @@ export class SettingsManager {
 		this.globalSettings.fullscreenCopyOnSelect = enabled;
 		this.markModified("fullscreenCopyOnSelect");
 		this.save();
-	}
-
-	getCodemodeMode(): CodemodeMode {
-		return this.settings.codemode?.mode === "only" ? "only" : "on";
-	}
-
-	/** Token budget for tool declarations in the exec description, or undefined for the default. */
-	getCodemodeInlineBudget(): number | undefined {
-		const budget = this.settings.codemode?.inlineBudget;
-		return typeof budget === "number" && Number.isFinite(budget) && budget >= 0 ? budget : undefined;
 	}
 
 	getImageAutoResize(): boolean {

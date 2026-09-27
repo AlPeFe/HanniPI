@@ -490,7 +490,7 @@ export function getQuickJSWasmPath(): string {
 }
 
 /**
- * Get the URL of the codemode worker entry (`src/core/tools/codemode-worker.ts`), or undefined to use
+ * Get the URL of the codemode worker entry (`src/extensions/codemode/worker.ts`), or undefined to use
  * the worker file that ships next to pi-codemode's own module.
  * - For Bun binary: the build passes the worker as an extra entrypoint. Bun embeds it at its path
  *   relative to the common directory of all entrypoints (the package root, since the main entry is
@@ -499,7 +499,7 @@ export function getQuickJSWasmPath(): string {
  * - For Node.js (dist/) and tsx (src/): pi-codemode's own worker.
  */
 export function getCodemodeWorkerUrl(): URL | undefined {
-	if (isBunBinary) return new URL("./src/core/tools/codemode-worker.js", import.meta.url);
+	if (isBunBinary) return new URL("./src/extensions/codemode/worker.js", import.meta.url);
 	if (isBundledNode) return new URL("./codemode-worker.js", import.meta.url);
 	return undefined;
 }

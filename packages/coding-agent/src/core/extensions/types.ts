@@ -10,7 +10,8 @@
 
 import type {
 	AgentMessage,
-	AgentToolContext,
+	AgentTool,
+	AgentToolCallOutcome,
 	AgentToolResult,
 	AgentToolUpdateCallback,
 	ThinkingLevel,
@@ -75,6 +76,7 @@ import type {
 	SessionEntry,
 	SessionManager,
 } from "../session-manager.ts";
+import type { Settings } from "../settings-manager.ts";
 import type { SlashCommandInfo } from "../slash-commands.ts";
 import type { SourceInfo } from "../source-info.ts";
 import type { BuildSystemPromptOptions, NormalizedBuildSystemPromptOptions } from "../system-prompt.ts";
@@ -360,24 +362,35 @@ export interface ExtensionContext {
 	getSystemPrompt(): string;
 }
 
-/**
- * Context passed to tool `execute()`. Adds the agent-loop services from {@link AgentToolContext}:
- * `toolCall`, `tools`, and `executeTool()` for running other tools through the same hooks and
- * permission checks as model-issued calls.
- *
- * Tools registered by extensions always run in a session and get the full context. A tool wrapped
- * with `wrapToolDefinition()` without a context factory, such as a built-in tool created with
- * `createBashTool()`, can also run in a plain `Agent` or be called directly; it then gets a
- * {@link ToolContext} and must treat the extension fields as optional.
- */
-export interface ExtensionToolContext extends ExtensionContext, AgentToolContext {}
+/** Options for {@link ExtensionToolContext.executeTool}. */
+export interface ExecuteToolOptions {
+	/** Defaults to the calling tool's signal. */
+	signal?: AbortSignal;
+	/** Receives partial results of the nested tool, in addition to `tool_execution_update` events. */
+	onUpdate?: AgentToolUpdateCallback;
+}
 
 /**
- * Context of a tool that may run outside a pi session: the agent-loop services, plus the
- * extension context fields when a session provides them. Outside the agent loop, `tools` is empty
- * and `executeTool()` reports an error outcome.
+ * Context passed to tool `execute()` in a session: the extension context plus `executeTool()`
+ * for running other tools through the same validation, hooks, and permission checks as
+ * model-issued calls.
+ *
+ * A tool wrapped with `wrapToolDefinition()` without a context factory, such as a built-in tool
+ * created with `createBashTool()` and run in a plain `Agent` or called directly, gets no context.
  */
-export type ToolContext = AgentToolContext & Partial<ExtensionContext>;
+export interface ExtensionToolContext extends ExtensionContext {
+	/** Tools {@link executeTool} can call. */
+	readonly tools: readonly AgentTool[];
+	/**
+	 * Run another tool. The call gets the id `<calling id>/<n>`, and the `tool_call`, `tool_result`,
+	 * and `tool_execution_*` events carry `parentToolCallId`. It does not appear in the transcript;
+	 * a bounded record of it is kept as `nestedCalls` on the calling tool's result message.
+	 *
+	 * Never rejects for tool failures: unknown tools, validation errors, blocked calls, and thrown
+	 * errors come back as `isError: true`.
+	 */
+	executeTool(name: string, args: unknown, options?: ExecuteToolOptions): Promise<AgentToolCallOutcome>;
+}
 
 /**
  * Extended context for command handlers.
@@ -477,15 +490,15 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 }
 
 /**
- * How the model reaches a tool. "Codemode scripts" are the scripts the model runs with the `exec`
- * tool.
+ * How the model reaches a tool. "Callable" means callable from other tools through
+ * `ctx.executeTool()`, as codemode tools such as `exec` do.
  *
- * - `direct`: declared to the model while active, and callable from codemode scripts while active.
- * - `model-only`: declared to the model while active, never callable from codemode scripts. Use it
- *   for orchestrating or interactive tools.
- * - `codemode`: callable from codemode scripts whenever registered, and listed in the `exec`
- *   tool's description. Not declared to the model unless explicitly activated.
- * - `deferred`: like `codemode`, but not listed in the `exec` tool's description.
+ * - `direct`: declared to the model while active, and callable while active.
+ * - `model-only`: declared to the model while active, never callable. Use it for orchestrating or
+ *   interactive tools.
+ * - `codemode`: callable whenever registered. Not declared to the model unless explicitly
+ *   activated. Codemode tools list it in their description.
+ * - `deferred`: like `codemode`, but codemode tools do not list it; tool search can find it.
  * - `hidden`: registered but unreachable. Activating it has no effect.
  *
  * `direct` and `model-only` tools are activated when they are registered; the others are not.
@@ -493,12 +506,35 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
  */
 export type ToolExposure = "direct" | "model-only" | "codemode" | "deferred" | "hidden";
 
-/** A group of related tools, such as the tools of one MCP server. The `exec` tool's description lists them together. */
+/** A group of related tools, such as the tools of one MCP server. Codemode tools list them together. */
 export interface ToolNamespace {
 	/** For example `mcp__docs`. */
 	name: string;
 	/** Shown once above the group's tools. */
 	description?: string;
+}
+
+/** The tools of a session as {@link ToolDefinition.prepareLoadout} sees them. */
+export interface ToolLoadout {
+	/** Tools declared to the model (the active tools), in order, with their original descriptions. */
+	readonly declared: readonly AgentTool[];
+	/** Tools callable through `ctx.executeTool()`. */
+	readonly callable: readonly AgentTool[];
+	/** Every registered tool. */
+	readonly registered: readonly AgentTool[];
+	getExposure(name: string): ToolExposure;
+	getNamespace(name: string): ToolNamespace | undefined;
+}
+
+/** Changes {@link ToolDefinition.prepareLoadout} makes to what the model sees. */
+export interface ToolLoadoutChanges {
+	/** Model-facing descriptions of declared tools, by tool name. */
+	descriptions?: Readonly<Record<string, string>>;
+	/**
+	 * Declared tools whose declarations requests leave out. They stay active and callable, and the
+	 * transcript still declares them, so the active set survives `/tree` and resume.
+	 */
+	hiddenDeclarations?: readonly string[];
 }
 
 /**
@@ -538,6 +574,20 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 
 	/** Group the tool belongs to, for example its MCP server. */
 	namespace?: ToolNamespace;
+
+	/**
+	 * Whether registering the tool activates it. Default: `true` for `direct` and `model-only` tools;
+	 * other exposures are never activated on registration. A tool with `defaultActive: false` is
+	 * activated by naming it in `--tools` or the `defaultTools` setting, or with `setActiveTools()`.
+	 */
+	defaultActive?: boolean;
+
+	/**
+	 * Adjust how the loadout is presented to the model while this tool is active. Called whenever
+	 * the active tools change. Tools that orchestrate other tools use it, for example to list the
+	 * callable tools in their own description.
+	 */
+	prepareLoadout?: (loadout: ToolLoadout) => ToolLoadoutChanges | undefined;
 
 	/**
 	 * Per-tool execution mode override.
@@ -1624,6 +1674,9 @@ export interface ExtensionAPI {
 	/** Get all configured tools with parameter schema, prompt guidelines, exposure, and source metadata. */
 	getAllTools(): ToolInfo[];
 
+	/** Get a copy of the effective settings (global and project settings merged, with overrides). */
+	getSettings(): Settings;
+
 	/**
 	 * Set the active tools by name. Unknown and `hidden` tools are ignored. Tools with `codemode` or
 	 * `deferred` exposure stay callable from codemode scripts whether active or not.
@@ -1908,10 +1961,13 @@ export type GetActiveToolsHandler = () => string[];
 /** Tool info with name, description, parameter schema, prompt guidelines, and source metadata. */
 export type ToolInfo = Pick<ToolDefinition, "name" | "description" | "parameters" | "promptGuidelines"> & {
 	exposure: ToolExposure;
+	namespace?: ToolNamespace;
 	sourceInfo: SourceInfo;
 };
 
 export type GetAllToolsHandler = () => ToolInfo[];
+
+export type GetSettingsHandler = () => Settings;
 
 export type GetCommandsHandler = () => SlashCommandInfo[];
 
@@ -1967,6 +2023,7 @@ export interface ExtensionActions {
 	setLabel: SetLabelHandler;
 	getActiveTools: GetActiveToolsHandler;
 	getAllTools: GetAllToolsHandler;
+	getSettings: GetSettingsHandler;
 	setActiveTools: SetActiveToolsHandler;
 	refreshTools: RefreshToolsHandler;
 	getCommands: GetCommandsHandler;
@@ -1992,6 +2049,15 @@ export interface ExtensionContextActions {
 	compact: (options?: CompactOptions) => void;
 	getSystemPrompt: () => string;
 	getSystemPromptOptions?: () => BuildSystemPromptOptions;
+	/** Backs `ExtensionToolContext.executeTool()`. Without it, nested calls fail. */
+	executeTool?: (
+		callerId: string,
+		name: string,
+		args: unknown,
+		options: ExecuteToolOptions,
+	) => Promise<AgentToolCallOutcome>;
+	/** Backs `ExtensionToolContext.tools`. */
+	getCallableTools?: () => readonly AgentTool[];
 }
 
 /**
