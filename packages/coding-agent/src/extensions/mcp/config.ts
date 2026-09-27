@@ -118,6 +118,9 @@ function validateServer(name: string, value: unknown): McpServerConfig | string 
 	if (type === "sse") return `server "${name}": legacy SSE transport is not supported; use the streamable HTTP URL`;
 
 	if (typeof value.url === "string" && (type === undefined || type === "http" || type === "streamable-http")) {
+		if (!URL.canParse(value.url) || !/^https?:$/.test(new URL(value.url).protocol)) {
+			return `server "${name}": url must be an http or https URL`;
+		}
 		if (value.headers !== undefined && !isStringRecord(value.headers)) {
 			return `server "${name}": headers must map names to strings`;
 		}

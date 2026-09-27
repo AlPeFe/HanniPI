@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import {
 	type AuthProvider,
 	type CallToolResult,
+	McpAuthRequiredError,
 	McpClient,
 	McpHttpError,
 	type McpRequestOptions,
@@ -179,7 +180,7 @@ export class McpServerConnection implements McpToolCaller {
 					if (this.client === client) this.client = undefined;
 					continue;
 				}
-				if (!(error instanceof McpOAuthAuthorizationRequiredError)) throw error;
+				if (!this.needsSignIn(error)) throw error;
 				await this.dropClient(client);
 				this.markNeedsAuth();
 				throw new Error(signInRequiredMessage(this.entry.name));
@@ -199,6 +200,14 @@ export class McpServerConnection implements McpToolCaller {
 		await this.opening?.catch(() => undefined);
 		if (this.client) await this.dropClient(this.client);
 		if (!this.closed) this.markNeedsAuth();
+	}
+
+	/** OAuth servers that still reject the request after a refresh need the user to sign in again. */
+	private needsSignIn(error: unknown): boolean {
+		return (
+			error instanceof McpOAuthAuthorizationRequiredError ||
+			(this.oauthUrl !== undefined && error instanceof McpAuthRequiredError)
+		);
 	}
 
 	private markNeedsAuth(): void {
@@ -265,7 +274,7 @@ export class McpServerConnection implements McpToolCaller {
 	}
 
 	private connectFailed(error: unknown): Error {
-		if (error instanceof McpOAuthAuthorizationRequiredError && !this.closed) {
+		if (this.needsSignIn(error) && !this.closed) {
 			this.markNeedsAuth();
 			return new Error(signInRequiredMessage(this.entry.name));
 		}

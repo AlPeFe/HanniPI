@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
 	type JsonRpcMessage,
 	LATEST_PROTOCOL_VERSION,
+	McpAuthRequiredError,
 	McpHttpError,
 	McpSessionExpiredError,
 } from "@earendil-works/pi-mcp";
@@ -45,6 +46,7 @@ describe("MCP config", () => {
 					off: { command: "x", enabled: false },
 					bad: { args: ["no command"] },
 					legacy: { type: "sse", url: "https://example.com/sse" },
+					badUrl: { url: "example.com/mcp" },
 				},
 			},
 			{ mcpServers: { shared: { command: "project-cmd", exposure: "direct" } } },
@@ -55,9 +57,10 @@ describe("MCP config", () => {
 			["shared", { command: "project-cmd", exposure: "direct" }],
 			["remote", { url: "https://example.com/mcp", headers: { Authorization: TOKEN_HEADER } }],
 		]);
-		expect(trusted.errors).toHaveLength(2);
+		expect(trusted.errors).toHaveLength(3);
 		expect(trusted.errors[0]).toContain('server "bad" needs either "command"');
 		expect(trusted.errors[1]).toContain("legacy SSE transport is not supported");
+		expect(trusted.errors[2]).toContain('server "badUrl": url must be an http or https URL');
 
 		// Untrusted projects cannot add or override servers, since stdio servers run commands.
 		const untrusted = loadMcpConfig({ ...paths, projectTrusted: false });
@@ -235,6 +238,21 @@ describe("MCP connections", () => {
 		await expect(failing.connection.getClient()).rejects.toThrow("status 400: bad");
 		expect(failing.connection.state).toBe("failed");
 		expect(failing.opened()).toBe(1);
+	});
+
+	it("asks OAuth servers that keep rejecting requests for a new sign-in", async () => {
+		const { connection } = connect({ name: "fake", config: { url: "http://unused.invalid" }, source: "test" }, [
+			() => {
+				const transport = createTransport();
+				transport.send = async () => {
+					throw new McpAuthRequiredError(new Response(null, { status: 401 }));
+				};
+				return transport;
+			},
+		]);
+		await expect(connection.getClient()).rejects.toThrow('MCP server "fake" requires sign-in. Run /mcp login fake.');
+		expect(connection.state).toBe("needs-auth");
+		await connection.close();
 	});
 
 	it("resolves the OAuth client secret lazily", async () => {
