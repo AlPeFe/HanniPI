@@ -124,7 +124,7 @@ export function createMcpToolDefinition(options: {
 		description: tool.description?.trim() || title || `MCP tool ${tool.name} from server ${server}`,
 		parameters: toParameters(tool.inputSchema),
 		...(tool.outputSchema ? { outputSchema: tool.outputSchema as unknown as TSchema } : {}),
-		...(options.exposure === "codemode" ? { nestedOnly: true } : {}),
+		exposure: options.exposure,
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const client = await options.getClient();
 			const result = await client.callTool(tool.name, (params ?? {}) as Record<string, unknown>, {

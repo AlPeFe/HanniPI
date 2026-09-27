@@ -30,7 +30,7 @@ Add servers to `~/.pi/agent/mcp.json`, or to `.pi/mcp.json` in a project. The fo
 
 Project entries replace global entries with the same name. A project `mcp.json` is only read after the project is trusted, because stdio servers run commands.
 
-Pi connects when a session starts. The first prompt waits until startup connections finish. HTTP connections that fail with a network error or a transient status (408, 429, 5xx) are retried twice. A server that drops its connection shows as disconnected and is reconnected on the next call. When a server announces that its tool list changed, new tools are added and withdrawn tools are deactivated. Run `/mcp` to see server status, tool counts, and errors.
+Pi connects when a session starts. The first prompt waits until startup connections finish. HTTP connections that fail with a network error or a transient status (408, 429, 5xx) are retried twice. A server that drops its connection shows as disconnected and is reconnected on the next call. When a server announces that its tool list changed, new tools are added and withdrawn tools become unreachable until the server offers them again. Run `/mcp` to see server status, tool counts, and errors.
 
 Stopping a stdio server closes its stdin, then sends SIGTERM and finally SIGKILL to its whole process group, so servers started through wrappers such as `npx` or `uvx` do not linger.
 
@@ -69,8 +69,12 @@ OAuth applies to HTTP servers without an `Authorization` header. For authorizati
 
 Each server's tools are registered as `mcp__<server>__<tool>`. The `exposure` setting controls how the model reaches them:
 
-- `codemode` (default): the tools are callable from [codemode](cli.md#tools) scripts but are not declared to the model. Large MCP tool lists stay out of the model's tool declarations, and scripts can call several MCP tools, in parallel if needed, while returning only the part of the result the model needs. Pi activates the codemode tool when such a server connects.
+- `codemode` (default): the tools are callable from [codemode](cli.md#tools) scripts and listed in the codemode tool's description, but are not declared to the model. Large MCP tool lists stay out of the model's tool declarations, and scripts can call several MCP tools, in parallel if needed, while returning only the part of the result the model needs. Pi activates the codemode tool when such a server connects.
+- `deferred`: like `codemode`, but the tools are not listed in the codemode tool's description either. Scripts can still call them by name.
 - `direct`: the tools are declared to the model like built-in tools, and are also callable from codemode.
+- `hidden`: the tools are registered but cannot be called.
+
+Codemode-only tools do not depend on the active tool set, so they stay callable after `/tree`, resume, and fork. To keep pi from activating the codemode tool, set `"autoEnableCodemode": false` at the top level of `mcp.json`, next to `mcpServers`. A project `mcp.json` value overrides the global one. Pi then warns once that codemode-only tools cannot be called until codemode is activated.
 
 MCP tools that declare an `outputSchema` return their `structuredContent` to codemode scripts. Other tools return their text output. Images are passed through as image content.
 

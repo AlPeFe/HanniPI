@@ -468,6 +468,22 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 }
 
 /**
+ * How the model reaches a tool.
+ *
+ * - `direct`: declared to the model while active, and callable from codemode scripts while active.
+ * - `model-only`: declared to the model while active, never callable from codemode scripts. Use it
+ *   for orchestrating or interactive tools.
+ * - `codemode`: callable from codemode scripts whenever registered, and listed in the codemode
+ *   tool's description. Not declared to the model unless explicitly activated.
+ * - `deferred`: like `codemode`, but not listed in the codemode tool's description.
+ * - `hidden`: registered but unreachable. Activating it has no effect.
+ *
+ * `direct` and `model-only` tools are activated when they are registered; the others are not.
+ * The active tool set (`getActiveTools`/`setActiveTools`) is the set declared to the model.
+ */
+export type ToolExposure = "direct" | "model-only" | "codemode" | "deferred" | "hidden";
+
+/**
  * Tool definition for registerTool().
  */
 export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = unknown, TState = any> {
@@ -498,10 +514,9 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	outputSchema?: TSchema;
 
 	/**
-	 * Only callable from other tools (for example codemode scripts) through `ctx.executeTool()`.
-	 * The tool is not declared to the model and is left out of the system prompt.
+	 * How the model reaches the tool. Default: `"direct"`. See {@link ToolExposure}.
 	 */
-	nestedOnly?: boolean;
+	exposure?: ToolExposure;
 
 	/**
 	 * Per-tool execution mode override.
@@ -1565,13 +1580,16 @@ export interface ExtensionAPI {
 	/** Execute a shell command. */
 	exec(command: string, args: string[], options?: ExecOptions): Promise<ExecResult>;
 
-	/** Get the list of currently active tool names. */
+	/** Get the names of the active tools, which are the tools declared to the model. */
 	getActiveTools(): string[];
 
-	/** Get all configured tools with parameter schema, prompt guidelines, and source metadata. */
+	/** Get all configured tools with parameter schema, prompt guidelines, exposure, and source metadata. */
 	getAllTools(): ToolInfo[];
 
-	/** Set the active tools by name. */
+	/**
+	 * Set the active tools by name. Unknown and `hidden` tools are ignored. Tools with `codemode` or
+	 * `deferred` exposure stay callable from codemode scripts whether active or not.
+	 */
 	setActiveTools(toolNames: string[]): void;
 
 	/** Get available slash commands in the current session. */
@@ -1851,6 +1869,7 @@ export type GetActiveToolsHandler = () => string[];
 
 /** Tool info with name, description, parameter schema, prompt guidelines, and source metadata. */
 export type ToolInfo = Pick<ToolDefinition, "name" | "description" | "parameters" | "promptGuidelines"> & {
+	exposure: ToolExposure;
 	sourceInfo: SourceInfo;
 };
 

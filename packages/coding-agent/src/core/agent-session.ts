@@ -98,6 +98,7 @@ import {
 	type ToolExecutionEndEvent,
 	type ToolExecutionStartEvent,
 	type ToolExecutionUpdateEvent,
+	type ToolExposure,
 	type ToolInfo,
 	type TreePreparation,
 	type TurnStartEvent,
@@ -628,6 +629,7 @@ export class AgentSession {
 				messages: this.sessionManager.buildSessionProjection().messages,
 				// Messages declare the provider-visible loadout; context.tools keeps executable implementations.
 				tools: this.agent.state.tools.slice(),
+				nestedTools: this.agent.state.nestedTools?.slice(),
 			};
 			const previous = await previousPrepareRequest?.(
 				{
@@ -728,6 +730,7 @@ export class AgentSession {
 				context: {
 					...nextContext,
 					tools: this.agent.state.tools.slice(),
+					nestedTools: this.agent.state.nestedTools?.slice(),
 				},
 				messages: updateMessage
 					? [...(previousSnapshot?.messages ?? []), updateMessage]
@@ -1269,8 +1272,8 @@ export class AgentSession {
 	}
 
 	/**
-	 * Get the names of currently active tools.
-	 * Returns the names of tools currently set on the agent.
+	 * Get the names of currently active tools, which are the tools declared to the model.
+	 * Tools with `codemode` or `deferred` exposure are callable from codemode without being active.
 	 */
 	getActiveToolNames(): string[] {
 		return this.agent.state.tools.map((t) => t.name);
@@ -1285,6 +1288,7 @@ export class AgentSession {
 			description: definition.description,
 			parameters: definition.parameters,
 			promptGuidelines: definition.promptGuidelines,
+			exposure: this._getToolExposure(definition.name),
 			sourceInfo,
 		}));
 	}
@@ -1295,33 +1299,54 @@ export class AgentSession {
 
 	/**
 	 * Set active tools by name.
-	 * Only tools in the registry can be enabled. Unknown tool names are ignored.
+	 * Only tools in the registry can be enabled. Unknown and hidden tool names are ignored.
 	 * Also rebuilds the system prompt to reflect the new tool set.
 	 * Changes take effect on the next agent turn.
 	 */
 	setActiveToolsByName(toolNames: string[]): void {
-		const tools = this._resolveActiveTools(toolNames);
-		this.agent.state.tools = tools;
+		const tools = this._applyToolLoadout(toolNames);
 		this._rebuildSystemPrompt(tools.map((tool) => tool.name));
 	}
 
+	private _getToolExposure(name: string): ToolExposure {
+		const entry = this._toolDefinitions.get(name);
+		if (entry?.definition.exposure) return entry.definition.exposure;
+		// Built-in slots named codemode, including SDK base tool overrides given as plain AgentTools,
+		// hold the codemode tool. Scripts must not start other scripts.
+		return name === CODEMODE_TOOL_NAME && entry?.sourceInfo.source === "builtin" ? "model-only" : "direct";
+	}
+
 	/**
-	 * Map tool names to registered tools, skipping unknown names. The built-in codemode tool gets a
-	 * description that declares the other resolved tools, so it changes with the active loadout.
+	 * Set the agent's tools for the given active (declared) tool names and return the declared tools.
+	 *
+	 * Declared tools are the registered, non-hidden active ones. Tools callable from codemode are the
+	 * active `direct` tools plus every registered `codemode` or `deferred` tool, so the latter do not
+	 * depend on the transcript's tool declarations. The built-in codemode tool gets a description
+	 * declaring the callable tools except `deferred` ones, so it changes with the loadout.
 	 */
-	private _resolveActiveTools(toolNames: string[]): AgentTool[] {
-		const tools = toolNames.flatMap((name) => {
+	private _applyToolLoadout(toolNames: string[]): AgentTool[] {
+		const tools = [...new Set(toolNames)].flatMap((name) => {
 			const tool = this._toolRegistry.get(name);
-			return tool ? [tool] : [];
+			return tool && this._getToolExposure(name) !== "hidden" ? [tool] : [];
+		});
+		const declared = new Set(tools.map((tool) => tool.name));
+		const nestedTools = [...this._toolRegistry.values()].filter((tool) => {
+			const exposure = this._getToolExposure(tool.name);
+			return (
+				exposure === "codemode" || exposure === "deferred" || (exposure === "direct" && declared.has(tool.name))
+			);
 		});
 		const codemodeIndex = tools.findIndex((tool) => tool.name === CODEMODE_TOOL_NAME);
 		// Extension tools named codemode are left alone; built-in slots (including SDK base tool
 		// overrides) named codemode are assumed to be the codemode tool. Only the session's own
 		// codemode tool has model access, so overrides do not declare `models`.
 		if (codemodeIndex !== -1 && this._toolDefinitions.get(CODEMODE_TOOL_NAME)?.sourceInfo.source === "builtin") {
-			const description = createCodemodeDescription(tools, { models: this._baseToolsOverride === undefined });
+			const listed = nestedTools.filter((tool) => this._getToolExposure(tool.name) !== "deferred");
+			const description = createCodemodeDescription(listed, { models: this._baseToolsOverride === undefined });
 			tools[codemodeIndex] = { ...tools[codemodeIndex], description };
 		}
+		this.agent.state.tools = tools;
+		this.agent.state.nestedTools = nestedTools;
 		return tools;
 	}
 
@@ -1405,12 +1430,10 @@ export class AgentSession {
 
 	private _rebuildSystemPrompt(toolNames: string[]): void {
 		const validToolNames = toolNames.filter((name) => this._toolRegistry.has(name));
-		// Nested-only tools are not declared to the model, so the prompt does not describe them.
-		const isNestedOnly = (name: string) => this._toolRegistry.get(name)?.nestedOnly === true;
 		const toolSnippets: Record<string, string> = {};
 		for (const name of this._toolRegistry.keys()) {
 			const snippet = this._toolPromptSnippets.get(name);
-			if (snippet && !isNestedOnly(name)) toolSnippets[name] = snippet;
+			if (snippet) toolSnippets[name] = snippet;
 		}
 
 		const loaderSystemPrompt = this._resourceLoader.getSystemPrompt();
@@ -1427,7 +1450,7 @@ export class AgentSession {
 			appendSystemPrompt,
 			selectedTools: validToolNames,
 			toolSnippets,
-			toolGuidelines: Object.fromEntries([...this._toolPromptGuidelines].filter(([name]) => !isNestedOnly(name))),
+			toolGuidelines: Object.fromEntries(this._toolPromptGuidelines),
 		});
 	}
 
@@ -1445,8 +1468,7 @@ export class AgentSession {
 		options: NormalizedBuildSystemPromptOptions,
 		messages: AgentMessage[] = this.agent.state.messages,
 	): SystemMessage | undefined {
-		options.selectedTools = [...new Set(options.selectedTools)].filter((name) => this._toolRegistry.has(name));
-		this.agent.state.tools = this._resolveActiveTools(options.selectedTools);
+		options.selectedTools = this._applyToolLoadout(options.selectedTools).map((tool) => tool.name);
 		const sections = diffSystemPromptSections(
 			getCurrentSystemMessage(messages)?.sections ?? {},
 			buildSystemPromptSections(options),
@@ -1483,21 +1505,13 @@ export class AgentSession {
 
 	/**
 	 * Restore the active tool loadout declared by the session transcript, if it declares one.
-	 * Nested-only tools are never declared to the model, so the transcript does not record them;
-	 * the currently active ones are kept so codemode can still call them.
+	 * Tools reachable only from codemode are never declared, but they do not depend on the active
+	 * set, so the transcript's declarations are the whole loadout.
 	 */
 	private _restoreToolsFromTranscript(): void {
 		const current = getCurrentSystemMessage(this.sessionManager.buildSessionContext().messages);
 		if (!current) return;
-		const declaredNames = (current.toolsAdded ?? [])
-			.map((tool) => tool.name)
-			.filter((name) => this._toolRegistry.has(name));
-		const nestedOnlyNames = this.agent.state.tools
-			.filter((tool) => tool.nestedOnly && this._toolRegistry.has(tool.name))
-			.map((tool) => tool.name);
-		const toolNames = [...new Set([...declaredNames, ...nestedOnlyNames])];
-		this.agent.state.tools = this._resolveActiveTools(toolNames);
-		this._rebuildSystemPrompt(toolNames);
+		this.setActiveToolsByName((current.toolsAdded ?? []).map((tool) => tool.name));
 	}
 
 	// =========================================================================
@@ -3172,7 +3186,11 @@ export class AgentSession {
 	}
 
 	private _refreshToolRegistry(options?: { activeToolNames?: string[]; includeAllExtensionTools?: boolean }): void {
-		const previousRegistryNames = new Set(this._toolRegistry.keys());
+		// Tools that were already activated on registration. A tool whose exposure changes to
+		// `direct` or `model-only` (for example from `hidden`) is activated like a new tool.
+		const previousActivatedOnRegistration = new Set(
+			[...this._toolRegistry.keys()].filter((name) => this._isActivatedOnRegistration(name)),
+		);
 		const previousActiveToolNames = this.getActiveToolNames();
 		const allowedToolNames = this._allowedToolNames;
 		const excludedToolNames = this._excludedToolNames;
@@ -3245,23 +3263,29 @@ export class AgentSession {
 
 		if (allowedToolNames) {
 			for (const toolName of this._toolRegistry.keys()) {
-				if (allowedToolNames.has(toolName)) {
+				if (allowedToolNames.has(toolName) && this._isActivatedOnRegistration(toolName)) {
 					nextActiveToolNames.push(toolName);
 				}
 			}
 		} else if (options?.includeAllExtensionTools) {
 			for (const tool of wrappedExtensionTools) {
-				nextActiveToolNames.push(tool.name);
+				if (this._isActivatedOnRegistration(tool.name)) nextActiveToolNames.push(tool.name);
 			}
 		} else if (!options?.activeToolNames) {
 			for (const toolName of this._toolRegistry.keys()) {
-				if (!previousRegistryNames.has(toolName)) {
+				if (!previousActivatedOnRegistration.has(toolName) && this._isActivatedOnRegistration(toolName)) {
 					nextActiveToolNames.push(toolName);
 				}
 			}
 		}
 
 		this.setActiveToolsByName([...new Set(nextActiveToolNames)]);
+	}
+
+	/** Whether registering the tool activates it, which declares it to the model. */
+	private _isActivatedOnRegistration(name: string): boolean {
+		const exposure = this._getToolExposure(name);
+		return exposure === "direct" || exposure === "model-only";
 	}
 
 	private _buildRuntime(options: {

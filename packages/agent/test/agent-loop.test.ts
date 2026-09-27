@@ -2284,28 +2284,33 @@ describe("nested tool calls", () => {
 	});
 });
 
-describe("nestedOnly tools", () => {
-	it("hides nested-only tools from the model but lets other tools call them", async () => {
+describe("nestedTools", () => {
+	it("declares only tools and resolves nested calls against nestedTools", async () => {
 		const schema = Type.Object({});
 		const hidden: AgentTool<typeof schema> = {
 			name: "hidden",
 			label: "Hidden",
 			description: "Only reachable from other tools",
 			parameters: schema,
-			nestedOnly: true,
 			async execute() {
 				return { content: [{ type: "text", text: "secret" }], details: {} };
 			},
 		};
 		let nestedText = "";
+		let selfCallError = "";
+		let nestedToolNames: string[] = [];
 		const runner: AgentTool<typeof schema> = {
 			name: "runner",
 			label: "Runner",
 			description: "Runs other tools",
 			parameters: schema,
 			async execute(_id, _params, _signal, _onUpdate, context) {
+				nestedToolNames = context?.tools.map((tool) => tool.name) ?? [];
 				const outcome = await context?.executeTool("hidden", {});
 				nestedText = outcome?.result.content[0]?.type === "text" ? outcome.result.content[0].text : "";
+				// Declared but not in nestedTools, so not callable from other tools.
+				const self = await context?.executeTool("runner", {});
+				selfCallError = self?.result.content[0]?.type === "text" ? self.result.content[0].text : "";
 				return { content: [], details: {} };
 			},
 		};
@@ -2337,7 +2342,7 @@ describe("nestedOnly tools", () => {
 		const events: AgentEvent[] = [];
 		const stream = agentLoop(
 			[createUserMessage("go")],
-			{ messages: [], tools: [hidden, runner] },
+			{ messages: [], tools: [runner], nestedTools: [hidden] },
 			{ model: createModel(), convertToLlm: identityConverter },
 			undefined,
 			streamFn,
@@ -2346,6 +2351,8 @@ describe("nestedOnly tools", () => {
 
 		expect(declaredTools[0]).toEqual(["runner"]);
 		expect(nestedText).toBe("secret");
+		expect(nestedToolNames).toEqual(["hidden"]);
+		expect(selfCallError).toBe("Tool runner not found");
 		const directEnd = events.find(
 			(event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
 				event.type === "tool_execution_end" && event.toolCallId === "direct",

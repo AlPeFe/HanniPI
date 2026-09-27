@@ -17,6 +17,9 @@
  * ```
  *
  * HTTP servers without an `Authorization` header use OAuth when they answer 401 (`/mcp login`).
+ *
+ * The top-level `autoEnableCodemode` (default true) activates the codemode tool when a server
+ * whose tools are only reachable from codemode connects. A project value overrides the global one.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -24,10 +27,15 @@ import { join } from "node:path";
 import { CONFIG_DIR_NAME } from "../../config.ts";
 
 /**
- * - `codemode`: tools are only callable from codemode scripts and are not declared to the model.
+ * - `codemode`: tools are callable from codemode scripts and listed in its description, but not
+ *   declared to the model.
+ * - `deferred`: like `codemode`, but not listed in the codemode description.
  * - `direct`: tools are declared to the model like any other tool (and callable from codemode).
+ * - `hidden`: tools are registered but unreachable.
  */
-export type McpExposure = "codemode" | "direct";
+export type McpExposure = "codemode" | "deferred" | "direct" | "hidden";
+
+const MCP_EXPOSURES: readonly string[] = ["codemode", "deferred", "direct", "hidden"] satisfies McpExposure[];
 
 interface McpServerConfigBase {
 	/** Default: `codemode`. */
@@ -77,6 +85,8 @@ export interface McpServerEntry {
 
 export interface LoadedMcpConfig {
 	servers: McpServerEntry[];
+	/** Activate the codemode tool when tools only reachable from it connect. Default: true. */
+	autoEnableCodemode?: boolean;
 	errors: string[];
 }
 
@@ -108,8 +118,8 @@ function validateServer(name: string, value: unknown): McpServerConfig | string 
 	if (!SERVER_NAME.test(name)) return `invalid server name "${name}" (use letters, digits, "_" and "-")`;
 	if (!isRecord(value)) return `server "${name}" must be an object`;
 	const { type, exposure, enabled, timeout } = value;
-	if (exposure !== undefined && exposure !== "codemode" && exposure !== "direct") {
-		return `server "${name}": exposure must be "codemode" or "direct"`;
+	if (exposure !== undefined && (typeof exposure !== "string" || !MCP_EXPOSURES.includes(exposure))) {
+		return `server "${name}": exposure must be one of ${MCP_EXPOSURES.map((value) => `"${value}"`).join(", ")}`;
 	}
 	if (enabled !== undefined && typeof enabled !== "boolean") return `server "${name}": enabled must be a boolean`;
 	if (timeout !== undefined && (typeof timeout !== "number" || !(timeout > 0))) {
@@ -143,7 +153,14 @@ function validateServer(name: string, value: unknown): McpServerConfig | string 
 	return `server "${name}" needs either "command" (stdio) or "url" (streamable HTTP)`;
 }
 
-function readConfigFile(path: string, servers: Map<string, McpServerEntry>, errors: string[]): void {
+interface McpConfigState {
+	servers: Map<string, McpServerEntry>;
+	autoEnableCodemode?: boolean;
+	errors: string[];
+}
+
+function readConfigFile(path: string, state: McpConfigState): void {
+	const { servers, errors } = state;
 	if (!existsSync(path)) return;
 	let parsed: unknown;
 	try {
@@ -156,6 +173,8 @@ function readConfigFile(path: string, servers: Map<string, McpServerEntry>, erro
 		errors.push(`${path}: expected an object with an "mcpServers" object`);
 		return;
 	}
+	if (typeof parsed.autoEnableCodemode === "boolean") state.autoEnableCodemode = parsed.autoEnableCodemode;
+	else if (parsed.autoEnableCodemode !== undefined) errors.push(`${path}: autoEnableCodemode must be a boolean`);
 	for (const [name, value] of Object.entries(parsed.mcpServers ?? {})) {
 		const config = validateServer(name, value);
 		if (typeof config === "string") {
@@ -168,9 +187,12 @@ function readConfigFile(path: string, servers: Map<string, McpServerEntry>, erro
 
 /** Load global and (when trusted) project MCP configuration. Disabled servers are omitted. */
 export function loadMcpConfig(options: { agentDir: string; cwd: string; projectTrusted: boolean }): LoadedMcpConfig {
-	const servers = new Map<string, McpServerEntry>();
-	const errors: string[] = [];
-	readConfigFile(join(options.agentDir, "mcp.json"), servers, errors);
-	if (options.projectTrusted) readConfigFile(join(options.cwd, CONFIG_DIR_NAME, "mcp.json"), servers, errors);
-	return { servers: [...servers.values()].filter((entry) => entry.config.enabled !== false), errors };
+	const state: McpConfigState = { servers: new Map(), errors: [] };
+	readConfigFile(join(options.agentDir, "mcp.json"), state);
+	if (options.projectTrusted) readConfigFile(join(options.cwd, CONFIG_DIR_NAME, "mcp.json"), state);
+	return {
+		servers: [...state.servers.values()].filter((entry) => entry.config.enabled !== false),
+		...(state.autoEnableCodemode === undefined ? {} : { autoEnableCodemode: state.autoEnableCodemode }),
+		errors: state.errors,
+	};
 }

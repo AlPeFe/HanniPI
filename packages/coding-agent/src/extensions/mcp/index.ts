@@ -4,7 +4,9 @@
  * Connects the servers from `mcp.json` when a session starts and registers their tools as
  * `mcp__<server>__<tool>`. By default (`"exposure": "codemode"`) the tools are only callable from
  * codemode scripts, which keeps large MCP tool lists out of the model's tool declarations; the
- * codemode tool is activated for that. `"exposure": "direct"` declares them to the model as well.
+ * codemode tool is activated for that unless `autoEnableCodemode` is false. `"exposure": "direct"`
+ * declares them to the model as well, `"deferred"` leaves them out of the codemode description, and
+ * `"hidden"` makes them unreachable.
  *
  * Every call runs through pi's tool pipeline, so `tool_call`/`tool_result` hooks and permission
  * extensions apply to MCP tools the same way they do to built-in tools.
@@ -15,12 +17,14 @@
 
 import { resolve } from "node:path";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
+import type { TSchema } from "typebox";
 import { getAgentDir } from "../../config.ts";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
 	ExtensionFactory,
+	ToolDefinition,
 } from "../../core/extensions/types.ts";
 import { CODEMODE_TOOL_NAME } from "../../core/tools/codemode.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
@@ -29,7 +33,7 @@ import type { McpOAuthCredentialStore } from "./oauth.ts";
 import { loadMcpRuntime } from "./runtime.lazy.ts";
 import type * as McpRuntime from "./runtime.ts";
 import type { McpServerConnection, McpTransportFactory } from "./runtime.ts";
-import { createMcpToolDefinition, createMcpToolName } from "./tools.ts";
+import { createMcpToolDefinition, createMcpToolName, type McpToolDetails } from "./tools.ts";
 
 export type { McpTransportFactory } from "./runtime.ts";
 
@@ -71,6 +75,9 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 	return (pi: ExtensionAPI) => {
 		let connections: McpServerConnection[] = [];
 		let configErrors: string[] = [];
+		let autoEnableCodemode = true;
+		/** Whether the "codemode tools unreachable" warning was shown since the session started. */
+		let warnedUnreachable = false;
 		let pending: Promise<unknown> | undefined;
 		/** Bumped on every session start and shutdown so a runtime load that resolves late is dropped. */
 		let generation = 0;
@@ -86,8 +93,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		const toolOwners = new Map<string, string>();
 		/** Tool names currently offered by each server. */
 		const serverTools = new Map<string, Set<string>>();
-		/** Tools deactivated because their server stopped offering them. */
-		const withdrawn = new Set<string>();
+		/** Last definition registered under each tool name, to re-register withdrawn tools as hidden. */
+		const definitions = new Map<string, ToolDefinition<TSchema, McpToolDetails>>();
 
 		const registerTools = (connection: McpServerConnection) => {
 			const { name: server, config } = connection.entry;
@@ -102,44 +109,46 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				});
 				toolOwners.set(name, owner);
 				current.add(name);
-				pi.registerTool(
-					createMcpToolDefinition({
-						server,
-						tool,
-						name,
-						exposure,
-						timeoutMs: connection.timeoutMs,
-						getClient: async () => connection,
-					}),
-				);
+				const definition = createMcpToolDefinition({
+					server,
+					tool,
+					name,
+					exposure,
+					timeoutMs: connection.timeoutMs,
+					getClient: async () => connection,
+				});
+				definitions.set(name, definition);
+				pi.registerTool(definition);
 			}
 			serverTools.set(server, current);
-			// Registering only activates new names: deactivate tools the server dropped (tools cannot be
-			// unregistered) and reactivate ones it offers again.
-			const removed = [...previous].filter((name) => !current.has(name));
-			const restored = [...current].filter((name) => withdrawn.has(name));
-			if (removed.length === 0 && restored.length === 0) return;
-			for (const name of removed) withdrawn.add(name);
-			for (const name of restored) withdrawn.delete(name);
-			const active = pi.getActiveTools().filter((name) => !removed.includes(name));
-			pi.setActiveTools([...new Set([...active, ...restored])]);
+			// Tools cannot be unregistered, so tools the server dropped are re-registered as hidden. When
+			// the server offers them again they are registered with their configured exposure above.
+			for (const name of previous) {
+				const definition = definitions.get(name);
+				if (!current.has(name) && definition) pi.registerTool({ ...definition, exposure: "hidden" });
+			}
 		};
 
 		/** Codemode-exposed tools are unreachable without the codemode tool, so turn it on. */
 		const ensureCodemodeActive = (ctx: ExtensionContext) => {
-			const needsCodemode = connections.some(
-				(connection) =>
-					connection.state === "connected" && (connection.entry.config.exposure ?? "codemode") === "codemode",
-			);
+			const needsCodemode = connections.some((connection) => {
+				const exposure = connection.entry.config.exposure ?? "codemode";
+				return connection.state === "connected" && (exposure === "codemode" || exposure === "deferred");
+			});
 			if (!needsCodemode || pi.getActiveTools().includes(CODEMODE_TOOL_NAME)) return;
-			if (!pi.getAllTools().some((tool) => tool.name === CODEMODE_TOOL_NAME)) {
-				ctx.ui.notify(
-					'MCP tools use "exposure": "codemode" but the codemode tool is not available; they cannot be called.',
-					"warning",
-				);
+			const available = pi.getAllTools().some((tool) => tool.name === CODEMODE_TOOL_NAME);
+			if (available && autoEnableCodemode) {
+				pi.setActiveTools([...pi.getActiveTools(), CODEMODE_TOOL_NAME]);
 				return;
 			}
-			pi.setActiveTools([...pi.getActiveTools(), CODEMODE_TOOL_NAME]);
+			if (warnedUnreachable) return;
+			warnedUnreachable = true;
+			ctx.ui.notify(
+				available
+					? "MCP tools are only reachable from codemode, but codemode is inactive and autoEnableCodemode is false; they cannot be called."
+					: "MCP tools are only reachable from codemode, but the codemode tool is not available; they cannot be called.",
+				"warning",
+			);
 		};
 
 		/** Resolve the server for `/mcp login|logout`, asking when the name is omitted and ambiguous. */
@@ -232,6 +241,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		pi.on("session_start", (_event, ctx) => {
 			const loaded = (options.loadConfig ?? defaultLoadConfig)(ctx);
 			configErrors = loaded.errors;
+			autoEnableCodemode = loaded.autoEnableCodemode ?? true;
+			warnedUnreachable = false;
 			for (const error of configErrors) ctx.ui.notify(`MCP config: ${error}`, "warning");
 			const current = ++generation;
 			connections = [];

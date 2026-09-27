@@ -1,5 +1,6 @@
 /**
- * The `codemode` tool: the model writes JavaScript that calls the other active tools.
+ * The `codemode` tool: the model writes JavaScript that calls other tools. Scripts can call the
+ * agent loop's nested tools: active `direct` tools and every `codemode` or `deferred` tool.
  *
  * Nested calls run through the agent loop's tool pipeline (`ctx.executeTool`), so validation,
  * `tool_call`/`tool_result` hooks, and permission checks apply exactly as for direct calls. Only
@@ -236,6 +237,8 @@ export function createCodemodeToolDefinition(
 		promptSnippet: codemodeToolSystemPromptContribution.snippet,
 		promptGuidelines: [...codemodeToolSystemPromptContribution.guidelines],
 		parameters: codemodeSchema,
+		// Scripts must not start other scripts.
+		exposure: "model-only",
 		// Capable models write the script as raw text instead of a JSON-escaped string.
 		constrainedSampling: { type: "grammar", variants: { openai_lark: CODEMODE_SOURCE_GRAMMAR } },
 		// The sandbox (worker, QuickJS wasm) loads on the first call, not at startup.

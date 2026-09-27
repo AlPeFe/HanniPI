@@ -66,6 +66,32 @@ describe("MCP config", () => {
 		const untrusted = loadMcpConfig({ ...paths, projectTrusted: false });
 		expect(untrusted.servers.find((server) => server.name === "shared")?.config).toEqual({ command: "global-cmd" });
 	});
+
+	it("validates exposure and reads autoEnableCodemode with project precedence", () => {
+		const paths = setup(
+			{
+				autoEnableCodemode: false,
+				mcpServers: {
+					later: { command: "x", exposure: "deferred" },
+					off: { command: "x", exposure: "hidden" },
+					wrong: { command: "x", exposure: "model-only" },
+				},
+			},
+			{ autoEnableCodemode: "yes", mcpServers: {} },
+		);
+
+		const untrusted = loadMcpConfig({ ...paths, projectTrusted: false });
+		expect(untrusted.autoEnableCodemode).toBe(false);
+		expect(untrusted.servers.map((server) => [server.name, server.config.exposure])).toEqual([
+			["later", "deferred"],
+			["off", "hidden"],
+		]);
+		expect(untrusted.errors).toEqual([expect.stringContaining('server "wrong": exposure must be one of')]);
+
+		const trusted = loadMcpConfig({ ...paths, projectTrusted: true });
+		expect(trusted.autoEnableCodemode).toBe(false);
+		expect(trusted.errors).toContainEqual(expect.stringContaining("autoEnableCodemode must be a boolean"));
+	});
 });
 
 describe("MCP tools", () => {

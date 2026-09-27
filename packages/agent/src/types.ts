@@ -408,6 +408,12 @@ export interface AgentState {
 	set tools(tools: AgentTool<any>[]);
 	get tools(): AgentTool<any>[];
 	/**
+	 * Tools callable from other tools through `executeTool`, see {@link AgentContext.nestedTools}.
+	 * `undefined` means the same as `tools`. Assigning a new array copies the top-level array.
+	 */
+	set nestedTools(tools: AgentTool<any>[] | undefined);
+	get nestedTools(): AgentTool<any>[] | undefined;
+	/**
 	 * Conversation transcript. Assigning a new array copies the top-level array.
 	 *
 	 * System messages in the transcript carry the prompt and tool declarations.
@@ -467,7 +473,7 @@ export interface AgentNestedToolCallOptions {
 export interface AgentToolContext {
 	/** The call being executed. */
 	toolCall: AgentToolCall;
-	/** Tools executable in this run, including the calling tool. */
+	/** Tools callable through {@link executeTool}: the run's `nestedTools`, or its `tools` when unset. */
 	tools: readonly AgentTool<any>[];
 	/**
 	 * Run another tool through the same pipeline as a model-issued call: argument preparation,
@@ -518,12 +524,6 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	/** Recovery policy for an effect whose durable intent exists but whose outcome is unknown. */
 	replay?: "never" | "safe";
 	/**
-	 * Only callable by other tools through {@link AgentToolContext.executeTool}. The tool is not
-	 * declared to the model, and a model-issued call to it fails as an unknown tool. Use it for
-	 * tools that should only be reached through an orchestrating tool such as codemode.
-	 */
-	nestedOnly?: boolean;
-	/**
 	 * Per-tool execution mode override.
 	 * - "sequential": this tool must execute one at a time with other tool calls.
 	 * - "parallel": this tool can execute concurrently with other tool calls.
@@ -537,8 +537,14 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 export interface AgentContext {
 	/** Transcript visible to the model. */
 	messages: AgentMessage[];
-	/** Tools available for execution in this run. Tools marked `nestedOnly` are not declared to the model. */
+	/** Tools declared to the model. Model-issued calls resolve against this list. */
 	tools?: AgentTool<any>[];
+	/**
+	 * Tools callable through {@link AgentToolContext.executeTool}, for orchestrating tools such as
+	 * codemode. May include tools that are not declared to the model and leave out declared ones.
+	 * Defaults to `tools`.
+	 */
+	nestedTools?: AgentTool<any>[];
 }
 
 /**

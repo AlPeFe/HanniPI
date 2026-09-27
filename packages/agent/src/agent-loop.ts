@@ -326,7 +326,7 @@ async function runLoop(
  * Declare tool loadout changes to the model.
  *
  * `context.tools` is what the runtime can execute; the transcript's system messages declare
- * what the model may call, which is every tool except those marked `nestedOnly`. Before each
+ * what the model may call, which is exactly `context.tools`. Before each
  * request the difference becomes `toolsAdded` and `toolsRemoved` on a system message. When a
  * pending system message exists, its tool fields are treated as intent and replaced with the
  * delta between the committed transcript and the declared set, so replay always yields exactly
@@ -349,7 +349,7 @@ function declareToolChanges(context: AgentContext, pendingMessages: AgentMessage
 		: pendingMessages;
 	const changes = getToolStateChanges(
 		getCurrentTools([...context.messages, ...baseline]),
-		(context.tools ?? []).filter((tool) => !tool.nestedOnly).map(toToolDeclaration),
+		(context.tools ?? []).map(toToolDeclaration),
 	);
 	const unchanged = changes.toolsAdded.length === 0 && changes.toolsRemoved.length === 0;
 
@@ -735,8 +735,10 @@ async function prepareToolCall(
 	signal: AbortSignal | undefined,
 	parentToolCall?: AgentToolCall,
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
-	const tool = currentContext.tools?.find((t) => t.name === toolCall.name);
-	if (!tool || (tool.nestedOnly && !parentToolCall)) {
+	const tool = (parentToolCall ? getNestedTools(currentContext) : (currentContext.tools ?? [])).find(
+		(t) => t.name === toolCall.name,
+	);
+	if (!tool) {
 		return {
 			kind: "immediate",
 			result: createErrorToolResult(`Tool ${toolCall.name} not found`),
@@ -799,6 +801,11 @@ async function prepareToolCall(
 	}
 }
 
+/** Tools reachable through `executeTool`. */
+function getNestedTools(context: AgentContext): AgentTool<any>[] {
+	return context.nestedTools ?? context.tools ?? [];
+}
+
 function emitToolExecutionUpdate(toolCall: AgentToolCall, emit: AgentEventSink): ToolUpdateSink {
 	return (partialResult) =>
 		emit({
@@ -827,7 +834,7 @@ function createToolContext(
 	let nextNestedId = 1;
 	return {
 		toolCall,
-		tools: currentContext.tools ?? [],
+		tools: getNestedTools(currentContext),
 		executeTool: (name, args, options) =>
 			executeNestedToolCall(
 				currentContext,
@@ -860,7 +867,7 @@ async function executeNestedToolCall(
 	const exclusive =
 		nestedQueue &&
 		(config.toolExecution === "sequential" ||
-			currentContext.tools?.find((t) => t.name === toolCall.name)?.executionMode === "sequential");
+			getNestedTools(currentContext).find((t) => t.name === toolCall.name)?.executionMode === "sequential");
 	let release: (() => void) | undefined;
 	if (exclusive) {
 		const previous = nestedQueue.tail;
