@@ -35,10 +35,10 @@ function render(result: AgentToolResult<CodemodeToolDetails | undefined>, isErro
 		.trim();
 }
 
-describe("exec renderer", () => {
+describe("codemode renderer", () => {
 	beforeAll(() => initTheme("dark"));
 
-	it("hides the Codex-style header and shows the output", () => {
+	it("hides the script header and shows the output", () => {
 		const text = render({
 			content: [
 				{ type: "text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
@@ -49,11 +49,14 @@ describe("exec renderer", () => {
 		expect(text).toBe('✓ read {"path":"a"} 5ms\n\nhello');
 	});
 
-	it("shows results without a header, such as rejected pragmas", () => {
+	it("shows results without a header, such as rejected options", () => {
 		const text = render(
-			{ content: [{ type: "text", text: "exec pragma must be followed by JavaScript source" }], details: undefined },
+			{
+				content: [{ type: "text", text: "The @options line must be followed by JavaScript source" }],
+				details: undefined,
+			},
 			true,
 		);
-		expect(text).toBe("exec pragma must be followed by JavaScript source");
+		expect(text).toBe("The @options line must be followed by JavaScript source");
 	});
 });

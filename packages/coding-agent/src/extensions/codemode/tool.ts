@@ -1,10 +1,8 @@
 /**
- * The `exec` tool (codemode): the model writes JavaScript that calls other tools. The surface
- * follows the `exec` tool of OpenAI Codex, which models are trained on, so scripts written for
- * Codex work unchanged: `tools`, `ALL_TOOLS`, `text()`, `image()`, `exit()`, `store()`/`load()`,
- * the `// @exec:` pragma, and the "Script completed" result header. pi additions are strict
- * supersets: `return <value>` appends the value like `text()`, `console.*` appends text, the pragma
- * accepts `timeout_ms`, and `models.*` exposes the model catalog and classifiers.
+ * The `codemode` tool: the model writes JavaScript that calls other tools. Scripts use `tools`,
+ * `ALL_TOOLS`, `text()`, `image()`, `exit()`, `store()`/`load()`, `console.*`, and `return <value>`,
+ * may start with a `// @options:` line, and reach the model catalog and classifiers through
+ * `models.*`. Results start with a "Script completed" or "Script failed" header.
  *
  * Scripts can call the agent loop's nested tools: active `direct` tools and every `codemode` or
  * `deferred` tool. Nested calls run through the agent loop's tool pipeline (`ctx.executeTool`), so
@@ -47,7 +45,7 @@ import { wrapToolDefinition } from "../../core/tools/tool-definition-wrapper.ts"
 import { loadCodemodeExecutor } from "./execute.lazy.ts";
 import { codemodeRenderers } from "./renderer.ts";
 
-export const CODEMODE_TOOL_NAME = "exec";
+export const CODEMODE_TOOL_NAME = "codemode";
 
 /** Custom entry type holding one script's `store()` writes: {@link CodemodeStoreEntryData}. */
 export const CODEMODE_STORE_ENTRY_TYPE = "codemode-store";
@@ -87,15 +85,15 @@ const TEXT_OUTPUT_SCHEMA: CodemodeJsonSchema = { type: "string" };
 export const codemodeSchema = Type.Object({
 	code: Type.String({
 		description:
-			'Raw JavaScript source. Top-level await and return work. May start with a `// @exec: {"max_output_tokens": 1000}` pragma line.',
+			'Raw JavaScript source. Top-level await and return work. May start with a `// @options: {"max_output_tokens": 1000}` line.',
 	}),
 });
 
 export type CodemodeToolInput = Static<typeof codemodeSchema>;
 
 /**
- * Whether a registered tool is this package's `exec` tool rather than another extension's tool with
- * the same name. Compares the parameter schema, which the definition passes through by reference.
+ * Whether a registered tool is this package's `codemode` tool rather than another extension's tool
+ * with the same name. Compares the parameter schema, which the definition passes through by reference.
  */
 export function isCodemodeTool(tool: Pick<ToolInfo, "name" | "parameters">): boolean {
 	return tool.name === CODEMODE_TOOL_NAME && tool.parameters === codemodeSchema;
@@ -104,7 +102,7 @@ export function isCodemodeTool(tool: Pick<ToolInfo, "name" | "parameters">): boo
 export type CodemodeNestedCallStatus = "running" | "ok" | "error" | "cancelled";
 
 export interface CodemodeNestedCall {
-	/** Tool call id of the nested call, `<exec call id>/<n>`. */
+	/** Tool call id of the nested call, `<codemode call id>/<n>`. */
 	id: string;
 	name: string;
 	/** Compact JSON of the arguments, truncated for display. */
@@ -124,7 +122,7 @@ export interface CodemodeToolDetails {
 export const codemodeToolSystemPromptContribution = {
 	snippet: "Run JavaScript that calls other tools (chains, loops, Promise.all, filtering large results)",
 	guidelines: [
-		"Use exec to batch or chain several tool calls, or to filter large tool output down to what you need, instead of issuing many individual tool calls. Batch independent calls in one exec using await Promise.allSettled([...]).",
+		"Use codemode to batch or chain several tool calls, or to filter large tool output down to what you need, instead of issuing many individual tool calls. Batch independent calls in one codemode call using await Promise.allSettled([...]).",
 	],
 } as const;
 
@@ -136,8 +134,8 @@ const DESCRIPTION_INTRO = `Run JavaScript code to orchestrate/compose tool calls
 - A nested tool call that fails, is blocked, or gets invalid arguments rejects with an Error carrying the tool's error text.
 - Runs raw JavaScript -- no Node, no file system, no network access, no timers.
 - Accepts raw JavaScript source text, not JSON, quoted strings, or markdown code fences.
-- You may optionally start the tool input with a first-line pragma like \`// @exec: {"max_output_tokens": 1000, "timeout_ms": 60000}\`.
-- \`max_output_tokens\` sets the token budget for direct \`exec\` results. Defaults to 10000 tokens.
+- You may optionally start the tool input with a first line like \`// @options: {"max_output_tokens": 1000, "timeout_ms": 60000}\`.
+- \`max_output_tokens\` sets the token budget for the script's output. Defaults to 10000 tokens.
 - \`timeout_ms\` sets a hard deadline for the whole script. By default there is none.
 - When the JS code is fully evaluated, calls that are still running are cancelled and unawaited promises are silently discarded.
 - Tool calls are real and have side effects. If the script fails partway, earlier calls are not undone.
@@ -147,7 +145,7 @@ const DESCRIPTION_INTRO = `Run JavaScript code to orchestrate/compose tool calls
 - \`exit()\`: Immediately ends the current script successfully (like an early return from the top level).
 - \`text(value: string | number | boolean | undefined | null)\`: Appends a text item. Non-string values are stringified with \`JSON.stringify(...)\` when possible.
 - \`image(imageUrlOrItem: string | { image_url: string } | ImageContent)\`: Appends an image item. \`image_url\` should be a base64-encoded \`data:\` URL. To forward an MCP tool image, pass an individual \`ImageContent\` block from \`result.content\`, for example \`image(result.content[0])\`.
-- \`store(key: string, value: any)\`: stores a serializable value under a string key for later \`exec\` calls in the same session. Storing \`undefined\` deletes the key. Writes are kept only if the script succeeds.
+- \`store(key: string, value: any)\`: stores a serializable value under a string key for later \`codemode\` calls in the same session. Storing \`undefined\` deletes the key. Writes are kept only if the script succeeds.
 - \`load(key: string)\`: returns the stored value for a string key, or \`undefined\` if it is missing.
 - \`ALL_TOOLS\`: metadata for the enabled nested tools as \`{ name, description }\` entries.
 - \`searchTools(query: string, options?: { limit?: number; namespace?: string })\`: resolves to the nested tools that best match the query (BM25, default limit 8), as \`{ name, description }\` entries like \`ALL_TOOLS\`.
@@ -232,7 +230,7 @@ export function toCodemodeDeclaration(tool: AgentTool<any>): Omit<CodemodeTool, 
 	};
 }
 
-/** Tools a script may call: every given tool except the exec tool itself. */
+/** Tools a script may call: every given tool except the codemode tool itself. */
 export function getCodemodeCallableTools(tools: readonly AgentTool<any>[]): AgentTool<any>[] {
 	return tools.filter((tool) => tool.name !== CODEMODE_TOOL_NAME);
 }
@@ -251,7 +249,7 @@ export interface CodemodeDescriptionOptions {
 	inlineBudget?: number;
 }
 
-/** `### \`id\` (\`raw name\`)` followed by the tool's description and declaration, like Codex. */
+/** `### \`id\` (\`raw name\`)` followed by the tool's description and declaration. */
 function renderToolSection(declaration: Omit<CodemodeTool, "execute">): string {
 	const id = toCodemodeIdentifier(declaration.name);
 	const heading = id === declaration.name ? `### \`${id}\`` : `### \`${id}\` (\`${declaration.name}\`)`;
@@ -297,11 +295,10 @@ function selectCatalog(groups: readonly CatalogGroup[], budget: number | undefin
 }
 
 /**
- * Model-facing description in the layout of Codex's code-mode-only `exec` description: the helper
- * list, guidance for omitted tools, the shared MCP types when MCP tools are callable, and one
- * section per tool, grouped by namespace. Tool sections are limited to `inlineBudget`; every
- * namespace is listed with its tool count either way, and the listing states whether it is
- * complete. The `models` API is a pi addition.
+ * Model-facing description: the helper list, guidance for omitted tools, the shared MCP types when
+ * MCP tools are callable, the `models` API, and one section per tool, grouped by namespace. Tool
+ * sections are limited to `inlineBudget`; every namespace is listed with its tool count either
+ * way, and the listing states whether it is complete.
  */
 export function createCodemodeDescription(
 	tools: readonly AgentTool<any>[],
@@ -367,15 +364,14 @@ export function createCodemodeDescription(
 }
 
 /**
- * How the exec tool presents tools that are both declared and callable from scripts, like Codex's
- * tool modes:
- * - `on`: their descriptions get the exec declaration appended, and the exec description lists
- *   only the callable tools without `direct` exposure.
- * - `only`: the exec description lists every callable tool, and requests leave out the
+ * How the codemode tool presents tools that are both declared and callable from scripts:
+ * - `on`: their descriptions get the codemode declaration appended, and the codemode description
+ *   lists only the callable tools without `direct` exposure.
+ * - `only`: the codemode description lists every callable tool, and requests leave out the
  *   declarations of active `direct` tools.
  *
- * Listing by exposure, not by the active set, keeps the exec description unchanged when
- * `tool_search` loads a tool, so loads do not redeclare exec.
+ * Listing by exposure, not by the active set, keeps the codemode description unchanged when
+ * `tool_search` loads a tool, so loads do not redeclare codemode.
  */
 function prepareCodemodeLoadout(loadout: ToolLoadout, options: CodemodeToolOptions): ToolLoadoutChanges {
 	const mode = options.getMode?.() ?? "on";
@@ -437,7 +433,7 @@ export function createCodemodeToolDefinition(
 }
 
 /**
- * Create the exec tool as an AgentTool. The description lists the given tools; the script can
+ * Create the codemode tool as an AgentTool. The description lists the given tools; the script can
  * call whatever tools the agent loop provides at execution time.
  */
 export function createCodemodeTool(

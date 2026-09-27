@@ -87,10 +87,10 @@ export interface WarningSettings {
 }
 
 /**
- * How the exec tool presents tools while it is active, like Codex's tool modes.
- * - `on`: declared tools that scripts can call get their exec declaration appended to their
- *   description; the exec description lists only the tools without `direct` exposure.
- * - `only`: the exec description lists every tool scripts can call, and active `direct` tools are
+ * How the codemode tool presents tools while it is active.
+ * - `on`: declared tools that scripts can call get their codemode declaration appended to their
+ *   description; the codemode description lists only the tools without `direct` exposure.
+ * - `only`: the codemode description lists every tool scripts can call, and active `direct` tools are
  *   not declared to the model.
  */
 export type CodemodeMode = "on" | "only";
@@ -98,7 +98,7 @@ export type CodemodeMode = "on" | "only";
 export interface CodemodeSettings {
 	/** Default: `on`. */
 	mode?: CodemodeMode;
-	/** Estimated tokens (characters / 4) the exec description may spend on tool declarations. Default: 3000. */
+	/** Estimated tokens (characters / 4) the codemode description may spend on tool declarations. Default: 3000. */
 	inlineBudget?: number;
 }
 

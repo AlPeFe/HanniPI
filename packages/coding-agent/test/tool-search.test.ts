@@ -70,7 +70,7 @@ describe("Bm25Ranker", () => {
 });
 
 describe("tool_search description", () => {
-	it("lists the sources like Codex", () => {
+	it("lists the sources", () => {
 		expect(
 			createToolSearchDescription([{ name: "mcp__docs", description: "Docs server\nmore" }, { name: "mcp__x" }]),
 		).toBe(
@@ -80,7 +80,7 @@ describe("tool_search description", () => {
 	});
 });
 
-describe("exec description catalog", () => {
+describe("codemode description catalog", () => {
 	const plain = tool("read_notes", "Read notes.");
 	const github = ["a", "b", "c"].map((suffix) => tool(`mcp__github__${suffix}`, `GitHub ${suffix}.`));
 	const docs = [tool("mcp__docs__search", "Search docs."), tool("mcp__docs__long", "Long ".repeat(200))];
@@ -99,8 +99,8 @@ describe("exec description catalog", () => {
 	});
 
 	it("fills the budget round-robin, cheapest first, and says what is missing", () => {
-		// Each small section costs about 40 tokens: one tool per group, then one more.
-		const description = createCodemodeDescription(all, { namespaces, inlineBudget: 160 });
+		// Each small section costs about 42 tokens: one tool per group, then one more.
+		const description = createCodemodeDescription(all, { namespaces, inlineBudget: 170 });
 		expect(description).toContain("Nested tools: PARTIAL - 4 of 6 shown.");
 		expect(description).toContain("### `read_notes`");
 		expect(description).toContain("## mcp__docs (2 tools, 1 shown)");
@@ -109,7 +109,7 @@ describe("exec description catalog", () => {
 		expect(description).toContain("## mcp__github (3 tools, 2 shown)");
 		expect(description).toContain("To find one, call `await searchTools(query)`");
 		// Deterministic: the same input gives the same description.
-		expect(createCodemodeDescription(all, { namespaces, inlineBudget: 160 })).toBe(description);
+		expect(createCodemodeDescription(all, { namespaces, inlineBudget: 170 })).toBe(description);
 	});
 
 	it("never lists deferred tools and still counts them", () => {
@@ -127,6 +127,6 @@ describe("exec description catalog", () => {
 		const description = createCodemodeDescription(all, { namespaces, inlineBudget: 0 });
 		expect(description).toContain("Nested tools: PARTIAL - 0 of 6 shown.");
 		expect(description).toContain("## mcp__docs (2 tools, none shown)");
-		expect(description).not.toContain("exec tool declaration:");
+		expect(description).not.toContain("codemode tool declaration:");
 	});
 });

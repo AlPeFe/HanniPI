@@ -181,14 +181,14 @@ describe("AgentSession MCP OAuth", () => {
 	it("shares one refresh between concurrent calls and refreshes tokens that are about to expire", async () => {
 		const { harness, server, backend } = await setup("follow");
 		await harness.session.prompt("/mcp login issues");
-		harness.session.setActiveToolsByName([...harness.session.getActiveToolNames(), "exec"]);
+		harness.session.setActiveToolsByName([...harness.session.getActiveToolNames(), "codemode"]);
 
 		// The server rotates refresh tokens, so a second refresh with the same token would fail.
 		server.expireAccessTokens();
 		harness.setResponses([
 			fauxAssistantMessage(
 				[
-					fauxToolCall("exec", {
+					fauxToolCall("codemode", {
 						code: "const results = await Promise.all([1, 2, 3].map(() => tools.mcp__issues__whoami({})));\nreturn results.map((result) => result.content[0].text);",
 					}),
 				],
@@ -197,11 +197,11 @@ describe("AgentSession MCP OAuth", () => {
 			fauxAssistantMessage("done"),
 		]);
 		await harness.session.prompt("who am i, three times");
-		const exec = harness.session.messages.find(
-			(message): message is ToolResultMessage => message.role === "toolResult" && message.toolName === "exec",
+		const codemode = harness.session.messages.find(
+			(message): message is ToolResultMessage => message.role === "toolResult" && message.toolName === "codemode",
 		);
-		expect(exec?.isError).toBe(false);
-		expect(JSON.parse((exec?.content[1] as { text: string }).text)).toEqual([
+		expect(codemode?.isError).toBe(false);
+		expect(JSON.parse((codemode?.content[1] as { text: string }).text)).toEqual([
 			"token access-2",
 			"token access-2",
 			"token access-2",

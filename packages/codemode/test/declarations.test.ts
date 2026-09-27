@@ -39,7 +39,7 @@ describe("schemaToType", () => {
 		expect(schemaToType(false)).toBe("never");
 	});
 
-	it("renders objects on one line with sorted properties, like Codex", () => {
+	it("renders objects on one line with sorted properties", () => {
 		expect(
 			schemaToType({
 				type: "object",
@@ -55,7 +55,7 @@ describe("schemaToType", () => {
 		expect(schemaToType({ type: "object", properties: {}, additionalProperties: false })).toBe("{}");
 	});
 
-	it("puts property descriptions on comment lines, like Codex", () => {
+	it("puts property descriptions on comment lines", () => {
 		expect(
 			schemaToType({
 				type: "object",
@@ -123,7 +123,7 @@ describe("schemaToType", () => {
 });
 
 describe("tool declarations", () => {
-	it("renders Codex-style signatures with normalized identifiers", () => {
+	it("renders signatures with normalized identifiers", () => {
 		expect(
 			renderToolSignature({
 				name: "hidden-dynamic-tool",
@@ -173,7 +173,7 @@ describe("tool declarations", () => {
 
 	it("renders the per-tool sample", () => {
 		expect(renderToolSample({ name: "foo", description: "bar", inputSchema: { type: "string" } })).toBe(
-			"bar\n\nexec tool declaration:\n```ts\ndeclare const tools: { foo(args: string): Promise<unknown>; };\n```",
+			"bar\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { foo(args: string): Promise<unknown>; };\n```",
 		);
 	});
 });

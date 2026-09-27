@@ -6,7 +6,7 @@ import toolSearchExtension from "./tool-search/index.ts";
 
 export const builtInExtensions: InlineExtension[] = [
 	{ name: "llama.cpp", factory: llamaExtension, hidden: true },
-	// Replaceable: an extension that registers `exec`, `tool_search`, or `/mcp` (such as a third-party
+	// Replaceable: an extension that registers `codemode`, `tool_search`, or `/mcp` (such as a third-party
 	// MCP extension) takes over instead of running alongside the built-in one.
 	{ name: "codemode", factory: codemodeExtension, hidden: true, replaceable: true },
 	{ name: "tool-search", factory: toolSearchExtension, hidden: true, replaceable: true },

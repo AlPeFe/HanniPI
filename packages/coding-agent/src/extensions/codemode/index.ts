@@ -1,8 +1,8 @@
 /**
- * The `exec` tool (codemode) as an extension. The CLI loads it as a built-in extension; SDK users
+ * The `codemode` tool as an extension. The CLI loads it as a built-in extension; SDK users
  * add `createCodemodeExtension()` to their extension factories.
  *
- * `exec` is registered inactive. Activate it with `--tools`, the `defaultTools` setting, or
+ * `codemode` is registered inactive. Activate it with `--tools`, the `defaultTools` setting, or
  * `setActiveTools()`; the MCP extension activates it when MCP tools are only reachable from scripts.
  */
 

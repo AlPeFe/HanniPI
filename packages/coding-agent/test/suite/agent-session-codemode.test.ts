@@ -62,13 +62,13 @@ const screenshotTool: AgentTool = {
 
 function codemodeResult(harness: Harness): ToolResultMessage {
 	const result = harness.session.messages.find(
-		(message): message is ToolResultMessage => message.role === "toolResult" && message.toolName === "exec",
+		(message): message is ToolResultMessage => message.role === "toolResult" && message.toolName === "codemode",
 	);
-	if (!result) throw new Error("No exec tool result");
+	if (!result) throw new Error("No codemode tool result");
 	return result;
 }
 
-/** The output after the Codex-style header, which is checked on the way. */
+/** The output after the script header, which is checked on the way. */
 function resultText(message: ToolResultMessage): string {
 	const [header, ...items] = message.content;
 	expect(header).toEqual({
@@ -86,53 +86,53 @@ describe("AgentSession codemode tool", () => {
 	});
 
 	async function setup(extensionFactories?: HarnessOptions["extensionFactories"]) {
-		// Registered by an extension so they run with the session's tool context, next to the built-in exec.
+		// Registered by an extension so they run with the session's tool context, next to the built-in codemode.
 		const registerTools = (pi: ExtensionAPI) => {
 			for (const tool of [echoTool as AgentTool, statsTool, screenshotTool]) {
 				pi.registerTool(createToolDefinitionFromAgentTool(tool));
 			}
 		};
 		const harness = await createHarness({
-			initialActiveToolNames: ["exec"],
+			initialActiveToolNames: ["codemode"],
 			extensionFactories: [createCodemodeExtension(), registerTools, ...(extensionFactories ?? [])],
 		});
 		harnesses.push(harness);
 		return harness;
 	}
 
-	it("appends exec declarations to the declared tools in codemode.mode on, like Codex", async () => {
+	it("appends codemode declarations to the declared tools in codemode.mode on", async () => {
 		const harness = await setup();
 		const find = (name: string) => harness.session.agent.state.tools.find((tool) => tool.name === name);
 		expect(find("echo")?.description).toBe(
-			"Echo text back.\n\nSecond paragraph.\n\nexec tool declaration:\n```ts\ndeclare const tools: { echo(args: {\n  // Text to echo\n  text: string;\n}): Promise<string>; };\n```",
+			"Echo text back.\n\nSecond paragraph.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { echo(args: {\n  // Text to echo\n  text: string;\n}): Promise<string>; };\n```",
 		);
 		expect(find("stats")?.description).toContain(
 			"declare const tools: { stats(args: { [key: string]: unknown; }): Promise<{ files: number; names: Array<string>; }>; };",
 		);
-		const exec = find("exec")?.description ?? "";
-		expect(exec).toContain("- `image(imageUrlOrItem: string | { image_url: string } | ImageContent)`");
+		const codemode = find("codemode")?.description ?? "";
+		expect(codemode).toContain("- `image(imageUrlOrItem: string | { image_url: string } | ImageContent)`");
 		// Declared tools are not listed a second time.
-		expect(exec).not.toContain("### `echo`");
-		expect(exec).not.toContain("Nested tools:");
-		expect(exec).not.toContain("Shared MCP Types");
-		expect(exec).not.toMatch(/\bexec\(args/);
+		expect(codemode).not.toContain("### `echo`");
+		expect(codemode).not.toContain("Nested tools:");
+		expect(codemode).not.toContain("Shared MCP Types");
+		expect(codemode).not.toMatch(/\bexec\(args/);
 
 		harness.session.setActiveToolsByName(["echo"]);
 		expect(find("echo")?.description).toBe("Echo text back.\n\nSecond paragraph.");
 	});
 
-	it("lists the callable tools in the exec description in codemode.mode only", async () => {
+	it("lists the callable tools in the codemode description in codemode.mode only", async () => {
 		const harness = await setup();
 		harness.settingsManager.applyOverrides({ codemode: { mode: "only" } });
-		harness.session.setActiveToolsByName(["echo", "exec"]);
+		harness.session.setActiveToolsByName(["echo", "codemode"]);
 		const find = (name: string) => harness.session.agent.state.tools.find((tool) => tool.name === name);
 		expect(find("echo")?.description).toBe("Echo text back.\n\nSecond paragraph.");
-		const exec = find("exec")?.description ?? "";
-		expect(exec).toContain("Nested tools: COMPLETE list (1 tool).");
-		expect(exec).toContain(
-			"### `echo`\nEcho text back.\n\nSecond paragraph.\n\nexec tool declaration:\n```ts\ndeclare const tools: { echo(args: {",
+		const codemode = find("codemode")?.description ?? "";
+		expect(codemode).toContain("Nested tools: COMPLETE list (1 tool).");
+		expect(codemode).toContain(
+			"### `echo`\nEcho text back.\n\nSecond paragraph.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { echo(args: {",
 		);
-		expect(exec).not.toContain("stats(args");
+		expect(codemode).not.toContain("stats(args");
 	});
 
 	it("runs nested calls in parallel and returns only the script result", async () => {
@@ -140,7 +140,7 @@ describe("AgentSession codemode tool", () => {
 		harness.setResponses([
 			fauxAssistantMessage(
 				[
-					fauxToolCall("exec", {
+					fauxToolCall("codemode", {
 						code: `
 							const [a, b, stats] = await Promise.all([
 								tools.echo({ text: "one" }),
@@ -178,7 +178,7 @@ describe("AgentSession codemode tool", () => {
 		const started = harness
 			.eventsOfType("tool_execution_start")
 			.map((event) => `${event.toolName}:${event.parentToolCallId ? "nested" : "top"}`);
-		expect(started).toEqual(["exec:top", "echo:nested", "echo:nested", "stats:nested"]);
+		expect(started).toEqual(["codemode:top", "echo:nested", "echo:nested", "stats:nested"]);
 		const updates = harness.eventsOfType("tool_execution_update");
 		expect(updates.length).toBeGreaterThan(0);
 	});
@@ -212,7 +212,7 @@ describe("AgentSession codemode tool", () => {
 		harness.setResponses([
 			fauxAssistantMessage(
 				[
-					fauxToolCall("exec", {
+					fauxToolCall("codemode", {
 						code: `
 							let blocked;
 							try {
@@ -234,7 +234,7 @@ describe("AgentSession codemode tool", () => {
 
 		const result = codemodeResult(harness);
 		const parent = result.toolCallId;
-		expect(seen).toEqual(["exec:top", `echo:${parent}`, `stats:${parent}`]);
+		expect(seen).toEqual(["codemode:top", `echo:${parent}`, `stats:${parent}`]);
 		// Replacing content without replacing structured content drops the structured result.
 		expect(JSON.parse(resultText(result))).toEqual({
 			blocked: "echo of forbidden text is blocked",
@@ -243,12 +243,12 @@ describe("AgentSession codemode tool", () => {
 		const details = result.details as unknown as CodemodeToolDetails;
 		expect(details.calls.map((call) => call.status)).toEqual(["error", "ok"]);
 		expect(executions).toEqual([
-			"start exec:top",
+			"start codemode:top",
 			`start echo:${parent}`,
 			`end echo:${parent}:true`,
 			`start stats:${parent}`,
 			`end stats:${parent}:false`,
-			"end exec:top:false",
+			"end codemode:top:false",
 		]);
 		// The durable record keeps full arguments, never results.
 		expect(result.nestedCalls).toEqual({
@@ -289,7 +289,7 @@ describe("AgentSession codemode tool", () => {
 			},
 		]);
 		harness.setResponses([
-			fauxAssistantMessage([fauxToolCall("exec", { code: "return await tools.stats({});" })], {
+			fauxAssistantMessage([fauxToolCall("codemode", { code: "return await tools.stats({});" })], {
 				stopReason: "toolUse",
 			}),
 			fauxAssistantMessage("done"),
@@ -303,7 +303,7 @@ describe("AgentSession codemode tool", () => {
 		harness.setResponses([
 			fauxAssistantMessage(
 				[
-					fauxToolCall("exec", {
+					fauxToolCall("codemode", {
 						code: `
 							// Tools without an outputSchema resolve to their text; images are not passed on.
 							const shot = await tools.screenshot({});
@@ -330,7 +330,7 @@ describe("AgentSession codemode tool", () => {
 		harness.setResponses([
 			fauxAssistantMessage(
 				[
-					fauxToolCall("exec", {
+					fauxToolCall("codemode", {
 						code: `text("partial");\nawait tools.echo({ text: "x" });\nthrow new Error("boom");`,
 					}),
 				],
@@ -362,7 +362,7 @@ describe("codemode options and store", () => {
 	// No tools override: the session builds its own codemode tool, including the store writer.
 	async function setup() {
 		const harness = await createHarness({
-			initialActiveToolNames: ["exec"],
+			initialActiveToolNames: ["codemode"],
 			extensionFactories: [createCodemodeExtension()],
 		});
 		harnesses.push(harness);
@@ -371,15 +371,15 @@ describe("codemode options and store", () => {
 
 	async function run(harness: Harness, code: string): Promise<ToolResultMessage> {
 		harness.setResponses([
-			fauxAssistantMessage([fauxToolCall("exec", { code })], { stopReason: "toolUse" }),
+			fauxAssistantMessage([fauxToolCall("codemode", { code })], { stopReason: "toolUse" }),
 			fauxAssistantMessage("done"),
 		]);
 		await harness.session.prompt("go");
 		const results = harness.session.messages.filter(
-			(message): message is ToolResultMessage => message.role === "toolResult" && message.toolName === "exec",
+			(message): message is ToolResultMessage => message.role === "toolResult" && message.toolName === "codemode",
 		);
 		const result = results.at(-1);
-		if (!result) throw new Error("No exec tool result");
+		if (!result) throw new Error("No codemode tool result");
 		return result;
 	}
 
@@ -394,31 +394,31 @@ describe("codemode options and store", () => {
 
 	const increment = `const next = (load("count") ?? 0) + 1;\nstore("count", next);\nreturn next;`;
 
-	it("declares Codex's grammar for raw source input", () => {
+	it("declares a grammar for raw source input", () => {
 		const definition = createCodemodeToolDefinition();
-		expect(definition.name).toBe("exec");
+		expect(definition.name).toBe("codemode");
 		expect(definition.constrainedSampling).toEqual({
 			type: "grammar",
 			variants: { openai_lark: CODEMODE_SOURCE_GRAMMAR },
 		});
-		expect(CODEMODE_SOURCE_GRAMMAR).toContain("PRAGMA_LINE: /[ \\t]*\\/\\/ @exec:[^\\r\\n]*/");
+		expect(CODEMODE_SOURCE_GRAMMAR).toContain("OPTIONS_LINE: /[ \\t]*\\/\\/ @options:[^\\r\\n]*/");
 		expect(Object.keys(definition.parameters.properties)).toEqual(["code"]);
 		expect(definition.description).toMatch(/^Run JavaScript code to orchestrate\/compose tool calls\n/);
 		expect(definition.description).toContain("- `store(key: string, value: any)`");
 	});
 
-	it("applies the timeout_ms pragma and rejects invalid pragmas", async () => {
+	it("applies the timeout_ms option and rejects invalid options", async () => {
 		const harness = await setup();
-		const timedOut = await run(harness, '// @exec: {"timeout_ms": 200}\nwhile (true) {}');
+		const timedOut = await run(harness, '// @options: {"timeout_ms": 200}\nwhile (true) {}');
 		expect(timedOut.isError).toBe(true);
 		expect(resultText(timedOut)).toContain("Script error:\nScript timed out");
 
-		const invalid = await run(harness, '// @exec: {"yield": 1}\ntext(1)');
+		const invalid = await run(harness, '// @options: {"yield": 1}\ntext(1)');
 		expect(invalid.isError).toBe(true);
 		expect(invalid.content).toEqual([
 			{
 				type: "text",
-				text: "exec pragma only supports `yield_time_ms`, `max_output_tokens`, and `timeout_ms`; got `yield`",
+				text: "@options only supports `max_output_tokens` and `timeout_ms`; got `yield`",
 			},
 		]);
 	});
@@ -427,7 +427,7 @@ describe("codemode options and store", () => {
 		const harness = await setup();
 		const result = await run(
 			harness,
-			'// @exec: {"timeout_ms": 30000}\nlet a = [];\ntry { while (true) a.push("x".repeat(1 << 20) + a.length); } catch (error) { const n = a.length; a = null; return { n, error: String(error) }; }',
+			'// @options: {"timeout_ms": 30000}\nlet a = [];\ntry { while (true) a.push("x".repeat(1 << 20) + a.length); } catch (error) { const n = a.length; a = null; return { n, error: String(error) }; }',
 		);
 		expect(result.isError).toBe(false);
 		const { n, error } = JSON.parse(resultText(result)) as { n: number; error: string };
@@ -436,17 +436,17 @@ describe("codemode options and store", () => {
 		expect(n).toBeLessThan(512);
 	});
 
-	it("truncates output to the token budget like Codex and spills the full text", async () => {
+	it("truncates output to the token budget and spills the full text", async () => {
 		const harness = await setup();
 		const result = await run(
 			harness,
-			'// @exec: {"max_output_tokens": 10}\nfor (let i = 0; i < 100; i++) text("row " + i);\nimage("data:image/png;base64,AAAA");',
+			'// @options: {"max_output_tokens": 10}\nfor (let i = 0; i < 100; i++) text("row " + i);\nimage("data:image/png;base64,AAAA");',
 		);
 		const details = result.details as unknown as CodemodeToolDetails;
 		const path = details.fullOutputPath;
 		if (!path) throw new Error("No spill file");
 		try {
-			expect(path).toMatch(/pi-exec-[0-9a-f]+\.txt$/);
+			expect(path).toMatch(/pi-codemode-[0-9a-f]+\.txt$/);
 			const text = resultText(result);
 			// 10 tokens keep 20 characters from each end.
 			expect(text).toMatch(
@@ -464,16 +464,19 @@ describe("codemode options and store", () => {
 		expect((small.details as unknown as CodemodeToolDetails).fullOutputPath).toBeUndefined();
 	});
 
-	it("keeps script line numbers when a pragma line is present", async () => {
+	it("keeps script line numbers when an options line is present", async () => {
 		const harness = await setup();
-		const result = await run(harness, '// @exec: {"timeout_ms": 5000}\nconst a = 1;\nthrow new Error("line three");');
+		const result = await run(
+			harness,
+			'// @options: {"timeout_ms": 5000}\nconst a = 1;\nthrow new Error("line three");',
+		);
 		expect(result.isError).toBe(true);
 		expect(resultText(result)).toContain("codemode.js:3");
 	});
 
-	it("resolves bash calls to Codex-style results, also for non-zero exit codes", async () => {
+	it("resolves bash calls to structured results, also for non-zero exit codes", async () => {
 		const harness = await createHarness({
-			initialActiveToolNames: ["exec", "bash"],
+			initialActiveToolNames: ["codemode", "bash"],
 			extensionFactories: [createCodemodeExtension()],
 		});
 		harnesses.push(harness);
@@ -577,7 +580,7 @@ describe("codemode models", () => {
 
 	async function setup() {
 		const harness = await createHarness({
-			initialActiveToolNames: ["exec"],
+			initialActiveToolNames: ["codemode"],
 			extensionFactories: [createCodemodeExtension()],
 		});
 		harnesses.push(harness);
@@ -619,13 +622,13 @@ describe("codemode models", () => {
 				},
 			},
 		});
-		harness.session.setActiveToolsByName(["exec"]);
+		harness.session.setActiveToolsByName(["codemode"]);
 		return { harness, observed, maxActive: () => maxActive };
 	}
 
 	async function run(harness: Harness, code: string): Promise<ToolResultMessage> {
 		harness.setResponses([
-			fauxAssistantMessage([fauxToolCall("exec", { code })], { stopReason: "toolUse" }),
+			fauxAssistantMessage([fauxToolCall("codemode", { code })], { stopReason: "toolUse" }),
 			fauxAssistantMessage("done"),
 		]);
 		await harness.session.prompt("go");
@@ -636,7 +639,7 @@ describe("codemode models", () => {
 
 	it("declares models only for the session's own codemode tool", async () => {
 		const { harness } = await setup();
-		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "exec");
+		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "codemode");
 		expect(codemode?.description).toContain("declare const models: {");
 		expect(codemode?.description).toContain(
 			"classify(model: ModelInfo, context: ClassifierContext): Promise<ClassifierResult>;",
@@ -645,7 +648,7 @@ describe("codemode models", () => {
 
 		const overridden = await createHarness({ tools: [createCodemodeTool() as AgentTool] });
 		harnesses.push(overridden);
-		const plain = overridden.session.agent.state.tools.find((tool) => tool.name === "exec");
+		const plain = overridden.session.agent.state.tools.find((tool) => tool.name === "codemode");
 		expect(plain?.description).not.toContain("declare const models");
 	});
 

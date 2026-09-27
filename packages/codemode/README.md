@@ -2,7 +2,7 @@
 
 Runs model-written JavaScript in a QuickJS VM (compiled to WebAssembly) where the only capability is calling injected tools. Nested tool calls never enter the LLM context; only the script's output and return value do.
 
-The script-facing API follows the `exec` tool of OpenAI Codex (`tools`, `ALL_TOOLS`, `text`, `image`, `exit`, `store`, `load`, and the `// @exec:` pragma), so models trained on Codex can use it unchanged. The coding agent uses it for its built-in `exec` tool. It has no pi dependencies and can be used on its own to expose any functions (remote APIs, MCP servers, application services) to model-written scripts.
+Scripts use `tools`, `ALL_TOOLS`, `text`, `image`, `exit`, `store`, and `load`, and may start with a `// @options:` line. The coding agent uses it for its built-in `codemode` tool. It has no pi dependencies and can be used on its own to expose any functions (remote APIs, MCP servers, application services) to model-written scripts.
 
 ## Usage
 
@@ -66,15 +66,15 @@ if (result.ok) {
 
 ## Source format
 
-`parseCodemodeSource()` accepts a script whose first line may be a Codex `exec` pragma:
+`parseCodemodeSource()` accepts a script whose first line may be an options line:
 
 ```js
-// @exec: {"max_output_tokens": 2000, "timeout_ms": 30000}
+// @options: {"max_output_tokens": 2000, "timeout_ms": 30000}
 const source = await tools.read({ path: "package.json" });
 text(JSON.parse(source).name);
 ```
 
-Supported fields are `yield_time_ms` and `max_output_tokens` from Codex, and `timeout_ms`, a hard deadline. The sandbox does not act on them; the caller decides. The pragma line is replaced by an empty line, so line numbers in stack traces still match the input. Empty input, invalid JSON, unknown fields, or a pragma without code throw `CodemodeSourceError` with Codex's messages. `CODEMODE_SOURCE_GRAMMAR` is Codex's Lark grammar for providers that support grammar-constrained tool input. Both are also available from the lightweight `@earendil-works/pi-codemode/source` entry.
+Supported fields are `max_output_tokens`, a token budget for the output, and `timeout_ms`, a hard deadline. The sandbox does not act on them; the caller decides. The options line is replaced by an empty line, so line numbers in stack traces still match the input. Empty input, invalid JSON, unknown fields, or an options line without code throw `CodemodeSourceError`. `CODEMODE_SOURCE_GRAMMAR` is a Lark grammar for providers that support grammar-constrained tool input. Both are also available from the lightweight `@earendil-works/pi-codemode/source` entry.
 
 ## Bundled hosts
 

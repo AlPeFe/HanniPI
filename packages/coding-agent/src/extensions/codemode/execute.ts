@@ -1,5 +1,5 @@
 /**
- * Runs one `exec` script in the sandbox. Split from tool.ts and loaded through
+ * Runs one codemode script in the sandbox. Split from tool.ts and loaded through
  * execute.lazy.ts so the sandbox runtime only loads when a script runs.
  */
 
@@ -125,9 +125,9 @@ export function readCodemodeStore(branch: readonly SessionEntry[]): Record<strin
 	return Object.fromEntries(store);
 }
 
-/** Codex's default token budget for `exec` output. */
+/** Default token budget for script output. */
 const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
-/** Characters per token when estimating, like Codex's truncation. */
+/** Characters per token when estimating. */
 const CHARS_PER_TOKEN = 4;
 
 /** Like the script's `text()`: strings as is, other values as compact JSON. */
@@ -156,7 +156,7 @@ function formatError(result: Extract<CodemodeResult, { ok: false }>, calls: read
 
 /** Write the full text output to a temp file, like bash does for truncated output. */
 async function spillOutput(text: string): Promise<{ path: string } | { error: string }> {
-	const path = join(tmpdir(), `pi-exec-${randomBytes(8).toString("hex")}.txt`);
+	const path = join(tmpdir(), `pi-codemode-${randomBytes(8).toString("hex")}.txt`);
 	try {
 		await writeFile(path, text);
 		return { path };
@@ -166,7 +166,7 @@ async function spillOutput(text: string): Promise<{ path: string } | { error: st
 }
 
 /**
- * Apply the token budget like Codex: when the combined text exceeds it, the text items become one
+ * Apply the token budget: when the combined text exceeds it, the text items become one
  * item that keeps the start and end of the text, and images follow it. The full text is written to
  * a temp file.
  */
@@ -196,7 +196,7 @@ async function truncateOutput(
 }
 
 /**
- * The value a script receives for a nested call, following Codex: a tool that declares
+ * The value a script receives for a nested call: a tool that declares
  * `outputSchema` resolves to its `structuredContent`, also for error results that carry one (such
  * as MCP results with `isError`); any other tool resolves to its text content. Other failures
  * reject with the tool's error text.
@@ -229,7 +229,7 @@ export async function executeCodemode(
 	const publish = () => onUpdate?.({ content: [], details: snapshot() });
 
 	const callable = ctx ? getCodemodeCallableTools(ctx.tools) : [];
-	// ALL_TOOLS entries carry the declaration, like Codex.
+	// ALL_TOOLS entries carry the declaration.
 	const samples = new Map(callable.map((tool) => [tool.name, renderToolSample(toCodemodeDeclaration(tool))]));
 	const sandboxTools: CodemodeTool[] = callable.map((tool) => ({
 		name: tool.name,

@@ -48,8 +48,7 @@ export const bashToolSystemPromptContribution = {
 export type BashToolInput = Static<typeof bashSchema>;
 
 /**
- * Result for programmatic callers such as `exec` scripts, shaped like Codex's shell results. A
- * non-zero exit code is an error result for the model, but scripts still resolve to this value.
+ * Result for programmatic callers such as codemode scripts. A non-zero exit code is an error result for the model, but scripts still resolve to this value.
  */
 const bashOutputSchema = Type.Object({
 	output: Type.String({ description: "Combined stdout and stderr, truncated like the model-facing output" }),

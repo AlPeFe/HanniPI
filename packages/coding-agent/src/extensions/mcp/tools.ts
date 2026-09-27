@@ -1,7 +1,7 @@
 /**
  * Adapts MCP tools to pi tool definitions.
  *
- * Results map onto pi's model-facing content (text and images). Like Codex, `exec` scripts receive
+ * Results map onto pi's model-facing content (text and images). Codemode scripts receive
  * the whole `CallToolResult` without `_meta` (`content` blocks as sent by the server,
  * `structuredContent`, `isError`): it is the tool's `structuredContent`, and every MCP tool
  * declares a `CallToolResult` output schema. MCP errors (`isError`) are error results for the
@@ -79,8 +79,8 @@ function textOf(content: readonly (TextContent | ImageContent)[]): string {
 
 /**
  * Output schema of every MCP tool: the `CallToolResult` scripts receive, with the tool's own output
- * schema as `structuredContent`. The shape matches what Codex detects to render
- * `CallToolResult<T>` declarations.
+ * schema as `structuredContent`. Codemode detects this shape to render `CallToolResult<T>`
+ * declarations.
  */
 export function createMcpResultSchema(structuredContentSchema: Record<string, unknown> | undefined): TSchema {
 	return {

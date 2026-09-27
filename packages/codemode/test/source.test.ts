@@ -10,48 +10,49 @@ describe("parseCodemodeSource", () => {
 		});
 	});
 
-	it("parses the pragma line and keeps line numbers", () => {
-		expect(parseCodemodeSource('// @exec: {"yield_time_ms": 10}\nconst a = 1;\ntext(a)')).toEqual({
+	it("parses the options line and keeps line numbers", () => {
+		expect(parseCodemodeSource('// @options: {"timeout_ms": 10}\nconst a = 1;\ntext(a)')).toEqual({
 			code: "\nconst a = 1;\ntext(a)",
-			options: { yieldTimeMs: 10 },
+			options: { timeoutMs: 10 },
 		});
-		expect(parseCodemodeSource('  // @exec:{"max_output_tokens":0,"timeout_ms":1500}\r\ntext(1)').options).toEqual({
-			maxOutputTokens: 0,
-			timeoutMs: 1500,
-		});
-		expect(parseCodemodeSource("// @exec: {}\ntext(1)")).toEqual({ code: "\ntext(1)", options: {} });
+		expect(parseCodemodeSource('  // @options:{"max_output_tokens":0,"timeout_ms":1500}\r\ntext(1)').options).toEqual(
+			{
+				maxOutputTokens: 0,
+				timeoutMs: 1500,
+			},
+		);
+		expect(parseCodemodeSource("// @options: {}\ntext(1)")).toEqual({ code: "\ntext(1)", options: {} });
 	});
 
-	it("only treats the first line as a pragma", () => {
-		const input = 'text(1)\n// @exec: {"yield_time_ms": 1}';
+	it("only treats the first line as an options line", () => {
+		const input = 'text(1)\n// @options: {"timeout_ms": 1}';
 		expect(parseCodemodeSource(input)).toEqual({ code: input, options: {} });
-		expect(parseCodemodeSource("// @execx {}\ntext(1)").options).toEqual({});
+		expect(parseCodemodeSource("// @optionsx {}\ntext(1)").options).toEqual({});
 	});
 
-	it("rejects empty input and invalid pragmas with Codex's messages", () => {
+	it("rejects empty input and invalid options", () => {
 		const cases: [string, string | RegExp][] = [
-			["", /exec expects raw JavaScript source text \(non-empty\)/],
-			["  \n", /exec expects raw JavaScript source text \(non-empty\)/],
-			["// @exec:\ntext(1)", /exec pragma must be a JSON object with supported fields/],
-			["// @exec: {yield_time_ms: 1}\ntext(1)", /exec pragma must be valid JSON with supported fields/],
-			["// @exec: [1]\ntext(1)", /exec pragma must be a JSON object with supported fields/],
+			["", /Expected JavaScript source text \(non-empty\)/],
+			["  \n", /Expected JavaScript source text \(non-empty\)/],
+			["// @options:\ntext(1)", /@options must be a JSON object with supported fields/],
+			["// @options: {timeout_ms: 1}\ntext(1)", /@options must be valid JSON with supported fields/],
+			["// @options: [1]\ntext(1)", /@options must be a JSON object with supported fields/],
 			[
-				'// @exec: {"yield": 1}\ntext(1)',
-				"exec pragma only supports `yield_time_ms`, `max_output_tokens`, and `timeout_ms`; got `yield`",
+				'// @options: {"yield": 1}\ntext(1)',
+				"@options only supports `max_output_tokens` and `timeout_ms`; got `yield`",
 			],
 			[
-				'// @exec: {"yield_time_ms": -1}\ntext(1)',
-				"exec pragma field `yield_time_ms` must be a non-negative safe integer",
+				'// @options: {"max_output_tokens": 1.5}\ntext(1)',
+				"@options field `max_output_tokens` must be a non-negative safe integer",
+			],
+			['// @options: {"timeout_ms": 0}\ntext(1)', /@options field `timeout_ms` must be a positive integer/],
+			[
+				'// @options: {"timeout_ms": 1}',
+				"The @options line must be followed by JavaScript source on subsequent lines",
 			],
 			[
-				'// @exec: {"max_output_tokens": 1.5}\ntext(1)',
-				"exec pragma field `max_output_tokens` must be a non-negative safe integer",
-			],
-			['// @exec: {"timeout_ms": 0}\ntext(1)', /exec pragma field `timeout_ms` must be a positive integer/],
-			['// @exec: {"yield_time_ms": 1}', "exec pragma must be followed by JavaScript source on subsequent lines"],
-			[
-				'// @exec: {"yield_time_ms": 1}\n  \n',
-				"exec pragma must be followed by JavaScript source on subsequent lines",
+				'// @options: {"timeout_ms": 1}\n  \n',
+				"The @options line must be followed by JavaScript source on subsequent lines",
 			],
 		];
 		for (const [input, message] of cases) {

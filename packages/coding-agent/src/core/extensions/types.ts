@@ -491,7 +491,7 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 
 /**
  * How the model reaches a tool. "Callable" means callable from other tools through
- * `ctx.executeTool()`, as codemode tools such as `exec` do.
+ * `ctx.executeTool()`, as the `codemode` tool does.
  *
  * - `direct`: declared to the model while active, and callable while active.
  * - `model-only`: declared to the model while active, never callable. Use it for orchestrating or
@@ -1009,7 +1009,7 @@ export interface ToolExecutionStartEvent {
 	toolCallId: string;
 	toolName: string;
 	args: any;
-	/** Set when another tool (for example an `exec` script) made this call. */
+	/** Set when another tool (for example a codemode script) made this call. */
 	parentToolCallId?: string;
 }
 
@@ -1020,7 +1020,7 @@ export interface ToolExecutionUpdateEvent {
 	toolName: string;
 	args: any;
 	partialResult: any;
-	/** Set when another tool (for example an `exec` script) made this call. */
+	/** Set when another tool (for example a codemode script) made this call. */
 	parentToolCallId?: string;
 }
 
@@ -1031,7 +1031,7 @@ export interface ToolExecutionEndEvent {
 	toolName: string;
 	result: any;
 	isError: boolean;
-	/** Set when another tool (for example an `exec` script) made this call. */
+	/** Set when another tool (for example a codemode script) made this call. */
 	parentToolCallId?: string;
 }
 
@@ -1109,7 +1109,7 @@ interface ToolCallEventBase {
 	 * in the parent result's `nestedCalls` record.
 	 */
 	toolCallId: string;
-	/** Set when another tool (for example an `exec` script) issued this call. */
+	/** Set when another tool (for example a codemode script) issued this call. */
 	parentToolCallId?: string;
 }
 
@@ -1179,7 +1179,7 @@ interface ToolResultEventBase {
 	type: "tool_result";
 	/** The call's id; `<parent id>/<n>` for nested calls, see `ToolCallEvent`. */
 	toolCallId: string;
-	/** Set when another tool (for example an `exec` script) issued this call. */
+	/** Set when another tool (for example a codemode script) issued this call. */
 	parentToolCallId?: string;
 	input: Record<string, unknown>;
 	content: (TextContent | ImageContent)[];

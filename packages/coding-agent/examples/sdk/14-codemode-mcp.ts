@@ -1,12 +1,12 @@
 /**
  * Codemode, Tool Search, and MCP
  *
- * The CLI loads `exec` (codemode), `tool_search`, and MCP as built-in extensions. SDK sessions add
+ * The CLI loads `codemode`, `tool_search`, and MCP as built-in extensions. SDK sessions add
  * them to the resource loader's extension factories.
  *
- * `exec` and `tool_search` are registered inactive. Enable them through the `defaultTools` setting
+ * `codemode` and `tool_search` are registered inactive. Enable them through the `defaultTools` setting
  * (`tools` would also restrict the session to the named tools, which hides MCP tools), or let the
- * MCP extension activate `exec` when a server's tools are only reachable from scripts.
+ * MCP extension activate `codemode` when a server's tools are only reachable from scripts.
  */
 
 import {
@@ -35,7 +35,7 @@ const resourceLoader = new DefaultResourceLoader({
 await resourceLoader.reload();
 
 const settingsManager = SettingsManager.create(cwd);
-settingsManager.applyOverrides({ defaultTools: ["read", "bash", "edit", "write", "exec", "tool_search"] });
+settingsManager.applyOverrides({ defaultTools: ["read", "bash", "edit", "write", "codemode", "tool_search"] });
 
 const { session } = await createAgentSession({
 	resourceLoader,
@@ -52,7 +52,7 @@ try {
 			process.stdout.write(event.assistantMessageEvent.delta);
 		}
 	});
-	await session.prompt("Use exec to count the TypeScript files in src/ and list the three largest.");
+	await session.prompt("Use codemode to count the TypeScript files in src/ and list the three largest.");
 	console.log();
 } finally {
 	session.dispose();

@@ -1,5 +1,5 @@
 /**
- * Presentation for the exec (codemode) tool.
+ * Presentation for the codemode tool.
  *
  * The call shows the script; the result lists the nested tool calls with their status as they
  * run, followed by the script output without the "Script completed" header. Nested calls are not
@@ -59,9 +59,9 @@ export const codemodeRenderers: Pick<
 	"renderCall" | "renderResult"
 > = {
 	renderCall(args, theme, context) {
-		// The code includes the `// @exec:` pragma, so options show as part of the script.
+		// The code includes the `// @options:` line, so options show as part of the script.
 		const code = str((args as { code?: unknown } | undefined)?.code);
-		let text = theme.fg("toolTitle", theme.bold("exec"));
+		let text = theme.fg("toolTitle", theme.bold("codemode"));
 		if (code === null) {
 			text += ` ${theme.fg("error", "[invalid arg]")}`;
 		} else if (code) {
@@ -88,7 +88,7 @@ export const codemodeRenderers: Pick<
 			sections.push(lines.join("\n"));
 		}
 
-		// Drop the "Script completed\nWall time ...\nOutput:\n" header. Rejected input (an invalid pragma)
+		// Drop the "Script completed\nWall time ...\nOutput:\n" header. Rejected input (invalid options)
 		// has no header.
 		const [first, ...rest] = result.content;
 		const hasHeader = first?.type === "text" && SCRIPT_HEADER.test(first.text);

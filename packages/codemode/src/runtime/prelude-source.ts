@@ -7,7 +7,7 @@
  * `exit`, `console`), and globals on top of it. Tool arguments and results cross
  * as JSON strings and are parsed on this side.
  *
- * Output helpers follow Codex's `exec`: `text(value)` appends a text item (non-strings are
+ * Output helpers: `text(value)` appends a text item (non-strings are
  * JSON-stringified), `image(urlOrItem)` appends an image from a base64 `data:` URL, an
  * `{ image_url }` object, or an MCP `ImageContent` block, and `exit()` ends the script
  * successfully. `console.*` appends text items like `text()`.
@@ -184,7 +184,7 @@ export const PRELUDE_SOURCE: string = `(function (bridge, toolsJson, globalsJson
 	Object.defineProperty(globalThis, "store", { value: store, enumerable: true });
 	Object.defineProperty(globalThis, "load", { value: load, enumerable: true });
 
-	// Like Codex: primitives become their string form, everything else JSON.
+	// Primitives become their string form, everything else JSON.
 	function outputText(value) {
 		if (value === undefined || value === null || typeof value !== "object" && typeof value !== "function") {
 			return String(value);

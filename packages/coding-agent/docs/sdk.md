@@ -113,7 +113,7 @@ Inline extension factories can be supplied through `DefaultResourceLoader`. Give
 
 <a id="codemode-mcp"></a>
 
-The CLI loads `exec` (codemode), `tool_search`, and MCP as built-in extensions. SDK sessions do not; add `createCodemodeExtension()`, `createToolSearchExtension()`, and `createMcpExtension()` to the `extensionFactories` of `DefaultResourceLoader`. `exec` and `tool_search` are registered inactive: enable them through the `defaultTools` setting, or let the MCP extension activate `exec` when MCP tools are only reachable from scripts. The MCP extension connects its servers on `session_start`, so call `session.bindExtensions()`. See [Codemode and MCP](../examples/sdk/14-codemode-mcp.ts).
+The CLI loads `codemode`, `tool_search`, and MCP as built-in extensions. SDK sessions do not; add `createCodemodeExtension()`, `createToolSearchExtension()`, and `createMcpExtension()` to the `extensionFactories` of `DefaultResourceLoader`. `codemode` and `tool_search` are registered inactive: enable them through the `defaultTools` setting, or let the MCP extension activate `codemode` when MCP tools are only reachable from scripts. The MCP extension connects its servers on `session_start`, so call `session.bindExtensions()`. See [Codemode and MCP](../examples/sdk/14-codemode-mcp.ts).
 
 See the focused examples for [models](../examples/sdk/02-custom-model.ts), [tools](../examples/sdk/05-tools.ts), [extensions](../examples/sdk/06-extensions.ts), and [full control](../examples/sdk/12-full-control.ts).
 
@@ -134,7 +134,7 @@ See the focused examples for [models](../examples/sdk/02-custom-model.ts), [tool
 | [Sessions](../examples/sdk/11-sessions.ts) | Control session persistence and restoration |
 | [Full control](../examples/sdk/12-full-control.ts) | Replace default discovery and state services |
 | [Session runtime](../examples/sdk/13-session-runtime.ts) | Replace the active session safely |
-| [Codemode and MCP](../examples/sdk/14-codemode-mcp.ts) | Add the `exec`, `tool_search`, and MCP extensions |
+| [Codemode and MCP](../examples/sdk/14-codemode-mcp.ts) | Add the `codemode`, `tool_search`, and MCP extensions |
 
 <a id="exports"></a>
 

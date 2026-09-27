@@ -68,7 +68,7 @@ describe("script execution", () => {
 		expect(result.output.at(-1)).toMatchObject({ type: "text", text: expect.stringMatching(/^Error: bad/) });
 	});
 
-	it("rejects invalid text() and image() arguments like Codex", async () => {
+	it("rejects invalid text() and image() arguments", async () => {
 		const sandbox = createSandbox();
 		const result = await sandbox.execute(`
 			const errors = [];

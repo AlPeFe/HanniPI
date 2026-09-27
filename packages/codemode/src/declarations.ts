@@ -6,14 +6,14 @@ import type { CodemodeJsonSchema, CodemodeTool } from "./types.ts";
 
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const INDENT = "  ";
-/** Largest rendered input type, in characters, before it becomes `unknown`. Matches Codex. */
+/** Largest rendered input type, in characters, before it becomes `unknown`. */
 export const DEFAULT_INPUT_SCHEMA_MAX_CHARS = 16_000;
 /** Local `$ref` expansions per rendered schema, so shared definitions cannot blow up the output. */
 const MAX_REF_EXPANSIONS = 32;
 
 /**
- * TypeScript types for MCP results, from the MCP `CallToolResult` schema. Identical to the
- * preamble Codex puts in its `exec` description, so `CallToolResult<T>` declarations read the same.
+ * TypeScript types for MCP results, from the MCP `CallToolResult` schema, so `CallToolResult<T>`
+ * declarations can refer to them.
  */
 export const MCP_TYPESCRIPT_PREAMBLE = `type Role = "user" | "assistant";
 type MetaObject = Record<string, unknown>;
@@ -130,7 +130,7 @@ export function renderDeclarations(options: RenderDeclarationsOptions): string {
 }
 
 /**
- * One tool as a member of the `tools` object, like Codex: `name(args: T): Promise<R>;` with the
+ * One tool as a member of the `tools` object: `name(args: T): Promise<R>;` with the
  * name as the identifier scripts use. Input types longer than `inputMaxChars` render as `unknown`.
  * Tools whose output schema is an MCP `CallToolResult` render as `Promise<CallToolResult<T>>`,
  * which needs {@link MCP_TYPESCRIPT_PREAMBLE}.
@@ -147,7 +147,7 @@ export function renderToolSignature(
 }
 
 /**
- * Codex's per-tool sample: the description followed by the tool's declaration. Used for tool
+ * A tool's sample: the description followed by the tool's declaration. Used for tool
  * listings and `ALL_TOOLS` entries.
  */
 export function renderToolSample(
@@ -155,12 +155,12 @@ export function renderToolSample(
 	options: { inputMaxChars?: number } = {},
 ): string {
 	const declaration = `declare const tools: { ${renderToolSignature(tool, options)} };`;
-	return `${tool.description?.trim() ?? ""}\n\nexec tool declaration:\n\`\`\`ts\n${declaration}\n\`\`\``;
+	return `${tool.description?.trim() ?? ""}\n\ncodemode tool declaration:\n\`\`\`ts\n${declaration}\n\`\`\``;
 }
 
 /**
- * The `structuredContent` schema of an MCP `CallToolResult` output schema (Codex's detection:
- * `content` array of objects, boolean `isError`, object `_meta`), `true` when it declares none, or
+ * The `structuredContent` schema of an MCP `CallToolResult` output schema (detected by a
+ * `content` array of objects, boolean `isError`, and object `_meta`), `true` when it declares none, or
  * `undefined` when the schema is not a `CallToolResult`.
  */
 export function mcpStructuredContentSchema(schema: CodemodeJsonSchema | undefined): CodemodeJsonSchema | undefined {
@@ -215,8 +215,7 @@ function union(types: string[]): string {
 }
 
 /**
- * Convert a JSON Schema to a TypeScript type expression, in the style of Codex's `exec`
- * declarations: objects on one line (`{ a: string; b?: number; }`) with properties sorted by name,
+ * Convert a JSON Schema to a TypeScript type expression: objects on one line (`{ a: string; b?: number; }`) with properties sorted by name,
  * or one property per line with `//` comments when a property has a description; `Array<T>` for
  * arrays. Local references (`#/$defs/...`, `#/definitions/...`) resolve against `schema`;
  * recursive and remote references render as `unknown`. A result longer than `maxChars` renders as

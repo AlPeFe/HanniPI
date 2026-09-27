@@ -560,7 +560,7 @@ export interface AssistantMessage {
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
-/** A tool call that another tool made while it ran, for example from an `exec` script. */
+/** A tool call that another tool made while it ran, for example from a codemode script. */
 export interface NestedToolCallRecord {
 	id: string;
 	name: string;

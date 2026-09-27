@@ -1,7 +1,6 @@
 /**
  * The identifier a script uses for a tool: characters that are not valid in a JavaScript
- * identifier become `_`, like Codex's `normalize_code_mode_identifier`. `mcp__docs__search` stays
- * as is, `my-tool` becomes `my_tool`.
+ * identifier become `_`. `mcp__docs__search` stays as is, `my-tool` becomes `my_tool`.
  */
 export function toCodemodeIdentifier(name: string): string {
 	let identifier = "";

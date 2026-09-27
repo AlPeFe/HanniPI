@@ -4,7 +4,7 @@
  * Connects the servers from `mcp.json` when a session starts and registers their tools as
  * `mcp__<server>__<tool>`. By default (`"exposure": "codemode"`) the tools are only callable from
  * codemode scripts, which keeps large MCP tool lists out of the model's tool declarations; the
- * exec tool is activated for that unless `autoEnableCodemode` is false. `"exposure": "direct"`
+ * codemode tool is activated for that unless `autoEnableCodemode` is false. `"exposure": "direct"`
  * declares them to the model as well, `"deferred"` leaves them out of the codemode description, and
  * `"hidden"` makes them unreachable.
  *
@@ -75,8 +75,8 @@ interface McpServer {
 }
 
 const EXPOSURE_DESCRIPTIONS: Record<Exclude<McpExposure, "hidden">, string> = {
-	codemode: "callable from exec scripts and listed in the exec description",
-	deferred: "callable from exec scripts, found with searchTools() or tool_search",
+	codemode: "callable from codemode scripts and listed in the codemode description",
+	deferred: "callable from codemode scripts, found with searchTools() or tool_search",
 	direct: "declared to the model like built-in tools",
 };
 
@@ -235,14 +235,14 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			serverTools.set(server, new Set());
 		};
 
-		/** Codemode-exposed tools are unreachable without the exec tool, so turn it on. */
+		/** Codemode-exposed tools are unreachable without the codemode tool, so turn it on. */
 		const ensureCodemodeActive = (ctx: ExtensionContext) => {
 			const needsCodemode = servers.some((server) => {
 				const exposure = exposureOf(server.entry);
 				return server.connection?.state === "connected" && (exposure === "codemode" || exposure === "deferred");
 			});
 			if (!needsCodemode) return;
-			// Another extension's tool named `exec` cannot call MCP tools, so never activate it.
+			// Another extension's tool named `codemode` cannot call MCP tools, so never activate it.
 			const available = pi.getAllTools().some(isCodemodeTool);
 			if (available && pi.getActiveTools().includes(CODEMODE_TOOL_NAME)) return;
 			if (available && autoEnableCodemode) {
@@ -253,8 +253,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			warnedUnreachable = true;
 			ctx.ui.notify(
 				available
-					? "MCP tools are only reachable from the exec tool, but exec is inactive and autoEnableCodemode is false; they cannot be called."
-					: "MCP tools are only reachable from the exec tool, but it is not available; they cannot be called.",
+					? "MCP tools are only reachable from the codemode tool, but it is inactive and autoEnableCodemode is false; they cannot be called."
+					: "MCP tools are only reachable from the codemode tool, but it is not available; they cannot be called.",
 				"warning",
 			);
 		};

@@ -1,5 +1,5 @@
 /**
- * Tool calls that a tool makes while it runs (`ctx.executeTool()`), for example from `exec`
+ * Tool calls that a tool makes while it runs (`ctx.executeTool()`), for example from codemode
  * scripts. The agent loop does not know about them: the session runs each one through the agent's
  * tool pipeline (`runToolCall`) with its own hooks, emits `tool_execution_*` events with
  * `parentToolCallId`, and records the calls on the model-issued call's tool result message.
@@ -17,7 +17,7 @@ import type {
 import type { JsonObject, NestedToolCallRecord, NestedToolCalls, TextContent } from "@earendil-works/pi-ai";
 
 /**
- * Limits of the nested-call record on a tool result, like Codex's `ExecutedToolCalls`: arguments
+ * Limits of the nested-call record on a tool result: arguments
  * over the per-call or total size are omitted, calls beyond the count are dropped, and the record
  * is marked incomplete when any of that happens.
  */

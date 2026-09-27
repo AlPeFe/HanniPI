@@ -1,8 +1,8 @@
 /**
- * Tool discovery: a BM25 ranker over tool metadata, shared by `searchTools()` in `exec` scripts and
+ * Tool discovery: a BM25 ranker over tool metadata, shared by `searchTools()` in codemode scripts and
  * the optional `tool_search` tool.
  *
- * `tool_search` follows Codex's tool of the same name: it searches tools that are not declared to
+ * `tool_search` searches tools that are not declared to
  * the model (`codemode` and `deferred` exposure) and loads the matches, so they are declared for the
  * next model call. Loading goes through the active tool set, so it is recorded in the transcript
  * like any other tool change and survives `/tree`, resume, and fork on that branch.
@@ -83,7 +83,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Schema descriptions and property names, recursively, like Codex's search text. */
+/** Schema descriptions and property names, recursively. */
 function schemaText(schema: unknown, parts: string[]): void {
 	if (!isObject(schema)) return;
 	if (typeof schema.description === "string") parts.push(schema.description);
@@ -101,7 +101,7 @@ function schemaText(schema: unknown, parts: string[]): void {
 }
 
 /**
- * Search text of a tool, following Codex's `default_tool_search_text`: the name, the name with `_`
+ * Search text of a tool: the name, the name with `_`
  * as spaces, the description, schema descriptions and property names, and the namespace.
  */
 export function createToolSearchDocument(
@@ -208,7 +208,7 @@ function searchAndLoad(
 }
 
 /**
- * Codex's `tool_search` description. `sources` lists the namespaces whose tools can be found, with
+ * The `tool_search` description. `sources` lists the namespaces whose tools can be found, with
  * their descriptions.
  */
 export function createToolSearchDescription(sources: readonly ToolNamespace[] = []): string {

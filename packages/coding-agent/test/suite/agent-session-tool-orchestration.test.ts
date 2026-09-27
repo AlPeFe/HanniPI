@@ -107,19 +107,19 @@ describe("AgentSession tool orchestration", () => {
 		]);
 	});
 
-	it("registers exec and tool_search inactive until they are named", async () => {
+	it("registers codemode and tool_search inactive until they are named", async () => {
 		const extensionFactories = [createCodemodeExtension(), createToolSearchExtension()];
 		const plain = await createHarness({ extensionFactories });
 		harnesses.push(plain);
 		expect(plain.session.getAllTools().map((tool) => tool.name)).toEqual(
-			expect.arrayContaining(["exec", "tool_search"]),
+			expect.arrayContaining(["codemode", "tool_search"]),
 		);
 		expect(plain.session.getActiveToolNames()).toEqual(["read", "bash", "edit", "write"]);
 
 		// --tools and the defaultTools setting name them explicitly.
-		const allowed = await createHarness({ allowedToolNames: ["read", "exec"], extensionFactories });
+		const allowed = await createHarness({ allowedToolNames: ["read", "codemode"], extensionFactories });
 		harnesses.push(allowed);
-		expect(allowed.session.getActiveToolNames()).toEqual(["read", "exec"]);
+		expect(allowed.session.getActiveToolNames()).toEqual(["read", "codemode"]);
 		const initial = await createHarness({ initialActiveToolNames: ["tool_search"], extensionFactories });
 		harnesses.push(initial);
 		expect(initial.session.getActiveToolNames()).toEqual(["tool_search"]);
