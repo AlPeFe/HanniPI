@@ -168,6 +168,163 @@ describe("StreamableHttpTransport", () => {
 		await client.close();
 	});
 
+	it("opens the GET stream after initialization and sends Last-Event-ID only when resuming", async () => {
+		const order: string[] = [];
+		const { url, requests } = await startServer(async (request, response, requests) => {
+			if (request.method === "POST") {
+				const message = JSON.parse(await readBody(request)) as Record<string, unknown>;
+				order.push(String(message.method));
+				return protocolHandler(request, response, requests, message);
+			}
+			order.push(request.method ?? "");
+			return protocolHandler(request, response, requests);
+		});
+		const client = new McpClient({ name: "http-test", version: "1.0.0" });
+		await client.connect(new StreamableHttpTransport({ url }));
+		await client.callTool("echo");
+		await client.listTools();
+		await client.close();
+		expect(order.indexOf("GET")).toBeGreaterThan(order.indexOf("notifications/initialized"));
+		expect(requests.every((entry) => entry.headers["last-event-id"] === undefined)).toBe(true);
+	});
+
+	it("resumes a response stream the server closed before answering", async () => {
+		const resumeHeaders: (string | undefined)[] = [];
+		const { url } = await startServer(async (request, response, requests) => {
+			if (request.method === "GET" && request.headers["last-event-id"]) {
+				resumeHeaders.push(request.headers["last-event-id"] as string);
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					`id: 2\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: "resumed" }] } })}\n\n`,
+				);
+				return;
+			}
+			if (request.method !== "POST") return protocolHandler(request, response, requests);
+			const message = JSON.parse(await readBody(request)) as Record<string, unknown>;
+			if (message.method !== "tools/call") return protocolHandler(request, response, requests, message);
+			// Priming event (ID, no data) and a retry hint, then the server drops the stream.
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			response.end("id: 1\nretry: 5\ndata:\n\n");
+		});
+		const client = new McpClient({ name: "http-test", version: "1.0.0" });
+		const errors: Error[] = [];
+		client.onError((error) => errors.push(error));
+		await client.connect(new StreamableHttpTransport({ url, openGetStream: false }));
+		expect(await client.callTool("echo")).toEqual({ content: [{ type: "text", text: "resumed" }] });
+		expect(resumeHeaders).toEqual(["1"]);
+		expect(errors).toEqual([]);
+		await client.close();
+	});
+
+	it("fails a request whose response stream ends without an answer", async () => {
+		const { url } = await startServer(async (request, response, requests) => {
+			if (request.method !== "POST") return protocolHandler(request, response, requests);
+			const message = JSON.parse(await readBody(request)) as Record<string, unknown>;
+			if (message.method !== "tools/call") return protocolHandler(request, response, requests, message);
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			response.end(": nothing here\n\n");
+		});
+		const client = new McpClient({ name: "http-test", version: "1.0.0" });
+		await client.connect(new StreamableHttpTransport({ url, openGetStream: false }));
+		await expect(client.callTool("echo", {}, { timeoutMs: 5_000 })).rejects.toThrow(
+			"MCP response stream failed: stream ended without a response",
+		);
+		await client.close();
+	});
+
+	it("reconnects the GET stream after it drops", async () => {
+		let gets = 0;
+		const lastEventIds: (string | undefined)[] = [];
+		const { url } = await startServer(async (request, response, requests) => {
+			if (request.method !== "GET") return protocolHandler(request, response, requests);
+			gets++;
+			lastEventIds.push(request.headers["last-event-id"] as string | undefined);
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			const notification = { jsonrpc: "2.0", method: "notifications/tools/list_changed" };
+			if (gets === 1) {
+				response.end(`id: g1\ndata: ${JSON.stringify(notification)}\n\n`);
+				return;
+			}
+			response.write(`id: g2\ndata: ${JSON.stringify(notification)}\n\n`);
+		});
+		const client = new McpClient({ name: "http-test", version: "1.0.0" });
+		let changes = 0;
+		const secondChange = new Promise<void>((resolve) => {
+			client.onNotification("notifications/tools/list_changed", () => {
+				if (++changes === 2) resolve();
+			});
+		});
+		await client.connect(new StreamableHttpTransport({ url, reconnect: { initialDelayMs: 1 } }));
+		await secondChange;
+		expect(lastEventIds).toEqual([undefined, "g1"]);
+		await client.close();
+	});
+
+	it("rejects a request the server accepts without a response", async () => {
+		const { url } = await startServer(async (request, response, requests) => {
+			if (request.method !== "POST") return protocolHandler(request, response, requests);
+			const message = JSON.parse(await readBody(request)) as Record<string, unknown>;
+			if (message.method !== "tools/call") return protocolHandler(request, response, requests, message);
+			response.statusCode = 202;
+			response.end();
+		});
+		const client = new McpClient({ name: "http-test", version: "1.0.0" });
+		await client.connect(new StreamableHttpTransport({ url, openGetStream: false }));
+		await expect(client.callTool("echo")).rejects.toThrow("without a response");
+		await client.close();
+	});
+
+	it("includes the response body in HTTP errors", async () => {
+		const { url } = await startServer(async (request, response) => {
+			await readBody(request);
+			response.statusCode = 400;
+			response.end("Invalid Accept header");
+		});
+		const client = new McpClient({ name: "http-test", version: "1.0.0" });
+		await expect(client.connect(new StreamableHttpTransport({ url }))).rejects.toThrow(
+			"MCP HTTP request failed with status 400: Invalid Accept header",
+		);
+	});
+
+	it("hands 401 and insufficient-scope 403 responses to the auth provider with the rejected token", async () => {
+		const seen: { status: number; token?: string }[] = [];
+		let token = "old";
+		const { url } = await startServer(async (request, response, requests) => {
+			if (request.method !== "POST") return protocolHandler(request, response, requests);
+			const message = JSON.parse(await readBody(request)) as Record<string, unknown>;
+			if (request.headers.authorization === "Bearer old") {
+				response.writeHead(401, { "www-authenticate": "Bearer" }).end();
+				return;
+			}
+			if (message.method === "tools/call" && request.headers.authorization === "Bearer new") {
+				response.writeHead(403, { "www-authenticate": 'Bearer error="insufficient_scope", scope="admin"' }).end();
+				return;
+			}
+			return protocolHandler(request, response, requests, message);
+		});
+		const client = new McpClient({ name: "http-test", version: "1.0.0" });
+		await client.connect(
+			new StreamableHttpTransport({
+				url,
+				openGetStream: false,
+				authProvider: {
+					token: async () => token,
+					onUnauthorized: async ({ response, token: rejected }) => {
+						seen.push({ status: response.status, token: rejected });
+						if (response.status === 401) token = "new";
+						else token = "admin";
+					},
+				},
+			}),
+		);
+		expect(await client.callTool("echo")).toEqual({ content: [{ type: "text", text: "hello" }] });
+		expect(seen).toEqual([
+			{ status: 401, token: "old" },
+			{ status: 403, token: "new" },
+		]);
+		await client.close();
+	});
+
 	it("classifies an expired established session", async () => {
 		let posts = 0;
 		const { url } = await startServer(async (request, response, requests) => {

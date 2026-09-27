@@ -37,6 +37,7 @@ const MAX_LIST_PAGES = 1_000;
 type ClientState = "idle" | "connecting" | "connected" | "closed";
 type NotificationListener = (params: unknown) => void;
 type ErrorListener = (error: Error) => void;
+type CloseListener = () => void;
 type RequestHandler = (params: unknown, context: { signal: AbortSignal }) => unknown | Promise<unknown>;
 
 export interface McpClientOptions extends Implementation {
@@ -59,6 +60,7 @@ interface PendingRequest {
 	timer: ReturnType<typeof setTimeout> | undefined;
 	signal: AbortSignal | undefined;
 	onAbort: () => void;
+	cancellable: boolean;
 	onProgress: ((progress: ProgressNotification) => void) | undefined;
 	progressToken: JsonRpcId | undefined;
 }
@@ -93,11 +95,15 @@ function validateListToolsResult(value: unknown): ListToolsResult {
 	return value as unknown as ListToolsResult;
 }
 
+/** `content` is required by the spec, but servers that only return `structuredContent` omit it (the SDK defaults it too). */
 function validateCallToolResult(value: unknown): CallToolResult {
-	if (!isObject(value) || !Array.isArray(value.content)) {
+	if (!isObject(value) || (value.content !== undefined && !Array.isArray(value.content))) {
 		throw new McpError(JSON_RPC_ERROR_CODES.invalidRequest, "Invalid MCP tools/call result");
 	}
-	return value as unknown as CallToolResult;
+	if (value.structuredContent !== undefined && !isObject(value.structuredContent)) {
+		throw new McpError(JSON_RPC_ERROR_CODES.invalidRequest, "Invalid MCP tools/call structured content");
+	}
+	return (value.content === undefined ? { ...value, content: [] } : value) as unknown as CallToolResult;
 }
 
 export class McpClient {
@@ -115,6 +121,7 @@ export class McpClient {
 	private requestHandlers = new Map<string, RequestHandler>();
 	private notificationListeners = new Map<string, Set<NotificationListener>>();
 	private errorListeners = new Set<ErrorListener>();
+	private closeListeners = new Set<CloseListener>();
 	private disposers: (() => void)[] = [];
 
 	constructor(options: McpClientOptions) {
@@ -230,6 +237,12 @@ export class McpClient {
 		return () => this.errorListeners.delete(listener);
 	}
 
+	/** Called once when the connection closes, whether the transport dropped or `close()` was called. */
+	onClose(listener: CloseListener): () => void {
+		this.closeListeners.add(listener);
+		return () => this.closeListeners.delete(listener);
+	}
+
 	async ping(options: McpRequestOptions = {}): Promise<void> {
 		await this.request("ping", undefined, options);
 	}
@@ -297,8 +310,15 @@ export class McpClient {
 				timeoutMs: options.timeoutMs ?? this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
 				timer: undefined,
 				signal: options.signal,
+				// The spec forbids cancelling `initialize`.
 				onAbort: () =>
-					this.cancelPending(id, new McpAbortError(), true, String(options.signal?.reason ?? "Aborted")),
+					this.cancelPending(
+						id,
+						new McpAbortError(),
+						method !== "initialize",
+						String(options.signal?.reason ?? "Aborted"),
+					),
+				cancellable: method !== "initialize",
 				onProgress: options.onProgress,
 				progressToken,
 			};
@@ -421,7 +441,7 @@ export class McpClient {
 		if (entry.timer) clearTimeout(entry.timer);
 		if (!Number.isFinite(entry.timeoutMs) || entry.timeoutMs <= 0) return;
 		entry.timer = setTimeout(() => {
-			this.cancelPending(id, new McpTimeoutError(entry.timeoutMs), true, "Request timed out");
+			this.cancelPending(id, new McpTimeoutError(entry.timeoutMs), entry.cancellable, "Request timed out");
 		}, entry.timeoutMs);
 	}
 
@@ -461,10 +481,19 @@ export class McpClient {
 
 	/** Idempotent: rejects in-flight requests, aborts server requests we are serving, and flips the state. */
 	private markClosed(error: Error): void {
+		const wasClosed = this.state === "closed";
 		this.state = "closed";
 		this.rejectPending(error);
 		for (const controller of this.incoming.values()) controller.abort(error);
 		this.incoming.clear();
+		if (wasClosed) return;
+		for (const listener of [...this.closeListeners]) {
+			try {
+				listener();
+			} catch (listenerError) {
+				this.emitError(listenerError);
+			}
+		}
 	}
 
 	private emitError(error: unknown): void {

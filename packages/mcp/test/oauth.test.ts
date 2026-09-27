@@ -255,6 +255,107 @@ describe("MCP OAuth", () => {
 		await callback.close();
 	});
 
+	it("shares one refresh between concurrent 401s when refresh tokens rotate", async () => {
+		const grants: string[] = [];
+		const origin = await listen(async (request, response, serverOrigin) => {
+			const url = new URL(request.url ?? "/", serverOrigin);
+			if (url.pathname === "/.well-known/oauth-authorization-server") {
+				response.setHeader("content-type", "application/json");
+				response.end(
+					JSON.stringify({
+						// Issuer without the trailing slash that URL parsing adds to the fallback server URL.
+						issuer: serverOrigin,
+						authorization_endpoint: `${serverOrigin}/authorize`,
+						token_endpoint: `${serverOrigin}/token`,
+						response_types_supported: ["code"],
+					}),
+				);
+				return;
+			}
+			if (url.pathname === "/token") {
+				const params = new URLSearchParams(await readBody(request));
+				const refreshToken = params.get("refresh_token") ?? "";
+				grants.push(refreshToken);
+				response.setHeader("content-type", "application/json");
+				if (refreshToken !== "r1") {
+					response.statusCode = 400;
+					response.end(JSON.stringify({ error: "invalid_grant" }));
+					return;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				response.end(
+					JSON.stringify({ access_token: "a2", refresh_token: "r2", token_type: "Bearer", expires_in: 3600 }),
+				);
+				return;
+			}
+			response.statusCode = 404;
+			response.end();
+		});
+		const store = new MemoryOAuthStateStore();
+		const provider = new McpOAuthProvider({
+			serverUrl: `${origin}/mcp`,
+			redirectUrl: "http://127.0.0.1/callback",
+			clientMetadata: { client_name: "test" },
+			clientId: "client",
+			store,
+			onRedirect: () => {},
+		});
+		await provider.saveTokens({ access_token: "a1", refresh_token: "r1", token_type: "Bearer" });
+		const auth = adaptOAuthProvider(provider);
+		const unauthorized = () => ({
+			response: new Response(null, { status: 401, headers: { "www-authenticate": "Bearer" } }),
+			serverUrl: new URL(`${origin}/mcp`),
+			fetch,
+			token: "a1",
+		});
+		await Promise.all([auth.onUnauthorized?.(unauthorized()), auth.onUnauthorized?.(unauthorized())]);
+		// A late 401 for a request that still carried the old token must not refresh again.
+		await auth.onUnauthorized?.(unauthorized());
+		expect(grants).toEqual(["r1"]);
+		expect(await auth.token()).toBe("a2");
+		const state = await store.load();
+		expect(state?.tokens?.refresh_token).toBe("r2");
+		expect(state?.tokensExpireAt).toBeGreaterThan(Date.now() + 3_500_000);
+	});
+
+	it("asks for authorization instead of refreshing when the server needs more scope", async () => {
+		const provider = new TestOAuthProvider("http://127.0.0.1/callback");
+		provider.client = { client_id: "client" };
+		provider.tokenSet = { access_token: "a1", refresh_token: "r1", token_type: "Bearer" };
+		const origin = await listen(async (request, response, serverOrigin) => {
+			const url = new URL(request.url ?? "/", serverOrigin);
+			if (url.pathname === "/.well-known/oauth-authorization-server") {
+				response.setHeader("content-type", "application/json");
+				response.end(
+					JSON.stringify({
+						issuer: serverOrigin,
+						authorization_endpoint: `${serverOrigin}/authorize`,
+						token_endpoint: `${serverOrigin}/token`,
+						response_types_supported: ["code"],
+					}),
+				);
+				return;
+			}
+			response.statusCode = url.pathname === "/token" ? 500 : 404;
+			response.end();
+		});
+		const auth = adaptOAuthProvider(provider);
+		await expect(
+			auth.onUnauthorized?.({
+				response: new Response(null, {
+					status: 403,
+					headers: { "www-authenticate": 'Bearer error="insufficient_scope", scope="repo admin"' },
+				}),
+				serverUrl: new URL(`${origin}/mcp`),
+				fetch,
+				token: "a1",
+			}),
+		).rejects.toBeInstanceOf(McpOAuthAuthorizationRequiredError);
+		expect(provider.authorizationUrl?.searchParams.get("scope")).toBe("repo admin");
+		// The working grant is kept until the user authorizes the new scope.
+		expect(provider.tokenSet?.access_token).toBe("a1");
+	});
+
 	it("binds persisted credentials to the exact MCP server URL", async () => {
 		const store = new MemoryOAuthStateStore();
 		const first = new McpOAuthProvider({

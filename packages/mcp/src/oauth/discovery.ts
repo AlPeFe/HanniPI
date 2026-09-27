@@ -113,9 +113,9 @@ export async function discoverAuthorizationServerMetadata(
 		const metadata = parseAuthorizationServerMetadata(await response.json());
 		if (!options.skipIssuerValidation) {
 			const expected = String(authorizationServerUrl);
-			if (metadata.issuer !== expected && !(expected.endsWith("/") && metadata.issuer === expected.slice(0, -1))) {
-				throw new OAuthIssuerMismatchError(expected, metadata.issuer);
-			}
+			// URL parsing adds a trailing slash to bare origins, so compare without one on either side.
+			const trim = (value: string) => (value.endsWith("/") ? value.slice(0, -1) : value);
+			if (trim(metadata.issuer) !== trim(expected)) throw new OAuthIssuerMismatchError(expected, metadata.issuer);
 		}
 		return metadata;
 	}

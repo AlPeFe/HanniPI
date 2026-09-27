@@ -87,17 +87,19 @@ An MCP transport owns framing and I/O. It delivers individual JSON-RPC messages 
 
 ## Supported protocol surface
 
-- MCP protocol versions `2025-06-18` and `2025-03-26`
+- MCP protocol version `2025-11-25`, accepting servers that negotiate `2025-06-18`, `2025-03-26`, or `2024-11-05`
 - initialization and `notifications/initialized`
 - ping
 - paginated `tools/list`
 - `tools/call`, including structured content
 - progress notifications and timeout renewal
 - request cancellation
+- Streamable HTTP sessions, the server-to-client GET stream with reconnection, and resumption of dropped response streams with `Last-Event-ID`
+- stdio shutdown per the spec (close stdin, then SIGTERM, then SIGKILL), applied to the server's whole process group
 - server `ping` and `roots/list` requests
 - logging and tool-list-change notifications through the generic notification API
 - OAuth protected-resource and authorization-server discovery
-- PKCE authorization code flow, dynamic client registration, and token refresh
+- PKCE authorization code flow, dynamic client registration, token refresh (one refresh shared by concurrent 401s), and step-up authorization for `insufficient_scope`
 
 Batch JSON-RPC messages, legacy HTTP+SSE, servers, sampling, and tasks are outside the initial core.
 

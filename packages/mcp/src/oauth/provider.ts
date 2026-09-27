@@ -5,6 +5,8 @@ export interface McpOAuthState {
 	serverUrl: string;
 	clientInformation?: OAuthClientInformationMixed;
 	tokens?: OAuthTokens;
+	/** When the access token expires, in milliseconds since the epoch, from `expires_in` at the time it was saved. */
+	tokensExpireAt?: number;
 	codeVerifier?: string;
 	oauthState?: string;
 	discovery?: OAuthDiscoveryState;
@@ -87,7 +89,13 @@ export class McpOAuthProvider implements OAuthClientProvider {
 	}
 
 	async saveTokens(tokens: OAuthTokens): Promise<void> {
-		await this.update((value) => ({ ...value, tokens }));
+		const expiresAt = tokens.expires_in === undefined ? undefined : Date.now() + tokens.expires_in * 1000;
+		await this.update((value) => {
+			const next: McpOAuthState = { ...value, tokens };
+			if (expiresAt === undefined) delete next.tokensExpireAt;
+			else next.tokensExpireAt = expiresAt;
+			return next;
+		});
 	}
 
 	async redirectToAuthorization(url: URL): Promise<void> {
@@ -108,7 +116,10 @@ export class McpOAuthProvider implements OAuthClientProvider {
 		await this.update((value) => {
 			const next = { ...value };
 			if (kind === "all" || kind === "client") delete next.clientInformation;
-			if (kind === "all" || kind === "tokens") delete next.tokens;
+			if (kind === "all" || kind === "tokens") {
+				delete next.tokens;
+				delete next.tokensExpireAt;
+			}
 			if (kind === "all" || kind === "verifier") delete next.codeVerifier;
 			if (kind === "all" || kind === "discovery") delete next.discovery;
 			if (kind === "all") delete next.oauthState;

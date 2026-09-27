@@ -62,6 +62,11 @@ export interface OAuthFlowOptions {
 	resourceMetadataUrl?: URL;
 	fetch?: McpFetch;
 	skipIssuerValidation?: boolean;
+	/**
+	 * Go straight to the authorization redirect instead of refreshing stored tokens, for example when the
+	 * server asks for scopes the current grant lacks (a refresh keeps the old scope).
+	 */
+	skipRefresh?: boolean;
 }
 
 export type OAuthFlowResult = "AUTHORIZED" | "REDIRECT";
@@ -312,7 +317,7 @@ async function runFlow(provider: OAuthClientProvider, options: OAuthFlowOptions)
 		await provider.saveTokens(tokens);
 		return "AUTHORIZED";
 	}
-	const existing = await provider.tokens();
+	const existing = options.skipRefresh ? undefined : await provider.tokens();
 	if (existing?.refresh_token) {
 		try {
 			const tokens = await refreshAuthorization(discovered.authorizationServerUrl, {
@@ -356,18 +361,37 @@ export async function authorizeMcp(provider: OAuthClientProvider, options: OAuth
 	}
 }
 
+/**
+ * Auth provider for `StreamableHttpTransport`. After a 401 it refreshes the tokens, or throws
+ * `McpOAuthAuthorizationRequiredError` when the user has to authorize (again). Concurrent 401s share
+ * one refresh, and a request whose token was already replaced is just retried: with rotating refresh
+ * tokens, a second refresh with the old refresh token would fail and discard the new grant.
+ */
 export function adaptOAuthProvider(provider: OAuthClientProvider): AuthProvider {
+	let inFlight: Promise<void> | undefined;
 	return {
 		token: async () => (await provider.tokens())?.access_token,
 		onUnauthorized: async (context: UnauthorizedContext) => {
 			const challenge = parseWwwAuthenticate(context.response.headers.get("www-authenticate"));
-			const result = await authorizeMcp(provider, {
+			const insufficientScope = challenge.error === "insufficient_scope";
+			if (!insufficientScope && !inFlight && context.token !== undefined) {
+				const current = (await provider.tokens())?.access_token;
+				if (current !== undefined && current !== context.token) return;
+			}
+			inFlight ??= authorizeMcp(provider, {
 				serverUrl: context.serverUrl,
 				resourceMetadataUrl: challenge.resourceMetadataUrl,
 				scope: challenge.scope,
 				fetch: context.fetch,
-			});
-			if (result === "REDIRECT") throw new McpOAuthAuthorizationRequiredError();
+				skipRefresh: insufficientScope,
+			})
+				.then((result) => {
+					if (result === "REDIRECT") throw new McpOAuthAuthorizationRequiredError();
+				})
+				.finally(() => {
+					inFlight = undefined;
+				});
+			await inFlight;
 		},
 	};
 }

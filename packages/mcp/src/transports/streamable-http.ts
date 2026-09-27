@@ -3,6 +3,7 @@ import {
 	isJsonRpcRequest,
 	isJsonRpcResponse,
 	JSON_RPC_ERROR_CODES,
+	type JsonRpcId,
 	type JsonRpcMessage,
 	McpConnectionClosedError,
 	parseJsonRpcMessage,
@@ -11,6 +12,10 @@ import {
 import { DEFAULT_MAX_MESSAGE_BYTES, type McpTransport, TransportEvents } from "./transport.ts";
 
 const MAX_ERROR_BODY_BYTES = 8 * 1024;
+const ERROR_MESSAGE_BODY_CHARS = 500;
+const DEFAULT_RECONNECT_INITIAL_DELAY_MS = 1_000;
+const DEFAULT_RECONNECT_MAX_DELAY_MS = 30_000;
+const DEFAULT_RECONNECT_MAX_RETRIES = 5;
 
 export interface SseEvent {
 	event?: string;
@@ -21,6 +26,10 @@ export interface SseEvent {
 export interface ConsumeSseOptions {
 	maxEventBytes?: number;
 	onEvent(event: SseEvent): void;
+	/** Called for every `id` field, including events without data (for example resumption priming events). */
+	onId?(id: string): void;
+	/** Called for every valid `retry` field, in milliseconds. */
+	onRetry?(delayMs: number): void;
 }
 
 export async function consumeSseStream(stream: ReadableStream<Uint8Array>, options: ConsumeSseOptions): Promise<void> {
@@ -59,7 +68,10 @@ export async function consumeSseStream(stream: ReadableStream<Uint8Array>, optio
 		if (value.startsWith(" ")) value = value.slice(1);
 		if (field === "data") dataLines.push(value);
 		else if (field === "event") eventName = value;
-		else if (field === "id" && !value.includes("\0")) eventId = value;
+		else if (field === "id" && !value.includes("\0")) {
+			eventId = value;
+			options.onId?.(value);
+		} else if (field === "retry" && /^\d+$/.test(value)) options.onRetry?.(Number(value));
 	};
 
 	try {
@@ -84,13 +96,25 @@ export async function consumeSseStream(stream: ReadableStream<Uint8Array>, optio
 	}
 }
 
+export interface StreamableHttpReconnectOptions {
+	/** Delay before the first reconnection attempt, unless the server sent a `retry` field. Default: 1000. */
+	initialDelayMs?: number;
+	/** Upper bound for the exponential backoff. Default: 30000. */
+	maxDelayMs?: number;
+	/** Consecutive failed attempts before giving up on a stream. Default: 5. */
+	maxRetries?: number;
+}
+
 export interface StreamableHttpTransportOptions {
 	url: string | URL;
 	headers?: Record<string, string>;
 	fetch?: McpFetch;
+	/** Open the server-to-client GET stream after initialization. Default: true. */
 	openGetStream?: boolean;
 	maxMessageBytes?: number;
 	authProvider?: AuthProvider;
+	/** Reconnection of dropped SSE streams (the GET stream, and response streams that carry event IDs). */
+	reconnect?: StreamableHttpReconnectOptions;
 }
 
 export class McpHttpError extends Error {
@@ -126,6 +150,35 @@ function contentType(response: Response): string | undefined {
 	return response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
 }
 
+/** 401, or 403 with an `insufficient_scope` bearer challenge (step-up authorization). */
+function needsAuthorization(response: Response): boolean {
+	if (response.status === 401) return true;
+	if (response.status !== 403) return false;
+	return /(?:^|[\s,])error="?insufficient_scope"?/i.test(response.headers.get("www-authenticate") ?? "");
+}
+
+/** Statuses worth retrying when a stream fails to (re)open. */
+function isTransientStatus(status: number): boolean {
+	return status === 408 || status === 429 || status >= 500;
+}
+
+function discard(response: Response): Promise<void> {
+	return response.body?.cancel().catch(() => {}) ?? Promise.resolve();
+}
+
+function describeHttpFailure(status: number, body: string): string {
+	const text = body.trim();
+	const snippet = text.length > ERROR_MESSAGE_BODY_CHARS ? `${text.slice(0, ERROR_MESSAGE_BODY_CHARS - 3)}...` : text;
+	return `MCP HTTP request failed with status ${status}${snippet ? `: ${snippet}` : ""}`;
+}
+
+interface StreamCursor {
+	lastEventId: string | undefined;
+	retryMs: number | undefined;
+	/** Whether the stream delivered any event since it was (re)opened. */
+	received: boolean;
+}
+
 export class StreamableHttpTransport extends TransportEvents implements McpTransport {
 	readonly url: URL;
 	readonly options: Readonly<StreamableHttpTransportOptions>;
@@ -135,7 +188,6 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
 	private closed = false;
 	private sessionIdValue: string | undefined;
 	private protocolVersion: string | undefined;
-	private lastEventId: string | undefined;
 	private getStreamStarted = false;
 
 	constructor(options: StreamableHttpTransportOptions) {
@@ -157,11 +209,39 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
 
 	setProtocolVersion(version: string): void {
 		this.protocolVersion = version;
-		if (this.options.openGetStream !== false) void this.openGetStream();
 	}
 
 	async send(message: JsonRpcMessage): Promise<void> {
-		await this.sendRequest(message, false);
+		if (!this.started || this.closed) throw new McpConnectionClosedError();
+		const response = await this.authorizedFetch("POST", {
+			headers: { accept: "application/json, text/event-stream", "content-type": "application/json" },
+			body: JSON.stringify(message),
+		});
+		await this.checkResponse(response);
+		this.captureSession(response);
+
+		if (!isJsonRpcRequest(message)) {
+			// Notifications and responses are acknowledged with 202 and carry no reply; ignore any body.
+			await discard(response);
+			// The server-to-client stream may only open once the session is initialized.
+			if ("method" in message && message.method === "notifications/initialized") this.startGetStream();
+			return;
+		}
+		if (response.status === 202 || response.status === 204) {
+			throw new McpHttpError(response.status, `MCP server accepted request ${message.method} without a response`);
+		}
+		const type = contentType(response);
+		if (type === "application/json") {
+			const body: unknown = await response.json();
+			for (const item of Array.isArray(body) ? body : [body]) this.emitMessage(parseJsonRpcMessage(item));
+			return;
+		}
+		if (type === "text/event-stream" && response.body) {
+			void this.consumeResponseStream(response.body, message.id);
+			return;
+		}
+		await discard(response);
+		throw new McpHttpError(response.status, `Unsupported MCP response content type: ${type ?? "missing"}`);
 	}
 
 	async close(): Promise<void> {
@@ -171,76 +251,54 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
 		if (this.started && this.sessionIdValue) {
 			const controller = new AbortController();
 			const timeout = setTimeout(() => controller.abort(), 1_000);
-			await this.fetch(this.url, {
-				method: "DELETE",
-				headers: await this.headers(),
-				signal: controller.signal,
-			}).catch(() => undefined);
-			clearTimeout(timeout);
+			try {
+				const { headers } = await this.headers();
+				await this.fetch(this.url, { method: "DELETE", headers, signal: controller.signal })
+					.then(discard)
+					.catch(() => undefined);
+			} catch {
+				// Resolving auth headers failed; the session will expire on the server.
+			} finally {
+				clearTimeout(timeout);
+			}
 		}
 		this.emitClose();
 	}
 
-	private async sendRequest(message: JsonRpcMessage, retriedAuth: boolean): Promise<void> {
-		if (!this.started || this.closed) throw new McpConnectionClosedError();
-		const response = await this.fetch(this.url, {
-			method: "POST",
-			headers: await this.headers({
-				accept: "application/json, text/event-stream",
-				"content-type": "application/json",
-			}),
-			body: JSON.stringify(message),
-			signal: this.controller.signal,
-		});
-		if (response.status === 401 && !retriedAuth && this.options.authProvider?.onUnauthorized) {
-			try {
-				await this.options.authProvider.onUnauthorized({ response, serverUrl: this.url, fetch: this.fetch });
-			} finally {
-				await response.body?.cancel().catch(() => {});
-			}
-			return this.sendRequest(message, true);
-		}
-		await this.checkResponse(response);
-		this.captureSession(response);
-		if (response.status === 202 || response.status === 204) return;
-		const type = contentType(response);
-		if (type === "application/json") {
-			this.emitMessage(parseJsonRpcMessage(await response.json()));
-			return;
-		}
-		if (type === "text/event-stream" && response.body) {
-			const requestId = isJsonRpcRequest(message) ? message.id : undefined;
-			let answered = false;
-			void this.consumeSse(response.body, (received) => {
-				if (isJsonRpcResponse(received) && received.id === requestId) answered = true;
-			}).catch((error) => {
-				this.emitError(error);
-				if (requestId === undefined || answered || this.closed) return;
-				// Fail only the request this stream belongs to. The connection itself is still usable.
-				this.emitMessage({
-					jsonrpc: "2.0",
-					id: requestId,
-					error: {
-						code: JSON_RPC_ERROR_CODES.internalError,
-						message: `MCP response stream failed: ${toError(error).message}`,
-					},
-				});
+	/**
+	 * Fetch with auth headers. A 401 (or a 403 asking for more scope) is handed to the auth provider
+	 * once, and the request is retried with whatever credentials it left behind.
+	 */
+	private async authorizedFetch(
+		method: "GET" | "POST",
+		init: { headers: Record<string, string>; body?: string },
+	): Promise<Response> {
+		const onUnauthorized = this.options.authProvider?.onUnauthorized?.bind(this.options.authProvider);
+		for (let attempt = 0; ; attempt++) {
+			const { headers, token } = await this.headers(init.headers);
+			const response = await this.fetch(this.url, {
+				method,
+				headers,
+				body: init.body,
+				signal: this.controller.signal,
 			});
-			return;
+			if (attempt > 0 || !onUnauthorized || !needsAuthorization(response)) return response;
+			try {
+				await onUnauthorized({ response, serverUrl: this.url, fetch: this.fetch, token });
+			} finally {
+				await discard(response);
+			}
 		}
-		if (response.headers.get("content-length") === "0") return;
-		throw new McpHttpError(response.status, `Unsupported MCP response content type: ${type ?? "missing"}`);
 	}
 
-	private async headers(extra: Record<string, string> = {}): Promise<Headers> {
+	private async headers(extra: Record<string, string> = {}): Promise<{ headers: Headers; token?: string }> {
 		const headers = new Headers(this.options.headers);
 		for (const [name, value] of Object.entries(extra)) headers.set(name, value);
 		if (this.sessionIdValue) headers.set("Mcp-Session-Id", this.sessionIdValue);
 		if (this.protocolVersion) headers.set("MCP-Protocol-Version", this.protocolVersion);
-		if (this.lastEventId) headers.set("Last-Event-ID", this.lastEventId);
 		const token = await this.options.authProvider?.token();
 		if (token) headers.set("Authorization", `Bearer ${token}`);
-		return headers;
+		return { headers, ...(token ? { token } : {}) };
 	}
 
 	private captureSession(response: Response): void {
@@ -253,43 +311,181 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
 		const body = (await response.text().catch(() => "")).slice(0, MAX_ERROR_BODY_BYTES);
 		if (response.status === 401) throw new McpAuthRequiredError(response, body);
 		if (response.status === 404 && this.sessionIdValue) throw new McpSessionExpiredError(body);
-		throw new McpHttpError(response.status, `MCP HTTP request failed with status ${response.status}`, body);
+		throw new McpHttpError(response.status, describeHttpFailure(response.status, body), body);
 	}
 
 	private async consumeSse(
 		stream: ReadableStream<Uint8Array>,
+		cursor: StreamCursor,
 		onMessage?: (message: JsonRpcMessage) => void,
 	): Promise<void> {
 		await consumeSseStream(stream, {
 			maxEventBytes: this.options.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES,
+			onId: (id) => {
+				cursor.lastEventId = id;
+			},
+			onRetry: (delayMs) => {
+				cursor.retryMs = delayMs;
+			},
 			onEvent: (event) => {
-				if (event.id) this.lastEventId = event.id;
-				const message = parseJsonRpcMessage(JSON.parse(event.data));
+				cursor.received = true;
+				// Events without data prime resumption; other event types are not JSON-RPC.
+				if (!event.data.trim() || (event.event !== undefined && event.event !== "message")) return;
+				let message: JsonRpcMessage;
+				try {
+					message = parseJsonRpcMessage(JSON.parse(event.data));
+				} catch (error) {
+					this.emitError(error);
+					return;
+				}
 				onMessage?.(message);
 				this.emitMessage(message);
 			},
 		});
 	}
 
-	private async openGetStream(): Promise<void> {
-		if (this.getStreamStarted || this.closed || !this.started) return;
-		this.getStreamStarted = true;
-		try {
-			const response = await this.fetch(this.url, {
-				method: "GET",
-				headers: await this.headers({ accept: "text/event-stream" }),
-				signal: this.controller.signal,
-			});
-			if (response.status === 405) return;
-			await this.checkResponse(response);
-			this.captureSession(response);
-			const type = contentType(response);
-			if (type !== "text/event-stream" || !response.body) {
-				throw new McpHttpError(response.status, `Unsupported MCP GET response content type: ${type ?? "missing"}`);
+	/**
+	 * Read the SSE stream answering one request. When the stream ends or breaks before the response
+	 * arrives and the server assigned event IDs, resume it with GET and `Last-Event-ID`, as the
+	 * server may close response streams at will. Otherwise only this request fails.
+	 */
+	private async consumeResponseStream(body: ReadableStream<Uint8Array>, requestId: JsonRpcId): Promise<void> {
+		const cursor: StreamCursor = { lastEventId: undefined, retryMs: undefined, received: false };
+		let answered = false;
+		const onMessage = (message: JsonRpcMessage) => {
+			if (isJsonRpcResponse(message) && message.id === requestId) answered = true;
+		};
+		let stream: ReadableStream<Uint8Array> | undefined = body;
+		let failure: unknown;
+		for (let attempt = 0; ; ) {
+			if (stream) {
+				try {
+					await this.consumeSse(stream, cursor, onMessage);
+					failure = undefined;
+				} catch (error) {
+					failure = error;
+				}
 			}
-			await this.consumeSse(response.body);
-		} catch (error) {
-			if (!this.closed) this.emitError(error);
+			if (answered || this.closed) return;
+			if (failure !== undefined && !this.isRetryable(failure)) break;
+			if (cursor.lastEventId === undefined || attempt >= this.maxRetries()) break;
+			if (cursor.received) attempt = 0;
+			cursor.received = false;
+			if (!(await this.sleep(this.reconnectDelay(attempt++, cursor.retryMs)))) return;
+			try {
+				stream = await this.openSseStream(cursor.lastEventId);
+			} catch (error) {
+				failure = error;
+				if (!this.isRetryable(error)) break;
+				stream = undefined;
+			}
 		}
+		if (this.closed) return;
+		const reason = failure === undefined ? "stream ended without a response" : toError(failure).message;
+		this.emitMessage({
+			jsonrpc: "2.0",
+			id: requestId,
+			error: { code: JSON_RPC_ERROR_CODES.internalError, message: `MCP response stream failed: ${reason}` },
+		});
+	}
+
+	private startGetStream(): void {
+		if (this.options.openGetStream === false || this.getStreamStarted || this.closed) return;
+		this.getStreamStarted = true;
+		void this.runGetStream();
+	}
+
+	/** Keep the server-to-client stream open, reconnecting with backoff when it drops. */
+	private async runGetStream(): Promise<void> {
+		const cursor: StreamCursor = { lastEventId: undefined, retryMs: undefined, received: false };
+		for (let attempt = 0; !this.closed; ) {
+			try {
+				const stream = await this.openSseStream(cursor.lastEventId);
+				// The server does not offer a GET stream.
+				if (!stream) return;
+				const openedAt = Date.now();
+				await this.consumeSse(stream, cursor);
+				// A stream that stayed up for a while counts as healthy, even if it was idle.
+				if (cursor.received || Date.now() - openedAt > this.maxDelay()) attempt = 0;
+			} catch (error) {
+				if (this.closed) return;
+				if (!this.isRetryable(error)) {
+					this.emitError(error);
+					return;
+				}
+			}
+			cursor.received = false;
+			if (attempt >= this.maxRetries()) {
+				this.emitError(new Error("MCP server-to-client stream dropped and could not be reopened"));
+				return;
+			}
+			if (!(await this.sleep(this.reconnectDelay(attempt++, cursor.retryMs)))) return;
+		}
+	}
+
+	/** Open a GET SSE stream. Resolves to undefined when the server answers 405 (no GET stream). */
+	private async openSseStream(lastEventId: string | undefined): Promise<ReadableStream<Uint8Array> | undefined> {
+		const response = await this.authorizedFetch("GET", {
+			headers: {
+				accept: "text/event-stream",
+				...(lastEventId === undefined ? {} : { "last-event-id": lastEventId }),
+			},
+		});
+		if (response.status === 405) {
+			await discard(response);
+			return undefined;
+		}
+		await this.checkResponse(response);
+		this.captureSession(response);
+		const type = contentType(response);
+		if (type !== "text/event-stream" || !response.body) {
+			await discard(response);
+			throw new McpHttpError(response.status, `Unsupported MCP GET response content type: ${type ?? "missing"}`);
+		}
+		return response.body;
+	}
+
+	/**
+	 * Network failures and transient statuses are retried; auth, session, and protocol errors are not.
+	 * `fetch` reports network failures, including a connection dropped mid-body, as `TypeError`.
+	 */
+	private isRetryable(error: unknown): boolean {
+		if (error instanceof McpHttpError) return isTransientStatus(error.status);
+		if (error instanceof TypeError) return true;
+		const code = (error as { code?: unknown } | undefined)?.code;
+		return typeof code === "string" && (code.startsWith("E") || code.startsWith("UND_ERR"));
+	}
+
+	private reconnectDelay(attempt: number, serverDelayMs: number | undefined): number {
+		if (serverDelayMs !== undefined) return serverDelayMs;
+		const initial = this.options.reconnect?.initialDelayMs ?? DEFAULT_RECONNECT_INITIAL_DELAY_MS;
+		return Math.min(initial * 2 ** attempt, this.maxDelay());
+	}
+
+	private maxDelay(): number {
+		return this.options.reconnect?.maxDelayMs ?? DEFAULT_RECONNECT_MAX_DELAY_MS;
+	}
+
+	private maxRetries(): number {
+		return this.options.reconnect?.maxRetries ?? DEFAULT_RECONNECT_MAX_RETRIES;
+	}
+
+	/** Resolves false when the transport closed while waiting. */
+	private sleep(ms: number): Promise<boolean> {
+		const signal = this.controller.signal;
+		if (signal.aborted) return Promise.resolve(false);
+		return new Promise((resolve) => {
+			const onAbort = () => {
+				clearTimeout(timer);
+				resolve(false);
+			};
+			const timer = setTimeout(() => {
+				signal.removeEventListener("abort", onAbort);
+				resolve(true);
+			}, ms);
+			// A reconnect wait alone does not keep the process alive.
+			timer.unref?.();
+			signal.addEventListener("abort", onAbort, { once: true });
+		});
 	}
 }

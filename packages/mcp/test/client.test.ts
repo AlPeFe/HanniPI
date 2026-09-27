@@ -212,6 +212,63 @@ describe("McpClient", () => {
 		await client.close();
 	});
 
+	it("accepts servers that answer with an older protocol version", async () => {
+		const { clientTransport, server } = await createServer();
+		server.setHandler("initialize", () => ({
+			protocolVersion: "2024-11-05",
+			capabilities: {},
+			serverInfo: { name: "old-server", version: "0.1.0" },
+		}));
+		const client = new McpClient({ name: "test-client", version: "1.0.0" });
+		await client.connect(clientTransport);
+		expect(client.protocolVersion).toBe("2024-11-05");
+		await client.close();
+
+		const unsupported = await createServer();
+		unsupported.server.setHandler("initialize", () => ({
+			protocolVersion: "1999-01-01",
+			capabilities: {},
+			serverInfo: { name: "ancient-server", version: "0.1.0" },
+		}));
+		const rejected = new McpClient({ name: "test-client", version: "1.0.0" });
+		await expect(rejected.connect(unsupported.clientTransport)).rejects.toThrow("unsupported protocol version");
+		expect(rejected.connectionState).toBe("closed");
+	});
+
+	it("defaults missing tool result content to an empty list", async () => {
+		const { client, server } = await connect();
+		server.setHandler("tools/call", () => ({ structuredContent: { ok: true } }));
+		expect(await client.callTool("structured")).toEqual({ content: [], structuredContent: { ok: true } });
+		server.setHandler("tools/call", () => ({ content: "not a list" }));
+		await expect(client.callTool("broken")).rejects.toThrow("Invalid MCP tools/call result");
+		await client.close();
+	});
+
+	it("does not send notifications/cancelled for a timed-out initialize", async () => {
+		const { clientTransport, server } = await createServer();
+		server.setHandler("initialize", () => new Promise(() => {}));
+		const client = new McpClient({ name: "test-client", version: "1.0.0", requestTimeoutMs: 5 });
+		await expect(client.connect(clientTransport)).rejects.toBeInstanceOf(McpTimeoutError);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(
+			server.messages.some((message) => "method" in message && message.method === "notifications/cancelled"),
+		).toBe(false);
+	});
+
+	it("notifies close listeners once when the transport drops", async () => {
+		const { client, server } = await connect();
+		const closed = vi.fn();
+		client.onClose(closed);
+		server.setHandler("tools/call", () => new Promise(() => {}));
+		const pending = client.callTool("wait");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		await server.transport.close();
+		await expect(pending).rejects.toThrow("MCP connection closed");
+		expect(client.connectionState).toBe("closed");
+		await client.close();
+		expect(closed).toHaveBeenCalledTimes(1);
+	});
+
 	it("answers roots/list and dispatches notifications", async () => {
 		const { clientTransport, server } = await createServer();
 		const client = new McpClient({
