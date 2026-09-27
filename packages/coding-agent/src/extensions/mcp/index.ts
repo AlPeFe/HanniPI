@@ -247,6 +247,29 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			);
 		};
 
+		/**
+		 * Stored tokens of servers waiting for a sign-in, as they were when the sign-in was needed.
+		 * `pi mcp login` in another process (for example run by the agent) changes them.
+		 */
+		const tokensAtSignIn = new Map<McpServerConnection, string>();
+		const storedTokens = (connection: McpServerConnection): string => {
+			const url = connection.oauthUrl;
+			return url && credentials ? JSON.stringify(credentials.tokens(url) ?? null) : "null";
+		};
+		const onConnectionChange = (connection: McpServerConnection) => {
+			if (connection.state !== "needs-auth") tokensAtSignIn.delete(connection);
+			else if (!tokensAtSignIn.has(connection)) tokensAtSignIn.set(connection, storedTokens(connection));
+			emitChange();
+		};
+		/** Reconnect servers that need a sign-in when their credentials were stored since. */
+		const reconnectSignedIn = async (ctx: ExtensionContext) => {
+			const signedIn = [...tokensAtSignIn].filter(([connection, tokens]) => storedTokens(connection) !== tokens);
+			if (signedIn.length === 0) return;
+			for (const [connection] of signedIn) tokensAtSignIn.delete(connection);
+			await Promise.allSettled(signedIn.map(([connection]) => connection.reconnect()));
+			ensureCodemodeActive(ctx);
+		};
+
 		/** Create the server's connection, loading the MCP runtime on first use. */
 		const createConnection = async (server: McpServer): Promise<McpServerConnection> => {
 			const runtime = await loadMcpRuntime();
@@ -256,7 +279,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				createTransport: options.createTransport ?? runtime.createDefaultTransport,
 				credentials: getCredentials(runtime),
 				onTools: registerTools,
-				onChange: emitChange,
+				onChange: onConnectionChange,
 			});
 			server.connection = connection;
 			emitChange();
@@ -406,7 +429,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				if (state === "connected" && connection) {
 					items.push({ value: "tools", label: "Tools", description: `${connection.tools.length} offered` });
 				}
-				if (state === "failed" || state === "disconnected" || state === "connected") {
+				if (state === "failed" || state === "disconnected" || state === "connected" || state === "needs-auth") {
 					items.push({ value: "reconnect", label: "Reconnect" });
 				}
 				if (state === "connected" && connection?.oauthUrl) {
@@ -649,6 +672,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		// The first prompt waits for startup connections so their tools are available to it.
 		pi.on("before_agent_start", async () => {
 			await pending;
+		});
+
+		// Pick up sign-ins done outside the session, such as `pi mcp login` run by the agent.
+		pi.on("turn_start", async (_event, ctx) => {
+			if (tokensAtSignIn.size > 0) await reconnectSignedIn(ctx);
 		});
 
 		pi.on("session_shutdown", async () => {

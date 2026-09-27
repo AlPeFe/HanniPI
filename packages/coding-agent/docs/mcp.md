@@ -30,6 +30,28 @@ Add servers to `~/.pi/agent/mcp.json`, or to `.pi/mcp.json` in a project. The fo
 
 Project entries replace global entries with the same name. A project `mcp.json` is only read after the project is trusted, because stdio servers run commands.
 
+Rules that are easy to get wrong:
+
+- Server names may only contain letters, digits, `_`, and `-`. Tools are named `mcp__<server>__<tool>`.
+- `type` is optional: a `command` makes a stdio server and a `url` a streamable HTTP server. When present, it must be `stdio`, `http`, or `streamable-http`. `sse` is rejected; most servers that document an SSE endpoint also serve streamable HTTP, often at `/mcp` instead of `/sse`.
+- `command` is a single executable and `args` its arguments, not one shell string.
+- Keep secrets out of the file: use `${NAME}` for environment variables or `!command` to run a command, for example `"Authorization": "Bearer !op read op://vault/github/token"`.
+- Invalid entries are skipped and reported; the other servers still connect.
+
+## Set up servers
+
+When asked to add an MCP server, the agent should:
+
+1. Put personal servers and servers with credentials in `~/.pi/agent/mcp.json`. Use the project `.pi/mcp.json` only for servers the project itself needs, and only in trusted projects.
+2. Convert entries written for other clients:
+   - Claude Desktop, Claude Code, and Cursor use the same `mcpServers` shape; copy the entry.
+   - VS Code uses a top-level `servers` object and `inputs` prompts; move the entry under `mcpServers` and replace `${input:...}` with `${NAME}` environment variables.
+   - Codex uses TOML (`[mcp_servers.<name>]` with `command`, `args`, `env`, or `url`); write the same fields as JSON.
+   - opencode uses `"type": "local"` with `command` as an array (split it into `command` and `args`), `"type": "remote"` for URLs, `environment` for `env`, and `{env:NAME}` for `${NAME}`.
+3. Run `pi mcp list` to check the entry. It connects to every enabled server and prints the state, the tools, and errors such as the stderr of a stdio server that failed to start. It exits with 1 while anything is wrong.
+4. For a server that needs a sign-in, run `pi mcp login <server>`. It opens the authorization page in the user's browser and waits until the user approves access; tell the user to approve it. A running session uses the new credentials on its next turn.
+5. Tell the user to run `/reload` (or start a new session) so the running session connects to added or changed servers.
+
 Pi connects when a session starts. The first prompt waits until startup connections finish. HTTP connections that fail with a network error or a transient status (408, 429, 5xx) are retried twice. A server that drops its connection shows as disconnected and is reconnected on the next call. When a server announces that its tool list changed, new tools are added and withdrawn tools become unreachable until the server offers them again.
 
 Config errors, servers that failed to connect, and servers that need a sign-in are reported once after startup.
@@ -49,6 +71,8 @@ Exposure changes and enabling or disabling are saved to the `mcp.json` that defi
 
 Outside the interactive TUI, `/mcp` prints the server status. `/mcp login <server>`, `/mcp logout <server>`, and `/mcp reconnect <server>` run those actions directly.
 
+From a shell, `pi mcp list`, `pi mcp login <server>`, and `pi mcp logout <server>` do the same without a session (see [MCP commands](cli.md#mcp-commands)).
+
 Stopping a stdio server closes its stdin, then sends SIGTERM and finally SIGKILL to its whole process group, so servers started through wrappers such as `npx` or `uvx` do not linger.
 
 ## Sign in with OAuth
@@ -63,7 +87,7 @@ Remote servers that use OAuth, such as Sentry, need no credentials in `mcp.json`
 }
 ```
 
-When such a server rejects the connection, `/mcp` shows it as needing sign-in. Select it and choose "Sign in" (or run `/mcp login sentry`) to open the authorization page in your browser. After you approve access, the browser redirects to a temporary server on `127.0.0.1` and pi connects. If the browser runs on another machine, for example over SSH, paste the URL it was redirected to into the sign-in screen instead.
+When such a server rejects the connection, `/mcp` shows it as needing sign-in. Select it and choose "Sign in" (or run `/mcp login sentry`, or `pi mcp login sentry` in a shell) to open the authorization page in your browser. After you approve access, the browser redirects to a temporary server on `127.0.0.1` and pi connects. If the browser runs on another machine, for example over SSH, paste the URL it was redirected to into the sign-in screen instead.
 
 Pi registers itself with the authorization server (dynamic client registration), stores tokens in `~/.pi/agent/mcp-auth.json`, and refreshes access tokens automatically when they expire or the server rejects them. If the server later asks for more scope than was granted, it shows as needing sign-in again, and signing in requests the new scope. "Sign out" in `/mcp` (or `/mcp logout sentry`) deletes the stored credentials.
 

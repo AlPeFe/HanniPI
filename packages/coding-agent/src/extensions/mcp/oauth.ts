@@ -67,6 +67,11 @@ export class McpOAuthCredentialStore {
 		};
 	}
 
+	/** The stored tokens of a server, for noticing sign-ins done by another process. */
+	tokens(serverUrl: string): McpOAuthState["tokens"] {
+		return this.read()[String(new URL(serverUrl))]?.tokens;
+	}
+
 	/** Returns whether credentials were stored for the server. */
 	remove(serverUrl: string): boolean {
 		const key = String(new URL(serverUrl));

@@ -13,6 +13,7 @@ pi update [target] [options]
 pi list
 pi config [options]
 pi auth <check|print-api-key|print-bearer-token> [options]
+pi mcp <list|login|logout> [options]
 ```
 
 <a id="modes"></a>
@@ -287,3 +288,15 @@ Authentication commands require `--provider <provider>` or `--model <model>`. Se
 | `--min-expiry <duration>` | `print-bearer-token` | Require remaining token lifetime using `ms`, `s`, `m`, or `h`, such as `30m` |
 
 Credential-printing commands write secrets to stdout.
+
+## MCP commands
+
+These commands work outside a session, so agents can run them through `bash`. See [MCP Servers](mcp.md).
+
+| Command | Description |
+|---|---|
+| `pi mcp list [--json]` | Connect to every enabled server and print its state, tools, and errors; exit with `1` when a config entry is invalid or an enabled server is not connected |
+| `pi mcp login <server> [--timeout <seconds>]` | Sign in to an OAuth server: open the authorization page and wait for the browser (default 300 seconds); a terminal also accepts the pasted redirect URL |
+| `pi mcp logout <server>` | Delete the stored OAuth credentials of a server |
+
+Project `.pi/mcp.json` files are only read for projects that are already trusted.
