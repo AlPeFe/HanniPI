@@ -30,6 +30,8 @@ const CALLBACK_HOST = "127.0.0.1";
 const CALLBACK_PATH = "/oauth/callback";
 /** Redirect URI for refreshes when none is stored. Refreshing never redirects the user. */
 const FALLBACK_REDIRECT_URL = `http://${CALLBACK_HOST}${CALLBACK_PATH}`;
+/** Access tokens this close to expiry are refreshed before they are sent. */
+const REFRESH_SKEW_MS = 30_000;
 
 export interface McpOAuthSettings {
 	clientId?: string;
@@ -117,11 +119,16 @@ function createProvider(
 }
 
 /**
- * Auth provider for MCP connections: sends the stored access token and refreshes it after a 401.
- * Throws `McpOAuthAuthorizationRequiredError` when the user has to sign in. `onChallenge` receives
- * the server's `WWW-Authenticate` challenge so sign-in can use its resource metadata URL and scope.
+ * Auth provider for MCP connections: sends the stored access token and refreshes it when it is about
+ * to expire or after a 401. Throws `McpOAuthAuthorizationRequiredError` when the user has to sign in,
+ * including when the server asks for more scope (`insufficient_scope`). `onChallenge` receives the
+ * server's `WWW-Authenticate` challenge so sign-in can use its resource metadata URL and scope.
  * `settings` is only called when a refresh is needed, so a secret that fails to resolve fails the
  * refresh instead of the whole connection setup.
+ *
+ * Concurrent requests share one refresh, and a 401 for a token that was already replaced just
+ * retries: many servers rotate refresh tokens, so refreshing twice with the same one would fail
+ * and discard the new grant.
  */
 export function createMcpAuthProvider(options: {
 	serverUrl: string;
@@ -130,10 +137,10 @@ export function createMcpAuthProvider(options: {
 	onChallenge: (challenge: OAuthChallenge) => void;
 }): AuthProvider {
 	const { serverUrl, store } = options;
-	return {
-		token: async () => (await store.load())?.tokens?.access_token,
-		onUnauthorized: async (context) => {
-			options.onChallenge(parseWwwAuthenticate(context.response.headers.get("www-authenticate")));
+	let refreshing: Promise<void> | undefined;
+
+	const refresh = (context: Parameters<NonNullable<AuthProvider["onUnauthorized"]>>[0] | undefined) => {
+		refreshing ??= (async () => {
 			const state = await store.load();
 			if (!state?.tokens?.refresh_token) throw new McpOAuthAuthorizationRequiredError();
 			const settings = options.settings();
@@ -141,10 +148,38 @@ export function createMcpAuthProvider(options: {
 				configuredRedirectUrl(settings) ??
 				registeredRedirectUrls(state.clientInformation)[0] ??
 				FALLBACK_REDIRECT_URL;
-			// Refreshes the tokens, or throws McpOAuthAuthorizationRequiredError if a new sign-in is needed.
-			await adaptOAuthProvider(createProvider(serverUrl, store, settings, redirectUrl, () => {})).onUnauthorized?.(
-				context,
-			);
+			const provider = createProvider(serverUrl, store, settings, redirectUrl, () => {});
+			// Refreshes the tokens, or reports that a new sign-in is needed.
+			const result = context
+				? await adaptOAuthProvider(provider).onUnauthorized?.(context)
+				: await authorizeMcp(provider, { serverUrl });
+			if (result === "REDIRECT") throw new McpOAuthAuthorizationRequiredError();
+		})().finally(() => {
+			refreshing = undefined;
+		});
+		return refreshing;
+	};
+
+	return {
+		token: async () => {
+			await refreshing?.catch(() => undefined);
+			const state = await store.load();
+			const expired = state?.tokensExpireAt !== undefined && state.tokensExpireAt - REFRESH_SKEW_MS <= Date.now();
+			if (!expired || !state?.tokens?.refresh_token) return state?.tokens?.access_token;
+			// Failures fall through: the request goes out with the old token and a 401 decides what happens.
+			await refresh(undefined).catch(() => undefined);
+			return (await store.load())?.tokens?.access_token;
+		},
+		onUnauthorized: async (context) => {
+			const challenge = parseWwwAuthenticate(context.response.headers.get("www-authenticate"));
+			options.onChallenge(challenge);
+			// A refresh keeps the granted scope, so more scope needs a new sign-in.
+			if (challenge.error === "insufficient_scope") throw new McpOAuthAuthorizationRequiredError();
+			if (!refreshing && context.token !== undefined) {
+				const current = (await store.load())?.tokens?.access_token;
+				if (current !== undefined && current !== context.token) return;
+			}
+			await refresh(context);
 		},
 	};
 }
@@ -240,6 +275,7 @@ export async function signInMcpServer(options: {
 			if (!settings.clientId && !registeredRedirectUrls(stored.clientInformation).includes(callback.redirectUrl)) {
 				delete next.clientInformation;
 				delete next.tokens;
+				delete next.tokensExpireAt;
 			}
 			await store.save(next);
 		}
@@ -253,7 +289,9 @@ export async function signInMcpServer(options: {
 			resourceMetadataUrl: options.challenge?.resourceMetadataUrl,
 			scope: options.challenge?.scope,
 		};
-		if ((await authorizeMcp(provider, flow)) === "AUTHORIZED") return;
+		// A refresh keeps the granted scope; a server asking for more needs the browser flow.
+		const skipRefresh = options.challenge?.error === "insufficient_scope";
+		if ((await authorizeMcp(provider, { ...flow, skipRefresh })) === "AUTHORIZED") return;
 		if (!authorizationUrl) throw new Error("OAuth flow did not produce an authorization URL");
 
 		const state = await provider.state();

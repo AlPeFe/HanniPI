@@ -28,7 +28,7 @@ const SERVER_TOOLS = [
 ];
 
 /** Minimal MCP server over an in-memory transport. Records the tool calls it receives. */
-function createFakeServer(calls: string[]) {
+function createFakeServer(calls: string[], listTools: () => unknown[] = () => SERVER_TOOLS) {
 	const pair = createInMemoryTransportPair();
 	const respond = (request: JsonRpcRequest): unknown => {
 		switch (request.method) {
@@ -39,7 +39,7 @@ function createFakeServer(calls: string[]) {
 					serverInfo: { name: "docs", version: "1.0.0" },
 				};
 			case "tools/list":
-				return { tools: SERVER_TOOLS };
+				return { tools: listTools() };
 			case "tools/call": {
 				const params = request.params as { name: string; arguments?: { query?: string } };
 				calls.push(`${params.name}:${JSON.stringify(params.arguments ?? {})}`);
@@ -73,8 +73,9 @@ describe("AgentSession MCP integration", () => {
 		while (harnesses.length > 0) harnesses.pop()?.cleanup();
 	});
 
-	async function setup(exposure: McpExposure) {
+	async function setup(exposure: McpExposure, listTools?: () => unknown[]) {
 		const calls: string[] = [];
+		const servers: ReturnType<typeof createFakeServer>["server"][] = [];
 		const entry: McpServerEntry = {
 			name: "docs",
 			config: { url: "http://unused.invalid", exposure },
@@ -87,7 +88,8 @@ describe("AgentSession MCP integration", () => {
 				createMcpExtension({
 					loadConfig: () => ({ servers: [entry], errors: [] }),
 					createTransport: () => {
-						const pair = createFakeServer(calls);
+						const pair = createFakeServer(calls, listTools);
+						servers.push(pair.server);
 						void pair.server.start();
 						return pair.client;
 					},
@@ -96,7 +98,7 @@ describe("AgentSession MCP integration", () => {
 		});
 		harnesses.push(harness);
 		await harness.session.bindExtensions({});
-		return { harness, calls };
+		return { harness, calls, servers };
 	}
 
 	function declaredToolNames(harness: Harness): string[] {
@@ -194,5 +196,28 @@ describe("AgentSession MCP integration", () => {
 		expect(harness.session.getActiveToolNames()).not.toContain("codemode");
 		const result = toolResult(harness, "mcp__docs__search");
 		expect(text(result)).toBe("direct guide\ndirect faq");
+	});
+
+	it("deactivates MCP tools the server withdraws and restores them when offered again", async () => {
+		let tools = SERVER_TOOLS;
+		const { harness, servers } = await setup("direct", () => tools);
+		harness.setResponses([fauxAssistantMessage("ready")]);
+		await harness.session.prompt("start");
+		expect(harness.session.getActiveToolNames()).toEqual(
+			expect.arrayContaining(["mcp__docs__search", "mcp__docs__fail", "mcp__docs__shot"]),
+		);
+
+		const listChanged = async () => {
+			await servers[0].send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		};
+		tools = SERVER_TOOLS.filter((tool) => tool.name !== "fail");
+		await listChanged();
+		expect(harness.session.getActiveToolNames()).not.toContain("mcp__docs__fail");
+		expect(harness.session.getActiveToolNames()).toContain("mcp__docs__search");
+
+		tools = SERVER_TOOLS;
+		await listChanged();
+		expect(harness.session.getActiveToolNames()).toContain("mcp__docs__fail");
 	});
 });

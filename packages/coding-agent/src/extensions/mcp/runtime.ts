@@ -10,6 +10,7 @@ import {
 	type AuthProvider,
 	type CallToolResult,
 	McpClient,
+	McpHttpError,
 	type McpRequestOptions,
 	McpSessionExpiredError,
 	type Tool as McpTool,
@@ -28,8 +29,14 @@ export { McpOAuthCredentialStore, McpSignInCancelledError, signInMcpServer } fro
 
 const DEFAULT_TIMEOUT_SECONDS = 60;
 const STDERR_TAIL_CHARS = 2_000;
+/** Delays between attempts to connect to an HTTP server that failed with a transient error. */
+const CONNECT_RETRY_DELAYS_MS = [250, 1_000];
 
-type ServerState = "connecting" | "connected" | "needs-auth" | "failed" | "closed";
+/**
+ * `disconnected`: the connection dropped (for example the stdio server exited); the next call
+ * reconnects.
+ */
+type ServerState = "connecting" | "connected" | "disconnected" | "needs-auth" | "failed" | "closed";
 
 export type McpTransportFactory = (
 	entry: McpServerEntry,
@@ -39,6 +46,14 @@ export type McpTransportFactory = (
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+/** Network failures and overloaded or restarting servers, which are worth another connection attempt. */
+function isTransientConnectError(error: unknown): boolean {
+	if (error instanceof McpHttpError) {
+		return error.status === 408 || error.status === 429 || (error.status >= 500 && error.status !== 501);
+	}
+	return error instanceof TypeError;
 }
 
 function signInRequiredMessage(name: string): string {
@@ -89,6 +104,8 @@ export class McpServerConnection implements McpToolCaller {
 	private client: McpClient | undefined;
 	private opening: Promise<McpClient> | undefined;
 	private closed = false;
+	/** Stderr of the last stdio server that failed to connect. */
+	private stderrTail: string | undefined;
 	private readonly cwd: string;
 	private readonly createTransport: McpTransportFactory;
 	private readonly authProvider: AuthProvider | undefined;
@@ -196,6 +213,23 @@ export class McpServerConnection implements McpToolCaller {
 
 	private async open(): Promise<McpClient> {
 		this.state = "connecting";
+		const retries = "url" in this.entry.config ? CONNECT_RETRY_DELAYS_MS : [];
+		for (let attempt = 0; ; attempt++) {
+			this.stderrTail = undefined;
+			try {
+				return await this.connectOnce();
+			} catch (error) {
+				const delay = retries[attempt];
+				if (this.closed || delay === undefined || !isTransientConnectError(error)) {
+					throw this.connectFailed(error);
+				}
+				await new Promise((resolve) => setTimeout(resolve, delay));
+				if (this.closed) throw this.connectFailed(error);
+			}
+		}
+	}
+
+	private async connectOnce(): Promise<McpClient> {
 		const client = new McpClient({
 			name: "pi",
 			version: VERSION,
@@ -209,8 +243,12 @@ export class McpServerConnection implements McpToolCaller {
 			client.onNotification("notifications/tools/list_changed", () => {
 				void this.refreshTools(client);
 			});
-			const tools = await client.listTools();
+			const stdio = transport instanceof StdioTransport ? transport : undefined;
+			client.onClose(() => this.handleClientClose(client, stdio));
+			// Servers without the tools capability (prompts or resources only) do not answer tools/list.
+			const tools = client.serverCapabilities?.tools ? await client.listTools() : [];
 			if (this.closed) throw new Error("shut down while connecting");
+			if (client.connectionState !== "connected") throw new Error("connection closed during setup");
 			this.client = client;
 			this.tools = tools;
 			this.state = "connected";
@@ -219,15 +257,30 @@ export class McpServerConnection implements McpToolCaller {
 			return client;
 		} catch (error) {
 			await client.close().catch(() => undefined);
-			if (error instanceof McpOAuthAuthorizationRequiredError && !this.closed) {
-				this.markNeedsAuth();
-				throw new Error(signInRequiredMessage(this.entry.name));
+			if (transport instanceof StdioTransport) {
+				this.stderrTail = transport.stderr.trim().slice(-STDERR_TAIL_CHARS) || undefined;
 			}
-			const stderr = transport instanceof StdioTransport ? transport.stderr.trim().slice(-STDERR_TAIL_CHARS) : "";
-			this.state = this.closed ? "closed" : "failed";
-			this.error = stderr ? `${errorMessage(error)}\n${stderr}` : errorMessage(error);
-			throw new Error(`MCP server "${this.entry.name}" failed to connect: ${this.error}`);
+			throw error;
 		}
+	}
+
+	private connectFailed(error: unknown): Error {
+		if (error instanceof McpOAuthAuthorizationRequiredError && !this.closed) {
+			this.markNeedsAuth();
+			return new Error(signInRequiredMessage(this.entry.name));
+		}
+		this.state = this.closed ? "closed" : "failed";
+		this.error = this.stderrTail ? `${errorMessage(error)}\n${this.stderrTail}` : errorMessage(error);
+		return new Error(`MCP server "${this.entry.name}" failed to connect: ${this.error}`);
+	}
+
+	/** The transport dropped. The next call reconnects; until then the status shows why. */
+	private handleClientClose(client: McpClient, stdio: StdioTransport | undefined): void {
+		if (this.client !== client || this.closed) return;
+		this.client = undefined;
+		this.state = "disconnected";
+		const stderr = stdio?.stderr.trim().slice(-STDERR_TAIL_CHARS);
+		this.error = stderr ? `Connection closed\n${stderr}` : "Connection closed";
 	}
 
 	private async refreshTools(client: McpClient): Promise<void> {

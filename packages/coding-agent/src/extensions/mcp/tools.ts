@@ -26,10 +26,18 @@ export interface McpToolCaller {
 	callTool(name: string, args: Record<string, unknown>, options: McpRequestOptions): Promise<CallToolResult>;
 }
 
-/** `mcp__<server>__<tool>`, sanitized and shortened with a hash suffix when too long. */
-export function createMcpToolName(server: string, tool: string): string {
+/**
+ * `mcp__<server>__<tool>`, sanitized and shortened with a hash suffix when too long. `isTaken`
+ * reports names already used by a different MCP tool: sanitizing can map two tools to one name
+ * (`a.b` and `a_b`), and the second then gets the hash suffix too.
+ */
+export function createMcpToolName(
+	server: string,
+	tool: string,
+	isTaken: (name: string) => boolean = () => false,
+): string {
 	const name = `mcp__${server}__${tool}`.replace(/[^A-Za-z0-9_-]/g, "_");
-	if (name.length <= MAX_TOOL_NAME_LENGTH) return name;
+	if (name.length <= MAX_TOOL_NAME_LENGTH && !isTaken(name)) return name;
 	const hash = createHash("sha256").update(`${server}\0${tool}`).digest("hex").slice(0, 8);
 	return `${name.slice(0, MAX_TOOL_NAME_LENGTH - hash.length - 1)}_${hash}`;
 }
@@ -88,9 +96,16 @@ export function convertMcpResult(
 	};
 }
 
-/** Tool input schemas must be objects; MCP allows servers to omit `type`. */
+/**
+ * Tool input schemas must be objects. MCP servers may omit `type`, and some providers reject object
+ * schemas without `properties`.
+ */
 function toParameters(schema: Record<string, unknown>): TSchema {
-	return (schema.type === undefined ? { type: "object", ...schema } : schema) as unknown as TSchema;
+	return {
+		...schema,
+		type: schema.type ?? "object",
+		...(schema.properties === undefined ? { properties: {} } : {}),
+	} as unknown as TSchema;
 }
 
 export function createMcpToolDefinition(options: {

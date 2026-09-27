@@ -57,8 +57,9 @@ function formatStatus(connections: readonly McpServerConnection[], configErrors:
 		const exposure = config.exposure ?? "codemode";
 		if (connection.state === "needs-auth") return `${name}: needs sign-in, run /mcp login ${name} (${exposure})`;
 		const tools = connection.state === "connected" ? `, ${connection.tools.length} tools` : "";
+		const state = connection.state === "disconnected" ? "disconnected, reconnects on next call" : connection.state;
 		const error = connection.error ? `\n    ${connection.error.split("\n").join("\n    ")}` : "";
-		return `${name}: ${connection.state}${tools} (${exposure})${error}`;
+		return `${name}: ${state}${tools} (${exposure})${error}`;
 	});
 	for (const error of configErrors) lines.push(`config error: ${error}`);
 	return lines.join("\n");
@@ -81,11 +82,26 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			return credentials;
 		};
 
+		/** pi tool name to the `<server>\0<tool>` it was assigned to, so names stay unique and stable. */
+		const toolOwners = new Map<string, string>();
+		/** Tool names currently offered by each server. */
+		const serverTools = new Map<string, Set<string>>();
+		/** Tools deactivated because their server stopped offering them. */
+		const withdrawn = new Set<string>();
+
 		const registerTools = (connection: McpServerConnection) => {
 			const { name: server, config } = connection.entry;
 			const exposure = config.exposure ?? "codemode";
+			const previous = serverTools.get(server) ?? new Set<string>();
+			const current = new Set<string>();
 			for (const tool of connection.tools) {
-				const name = createMcpToolName(server, tool.name);
+				const owner = `${server}\0${tool.name}`;
+				const name = createMcpToolName(server, tool.name, (candidate) => {
+					const existing = toolOwners.get(candidate);
+					return (existing !== undefined && existing !== owner) || current.has(candidate);
+				});
+				toolOwners.set(name, owner);
+				current.add(name);
 				pi.registerTool(
 					createMcpToolDefinition({
 						server,
@@ -97,6 +113,16 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 					}),
 				);
 			}
+			serverTools.set(server, current);
+			// Registering only activates new names: deactivate tools the server dropped (tools cannot be
+			// unregistered) and reactivate ones it offers again.
+			const removed = [...previous].filter((name) => !current.has(name));
+			const restored = [...current].filter((name) => withdrawn.has(name));
+			if (removed.length === 0 && restored.length === 0) return;
+			for (const name of removed) withdrawn.add(name);
+			for (const name of restored) withdrawn.delete(name);
+			const active = pi.getActiveTools().filter((name) => !removed.includes(name));
+			pi.setActiveTools([...new Set([...active, ...restored])]);
 		};
 
 		/** Codemode-exposed tools are unreachable without the codemode tool, so turn it on. */
@@ -181,6 +207,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				else ctx.ui.notify(`Sign-in to MCP server "${name}" failed: ${errorMessage(error)}`, "error");
 				return;
 			}
+			// The challenge that asked for this sign-in (for example for more scope) is answered.
+			connection.challenge = undefined;
 			try {
 				await connection.reconnect();
 			} catch (error) {

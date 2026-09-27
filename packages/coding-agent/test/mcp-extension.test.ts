@@ -1,8 +1,13 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type JsonRpcMessage, LATEST_PROTOCOL_VERSION, McpSessionExpiredError } from "@earendil-works/pi-mcp";
-import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
+import {
+	type JsonRpcMessage,
+	LATEST_PROTOCOL_VERSION,
+	McpHttpError,
+	McpSessionExpiredError,
+} from "@earendil-works/pi-mcp";
+import { createInMemoryTransportPair, type InMemoryTransport } from "@earendil-works/pi-mcp/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { InMemoryAuthStorageBackend } from "../src/core/auth-storage.ts";
 import { loadMcpConfig, type McpServerEntry } from "../src/extensions/mcp/config.ts";
@@ -68,6 +73,10 @@ describe("MCP tools", () => {
 		expect(long).toHaveLength(64);
 		expect(long).toMatch(/^mcp__server__x+_[0-9a-f]{8}$/);
 		expect(createMcpToolName("server", `${"x".repeat(100)}y`)).not.toBe(long);
+		// Names that sanitize to one already taken by another tool get a hash suffix.
+		const taken = createMcpToolName("s", "a_b");
+		const second = createMcpToolName("s", "a.b", (name) => name === taken);
+		expect(second).toMatch(/^mcp__s__a_b_[0-9a-f]{8}$/);
 	});
 
 	it("converts results, keeping structured content and throwing for errors", () => {
@@ -99,22 +108,32 @@ describe("MCP tools", () => {
 });
 
 describe("MCP connections", () => {
+	const servers: InMemoryTransport[] = [];
+
 	/** In-memory server that answers initialize, tools/list, and tools/call with "ok". */
-	function createTransport(options: { expireFirstCall?: boolean } = {}) {
+	function createTransport(options: { expireFirstCall?: boolean; methods?: string[]; noTools?: boolean } = {}) {
 		const pair = createInMemoryTransportPair();
+		servers.push(pair.server);
 		pair.server.onMessage((message) => {
 			if (!("id" in message) || !("method" in message)) return;
-			const result =
+			options.methods?.push(message.method);
+			const response: JsonRpcMessage =
 				message.method === "initialize"
 					? {
-							protocolVersion: LATEST_PROTOCOL_VERSION,
-							capabilities: { tools: {} },
-							serverInfo: { name: "fake", version: "1.0.0" },
+							jsonrpc: "2.0",
+							id: message.id,
+							result: {
+								protocolVersion: LATEST_PROTOCOL_VERSION,
+								capabilities: options.noTools ? { prompts: {} } : { tools: {} },
+								serverInfo: { name: "fake", version: "1.0.0" },
+							},
 						}
 					: message.method === "tools/list"
-						? { tools: [] }
-						: { content: [{ type: "text", text: "ok" }] };
-			queueMicrotask(() => void pair.server.send({ jsonrpc: "2.0", id: message.id, result }));
+						? options.noTools
+							? { jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" } }
+							: { jsonrpc: "2.0", id: message.id, result: { tools: [] } }
+						: { jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "ok" }] } };
+			queueMicrotask(() => void pair.server.send(response));
 		});
 		void pair.server.start();
 		if (options.expireFirstCall) {
@@ -152,6 +171,70 @@ describe("MCP connections", () => {
 		]);
 		expect(opened()).toBe(2);
 		await connection.close();
+	});
+
+	it("connects to servers without the tools capability without listing tools", async () => {
+		const methods: string[] = [];
+		const { connection } = connect({ name: "fake", config: { command: "unused" }, source: "test" }, [
+			() => createTransport({ noTools: true, methods }),
+		]);
+		await connection.getClient();
+		expect(connection.state).toBe("connected");
+		expect(connection.tools).toEqual([]);
+		expect(methods).toEqual(["initialize"]);
+		await connection.close();
+	});
+
+	it("marks a dropped connection and reconnects on the next call", async () => {
+		const { connection, opened } = connect({ name: "fake", config: { command: "unused" }, source: "test" }, [
+			() => createTransport(),
+			() => createTransport(),
+		]);
+		await connection.getClient();
+		await servers.at(-1)?.close();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(connection.state).toBe("disconnected");
+		expect(connection.error).toBe("Connection closed");
+		expect(await connection.callTool("echo", {}, {})).toEqual({ content: [{ type: "text", text: "ok" }] });
+		expect(connection.state).toBe("connected");
+		expect(opened()).toBe(2);
+		await connection.close();
+	});
+
+	it("retries HTTP connections that fail with a transient error", async () => {
+		const { connection, opened } = connect(
+			{ name: "fake", config: { url: "http://unused.invalid", headers: { Authorization: "x" } }, source: "test" },
+			[
+				() => {
+					const transport = createTransport();
+					transport.send = async () => {
+						throw new McpHttpError(503, "MCP HTTP request failed with status 503");
+					};
+					return transport;
+				},
+				() => createTransport(),
+			],
+		);
+		await connection.getClient();
+		expect(connection.state).toBe("connected");
+		expect(opened()).toBe(2);
+		await connection.close();
+
+		const failing = connect(
+			{ name: "fake", config: { url: "http://unused.invalid", headers: { Authorization: "x" } }, source: "test" },
+			[
+				() => {
+					const transport = createTransport();
+					transport.send = async () => {
+						throw new McpHttpError(400, "MCP HTTP request failed with status 400: bad");
+					};
+					return transport;
+				},
+			],
+		);
+		await expect(failing.connection.getClient()).rejects.toThrow("status 400: bad");
+		expect(failing.connection.state).toBe("failed");
+		expect(failing.opened()).toBe(1);
 	});
 
 	it("resolves the OAuth client secret lazily", async () => {

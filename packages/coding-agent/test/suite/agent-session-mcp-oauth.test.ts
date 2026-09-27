@@ -6,6 +6,7 @@ import { LATEST_PROTOCOL_VERSION } from "@earendil-works/pi-mcp";
 import { afterEach, describe, expect, it } from "vitest";
 import { InMemoryAuthStorageBackend } from "../../src/core/auth-storage.ts";
 import type { ExtensionUIContext } from "../../src/core/extensions/index.ts";
+import { createCodemodeTool } from "../../src/core/tools/codemode.ts";
 import type { McpServerEntry } from "../../src/extensions/mcp/config.ts";
 import { createMcpExtension } from "../../src/extensions/mcp/index.ts";
 import { McpOAuthCredentialStore } from "../../src/extensions/mcp/oauth.ts";
@@ -208,6 +209,7 @@ describe("AgentSession MCP OAuth", () => {
 		const notifications: string[] = [];
 		let redirectLocation: Promise<string> | undefined;
 		const harness: Harness = await createHarness({
+			tools: [createCodemodeTool()],
 			initialActiveToolNames: [],
 			extensionFactories: [
 				createMcpExtension({
@@ -288,5 +290,46 @@ describe("AgentSession MCP OAuth", () => {
 		expect(notifications.at(-1)).toBe('Signed in to MCP server "issues" (1 tools).');
 		expect(text(await callWhoami(harness))).toBe(`token access-1`);
 		expect(server.log).toContain("token code");
+	});
+
+	it("shares one refresh between concurrent calls and refreshes tokens that are about to expire", async () => {
+		const { harness, server, backend } = await setup("follow");
+		await harness.session.prompt("/mcp login issues");
+		harness.session.setActiveToolsByName([...harness.session.getActiveToolNames(), "codemode"]);
+
+		// The server rotates refresh tokens, so a second refresh with the same token would fail.
+		server.expireAccessTokens();
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("codemode", {
+						code: "return await Promise.all([1, 2, 3].map(() => tools.mcp__issues__whoami({})));",
+					}),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("who am i, three times");
+		const codemode = harness.session.messages.find(
+			(message): message is ToolResultMessage => message.role === "toolResult" && message.toolName === "codemode",
+		);
+		expect(codemode?.isError).toBe(false);
+		expect(JSON.parse(text(codemode as ToolResultMessage))).toEqual([
+			"token access-2",
+			"token access-2",
+			"token access-2",
+		]);
+		expect(server.log.filter((entry) => entry === "token refresh")).toHaveLength(1);
+
+		// A token past its expiry is refreshed before the request, without a 401 round trip.
+		backend.withLock((current) => {
+			const states = JSON.parse(current ?? "{}") as Record<string, { tokensExpireAt?: number }>;
+			for (const state of Object.values(states)) state.tokensExpireAt = Date.now() - 1_000;
+			return { result: undefined, next: JSON.stringify(states) };
+		});
+		const logLength = server.log.length;
+		expect(text(await callWhoami(harness))).toBe("token access-3");
+		expect(server.log.slice(logLength)).toEqual(["token refresh", "call access-3"]);
 	});
 });

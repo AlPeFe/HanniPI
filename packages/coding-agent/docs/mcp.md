@@ -30,7 +30,9 @@ Add servers to `~/.pi/agent/mcp.json`, or to `.pi/mcp.json` in a project. The fo
 
 Project entries replace global entries with the same name. A project `mcp.json` is only read after the project is trusted, because stdio servers run commands.
 
-Pi connects when a session starts. The first prompt waits until startup connections finish. A server that drops its connection is reconnected on the next call. Run `/mcp` to see server status, tool counts, and errors.
+Pi connects when a session starts. The first prompt waits until startup connections finish. HTTP connections that fail with a network error or a transient status (408, 429, 5xx) are retried twice. A server that drops its connection shows as disconnected and is reconnected on the next call. When a server announces that its tool list changed, new tools are added and withdrawn tools are deactivated. Run `/mcp` to see server status, tool counts, and errors.
+
+Stopping a stdio server closes its stdin, then sends SIGTERM and finally SIGKILL to its whole process group, so servers started through wrappers such as `npx` or `uvx` do not linger.
 
 ## Sign in with OAuth
 
@@ -46,7 +48,7 @@ Remote servers that use OAuth, such as Sentry, need no credentials in `mcp.json`
 
 When such a server rejects the connection, `/mcp` shows it as needing sign-in. Run `/mcp login sentry` to open the authorization page in your browser. After you approve access, the browser redirects to a temporary server on `127.0.0.1` and pi connects. If the browser runs on another machine, for example over SSH, paste the URL it was redirected to into the prompt instead.
 
-Pi registers itself with the authorization server (dynamic client registration), stores tokens in `~/.pi/agent/mcp-auth.json`, and refreshes expired access tokens automatically. `/mcp logout sentry` deletes the stored credentials.
+Pi registers itself with the authorization server (dynamic client registration), stores tokens in `~/.pi/agent/mcp-auth.json`, and refreshes access tokens automatically when they expire or the server rejects them. If the server later asks for more scope than was granted, it shows as needing sign-in again, and `/mcp login` requests the new scope. `/mcp logout sentry` deletes the stored credentials.
 
 OAuth applies to HTTP servers without an `Authorization` header. For authorization servers that do not support dynamic client registration, configure a pre-registered client:
 
