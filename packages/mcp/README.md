@@ -27,6 +27,34 @@ await client.close();
 
 For a remote server, use `new StreamableHttpTransport({ url, headers })`. Fetch can be injected for proxying or custom networking.
 
+### Tools for an LLM
+
+`toLlmContent(result)` converts a `CallToolResult` to text and image content for a model, in the shape of `@earendil-works/pi-ai`'s `TextContent` and `ImageContent`. Text and images pass through, embedded text and image resources are unwrapped, and audio, resource links, and binary resources become short text placeholders. A result without content blocks but with `structuredContent` becomes its JSON.
+
+Wrapping an MCP tool as a `pi-agent-core` `AgentTool`:
+
+```typescript
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { toLlmContent } from "@earendil-works/pi-mcp";
+import { Type } from "typebox";
+
+const tools: AgentTool[] = (await client.listTools()).map((tool) => ({
+	// Providers allow at most 64 characters of [A-Za-z0-9_-].
+	name: `mcp_${tool.name}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64),
+	label: tool.title ?? tool.name,
+	description: tool.description ?? tool.name,
+	// Providers require an object schema, and some reject one without `properties`.
+	parameters: Type.Unsafe({ ...tool.inputSchema, type: "object", properties: tool.inputSchema.properties ?? {} }),
+	execute: async (_toolCallId, params, signal) => {
+		const result = await client.callTool(tool.name, params as Record<string, unknown>, { signal });
+		// MCP reports tool failures in the result instead of as a protocol error.
+		return { content: toLlmContent(result), details: undefined, isError: result.isError === true };
+	},
+}));
+```
+
+The [mcp-codemode example](https://github.com/earendil-works/pi/tree/main/packages/agent/examples/mcp-codemode) also forwards progress, passes `structuredContent` through, and lets `@earendil-works/pi-codemode` scripts call the tools.
+
 ### OAuth
 
 `@earendil-works/pi-mcp/oauth` provides the MCP OAuth client subset without depending on the official SDK:

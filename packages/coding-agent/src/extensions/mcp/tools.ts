@@ -11,7 +11,12 @@
 import { createHash } from "node:crypto";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ImageContent, JsonValue, TextContent } from "@earendil-works/pi-ai";
-import type { CallToolResult, ContentBlock, McpRequestOptions, Tool as McpTool } from "@earendil-works/pi-mcp";
+import {
+	type CallToolResult,
+	type McpRequestOptions,
+	type Tool as McpTool,
+	toLlmContent,
+} from "@earendil-works/pi-mcp";
 import type { TSchema } from "typebox";
 import type { ToolDefinition, ToolNamespace } from "../../core/extensions/types.ts";
 import type { McpExposure } from "./config.ts";
@@ -42,32 +47,6 @@ export function createMcpToolName(
 	if (name.length <= MAX_TOOL_NAME_LENGTH && !isTaken(name)) return name;
 	const hash = createHash("sha256").update(`${server}\0${tool}`).digest("hex").slice(0, 8);
 	return `${name.slice(0, MAX_TOOL_NAME_LENGTH - hash.length - 1)}_${hash}`;
-}
-
-function blockToContent(block: ContentBlock): TextContent | ImageContent {
-	switch (block.type) {
-		case "text":
-			return { type: "text", text: block.text };
-		case "image":
-			return { type: "image", data: block.data, mimeType: block.mimeType };
-		case "audio":
-			return { type: "text", text: `[audio ${block.mimeType} omitted]` };
-		case "resource_link":
-			return { type: "text", text: `${block.name}: ${block.uri}` };
-		case "resource": {
-			const resource = block.resource;
-			if ("text" in resource) return { type: "text", text: resource.text };
-			if (resource.mimeType?.startsWith("image/")) {
-				return { type: "image", data: resource.blob, mimeType: resource.mimeType };
-			}
-			return {
-				type: "text",
-				text: `[binary resource ${resource.uri} (${resource.mimeType ?? "unknown type"}) omitted]`,
-			};
-		}
-		default:
-			return { type: "text", text: `[unsupported MCP content ${(block as { type: string }).type}]` };
-	}
 }
 
 function textOf(content: readonly (TextContent | ImageContent)[]): string {
@@ -101,13 +80,9 @@ export function convertMcpResult(
 	tool: string,
 	result: CallToolResult,
 ): AgentToolResult<McpToolDetails> {
-	const content = result.content.map(blockToContent);
+	const content: (TextContent | ImageContent)[] = toLlmContent(result);
 	if (result.isError && textOf(content) === "") {
 		content.push({ type: "text", text: `MCP tool ${server}/${tool} returned an error` });
-	}
-	// Servers should mirror structured results as text; fall back to JSON when they do not.
-	if (content.length === 0 && result.structuredContent !== undefined) {
-		content.push({ type: "text", text: JSON.stringify(result.structuredContent, null, 2) });
 	}
 	const { _meta: _ignored, ...scriptResult } = result;
 	return {

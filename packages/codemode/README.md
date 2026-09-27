@@ -108,6 +108,56 @@ renderDeclarations({ tools: sandbox.tools, globals: sandbox.globals });
 
 Schemas only shape the declarations; values are not validated against them. Local references (`#/$defs/...`, `#/definitions/...`) are expanded; recursive and remote references render as `unknown`.
 
+## Using with pi-agent-core
+
+To give an `Agent` a codemode tool, expose its other tools to the sandbox and wrap `execute()` as an `AgentTool`:
+
+```ts
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import {
+	type CodemodeJsonSchema,
+	CodemodeSandbox,
+	type CodemodeTool,
+	renderDeclarations,
+} from "@earendil-works/pi-codemode";
+import { Type } from "typebox";
+
+const sandboxTools: CodemodeTool[] = agentTools.map((tool) => ({
+	name: tool.name,
+	description: tool.description,
+	inputSchema: tool.parameters as CodemodeJsonSchema,
+	outputSchema: (tool.outputSchema as CodemodeJsonSchema | undefined) ?? { type: "string" },
+	execute: async (args, { signal }) => {
+		const result = await tool.execute("nested", args as never, signal);
+		if (tool.outputSchema && result.structuredContent !== undefined) return result.structuredContent;
+		return result.content.map((block) => (block.type === "text" ? block.text : "")).join("\n");
+	},
+}));
+
+const codemodeTool: AgentTool = {
+	name: "codemode",
+	label: "Codemode",
+	description: `Run JavaScript that calls tools as \`await tools.<name>(args)\`. Output with text() or return.\n\n${renderDeclarations({ tools: sandboxTools })}`,
+	parameters: Type.Object({ code: Type.String() }),
+	execute: async (_toolCallId, { code }, signal) => {
+		const sandbox = new CodemodeSandbox({ tools: sandboxTools });
+		try {
+			const result = await sandbox.execute(code, { signal });
+			const content = [...result.output];
+			if (result.ok && result.value !== undefined) content.push({ type: "text", text: JSON.stringify(result.value) });
+			if (!result.ok) content.push({ type: "text", text: result.error.stack ?? result.error.message });
+			return { content, details: undefined, isError: !result.ok };
+		} finally {
+			await sandbox.close();
+		}
+	},
+};
+```
+
+`result.output` items already have the shape of `@earendil-works/pi-ai`'s `TextContent` and `ImageContent`. Calling `tool.execute()` directly skips the agent's `beforeToolCall` and `afterToolCall` hooks. To apply them to nested calls too, run each call through `runToolCall()` from `@earendil-works/pi-agent-core`, as the [mcp-codemode example](https://github.com/earendil-works/pi/tree/main/packages/agent/examples/mcp-codemode) does. That example also rejects failed nested calls inside the script and combines codemode with MCP tools.
+
+## Results
+
 `execute()` never rejects for script failures. `result.error.kind` is one of:
 
 | kind      | meaning                                                                     |

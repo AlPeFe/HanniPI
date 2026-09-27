@@ -1,16 +1,18 @@
 export type { AuthProvider, McpFetch, UnauthorizedContext } from "./auth-provider.ts";
 export { McpClient, type McpClientOptions, type McpRequestOptions } from "./client.ts";
-export type {
-	AudioContent,
-	BlobResourceContents,
-	CallToolResult,
-	ContentAnnotations,
-	ContentBlock,
-	EmbeddedResourceContent,
-	ImageContent,
-	ResourceLinkContent,
-	TextContent,
-	TextResourceContents,
+export {
+	type AudioContent,
+	type BlobResourceContents,
+	type CallToolResult,
+	type ContentAnnotations,
+	type ContentBlock,
+	type EmbeddedResourceContent,
+	type ImageContent,
+	type LlmContent,
+	type ResourceLinkContent,
+	type TextContent,
+	type TextResourceContents,
+	toLlmContent,
 } from "./protocol/content.ts";
 export {
 	isJsonRpcNotification,
