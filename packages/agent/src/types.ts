@@ -448,6 +448,12 @@ export interface AgentToolResult<T = JsonValue | undefined> {
 	/** Usage from the final tool execution itself, if available. Not used for main LLM context accounting. */
 	usage?: Usage;
 	/**
+	 * Report a failure without throwing. The model sees `content` as an error result, like a thrown
+	 * error, but `details` and `structuredContent` are kept, so the UI and programmatic callers can
+	 * still read partial output or a structured failure (for example an MCP result with `isError`).
+	 */
+	isError?: boolean;
+	/**
 	 * Hint that the agent should stop after the current tool batch.
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.
 	 */
@@ -511,7 +517,8 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	 */
 	outputSchema?: TSchema;
 	/**
-	 * Execute the tool call. Throw on failure instead of encoding errors in `content`.
+	 * Execute the tool call. Throw on failure, or return a result with `isError: true`; do not only
+	 * describe the failure in `content`.
 	 * `context` is provided by the agent loop and absent when the tool is called directly.
 	 */
 	execute: (
