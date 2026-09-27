@@ -105,6 +105,11 @@ describe("AgentSession tool orchestration", () => {
 			[`${parent}/2`, "echo", "ok"],
 			[`${parent}/3`, "run_tools", "error"],
 		]);
+		// The record is persisted with the session.
+		const persisted = harness.sessionManager
+			.getBranch()
+			.find((entry) => entry.type === "message" && entry.message.role === "toolResult");
+		expect(persisted?.type === "message" && persisted.message).toMatchObject({ nestedCalls: result.nestedCalls });
 	});
 
 	it("registers codemode and tool_search inactive until they are named", async () => {

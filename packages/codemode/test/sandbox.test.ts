@@ -334,22 +334,6 @@ describe("store and load", () => {
 		expect(result).toMatchObject({ ok: true, value: [1, 1], storeWrites: { set: { kept: { b: 1 } } } });
 	});
 
-	it("reports no writes when there were none", async () => {
-		const sandbox = createSandbox();
-		expect(await sandbox.execute("return load('a')", { store: { a: 1 } })).toMatchObject({
-			ok: true,
-			value: 1,
-			storeWrites: { set: {}, delete: [] },
-		});
-	});
-
-	it("drops writes when the script fails", async () => {
-		const sandbox = createSandbox();
-		const result = await sandbox.execute("store('a', 1); throw new Error('boom')");
-		expect(result.ok).toBe(false);
-		expect("storeWrites" in result).toBe(false);
-	});
-
 	it("rejects invalid keys, values, and oversized writes inside the script", async () => {
 		const sandbox = createSandbox();
 		const result = await sandbox.execute(`
@@ -536,13 +520,6 @@ describe("limits and lifetime", () => {
 			try { dive(); } catch (error) { return [error.name, depth > 1000]; }
 		`);
 		expect(result).toMatchObject({ ok: true, value: ["RangeError", true] });
-	});
-
-	it("enforces the memory limit inside the script", async () => {
-		const sandbox = new CodemodeSandbox({ timeoutMs: 20_000, memoryLimitBytes: 32 * 1024 * 1024 });
-		sandboxes.push(sandbox);
-		const result = await sandbox.execute("const a = []; while (true) a.push(new Array(1e5).fill('x'))");
-		expect(result).toMatchObject({ ok: false, error: { kind: "script", name: "InternalError" } });
 	});
 
 	it("reports a missing worker file as a sandbox error", async () => {

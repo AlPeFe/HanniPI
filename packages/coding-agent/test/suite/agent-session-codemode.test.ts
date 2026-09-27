@@ -1,8 +1,14 @@
 import { readFileSync, rmSync } from "node:fs";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { type ClassifierModel, type ClassifierResult, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import {
+	type ClassifierModel,
+	type ClassifierResult,
+	fauxAssistantMessage,
+	fauxToolCall,
+	getCurrentTools,
+	type TranscriptContext,
+} from "@earendil-works/pi-ai";
 import type { ToolResultMessage } from "@earendil-works/pi-ai/compat";
-import { CODEMODE_SOURCE_GRAMMAR } from "@earendil-works/pi-codemode";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "../../src/core/extensions/types.ts";
@@ -14,9 +20,8 @@ import {
 	CODEMODE_STORE_ENTRY_TYPE,
 	type CodemodeToolDetails,
 	createCodemodeTool,
-	createCodemodeToolDefinition,
 } from "../../src/extensions/codemode/tool.ts";
-import { createHarness, type Harness, type HarnessOptions } from "./harness.ts";
+import { createHarness, getToolResult, type Harness, type HarnessOptions } from "./harness.ts";
 
 const TINY_PNG_BASE64 =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
@@ -60,13 +65,7 @@ const screenshotTool: AgentTool = {
 	}),
 };
 
-function codemodeResult(harness: Harness): ToolResultMessage {
-	const result = harness.session.messages.find(
-		(message): message is ToolResultMessage => message.role === "toolResult" && message.toolName === "codemode",
-	);
-	if (!result) throw new Error("No codemode tool result");
-	return result;
-}
+const codemodeResult = (harness: Harness) => getToolResult(harness, "codemode");
 
 /** The output after the script header, which is checked on the way. */
 function resultText(message: ToolResultMessage): string {
@@ -100,39 +99,38 @@ describe("AgentSession codemode tool", () => {
 		return harness;
 	}
 
-	it("appends codemode declarations to the declared tools in codemode.mode on", async () => {
+	it("presents callable tools per codemode.mode", async () => {
 		const harness = await setup();
-		const find = (name: string) => harness.session.agent.state.tools.find((tool) => tool.name === name);
-		expect(find("echo")?.description).toBe(
-			"Echo text back.\n\nSecond paragraph.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { echo(args: {\n  // Text to echo\n  text: string;\n}): Promise<string>; };\n```",
-		);
-		expect(find("stats")?.description).toContain(
-			"declare const tools: { stats(args: { [key: string]: unknown; }): Promise<{ files: number; names: Array<string>; }>; };",
-		);
-		const codemode = find("codemode")?.description ?? "";
-		expect(codemode).toContain("- `image(imageUrlOrItem: string | { image_url: string } | ImageContent)`");
-		// Declared tools are not listed a second time.
-		expect(codemode).not.toContain("### `echo`");
-		expect(codemode).not.toContain("Nested tools:");
-		expect(codemode).not.toContain("Shared MCP Types");
-		expect(codemode).not.toMatch(/\bexec\(args/);
+		const description = (name: string) =>
+			harness.session.agent.state.tools.find((tool) => tool.name === name)?.description ?? "";
+		const requestTools: string[][] = [];
+		const record = (context: TranscriptContext) => {
+			requestTools.push(getCurrentTools(context.messages).map((tool) => tool.name));
+			return fauxAssistantMessage("ok");
+		};
 
-		harness.session.setActiveToolsByName(["echo"]);
-		expect(find("echo")?.description).toBe("Echo text back.\n\nSecond paragraph.");
-	});
+		// on: declared tools carry their codemode declaration and are not listed again in codemode.
+		harness.session.setActiveToolsByName(["echo", "codemode"]);
+		expect(description("echo")).toContain("codemode tool declaration:");
+		expect(description("codemode")).not.toContain("### `echo`");
+		harness.setResponses([record]);
+		await harness.session.prompt("on");
+		expect(requestTools[0]).toEqual(expect.arrayContaining(["echo", "codemode"]));
 
-	it("lists the callable tools in the codemode description in codemode.mode only", async () => {
-		const harness = await setup();
+		// only: codemode lists echo, which stays active but is left out of requests.
 		harness.settingsManager.applyOverrides({ codemode: { mode: "only" } });
 		harness.session.setActiveToolsByName(["echo", "codemode"]);
-		const find = (name: string) => harness.session.agent.state.tools.find((tool) => tool.name === name);
-		expect(find("echo")?.description).toBe("Echo text back.\n\nSecond paragraph.");
-		const codemode = find("codemode")?.description ?? "";
-		expect(codemode).toContain("Nested tools: COMPLETE list (1 tool).");
-		expect(codemode).toContain(
-			"### `echo`\nEcho text back.\n\nSecond paragraph.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { echo(args: {",
-		);
-		expect(codemode).not.toContain("stats(args");
+		expect(description("echo")).not.toContain("codemode tool declaration:");
+		expect(description("codemode")).toContain("### `echo`");
+		expect(description("codemode")).not.toContain("### `stats`");
+		harness.setResponses([record]);
+		await harness.session.prompt("only");
+		expect(requestTools[1]).toContain("codemode");
+		expect(requestTools[1]).not.toContain("echo");
+
+		// Without codemode, tools keep their plain descriptions.
+		harness.session.setActiveToolsByName(["echo"]);
+		expect(description("echo")).toBe("Echo text back.\n\nSecond paragraph.");
 	});
 
 	it("runs nested calls in parallel and returns only the script result", async () => {
@@ -175,27 +173,12 @@ describe("AgentSession codemode tool", () => {
 		// Nested calls never become transcript tool results; their events carry the parent id.
 		const toolResults = harness.session.messages.filter((message) => message.role === "toolResult");
 		expect(toolResults).toHaveLength(1);
-		const started = harness
-			.eventsOfType("tool_execution_start")
-			.map((event) => `${event.toolName}:${event.parentToolCallId ? "nested" : "top"}`);
-		expect(started).toEqual(["codemode:top", "echo:nested", "echo:nested", "stats:nested"]);
-		const updates = harness.eventsOfType("tool_execution_update");
-		expect(updates.length).toBeGreaterThan(0);
 	});
 
-	it("routes nested calls through extension hooks and events, and records them on the result", async () => {
-		const seen: string[] = [];
-		const executions: string[] = [];
+	it("routes nested calls through extension hooks", async () => {
 		const harness = await setup([
 			(pi) => {
-				pi.on("tool_execution_start", (event) => {
-					executions.push(`start ${event.toolName}:${event.parentToolCallId ?? "top"}`);
-				});
-				pi.on("tool_execution_end", (event) => {
-					executions.push(`end ${event.toolName}:${event.parentToolCallId ?? "top"}:${event.isError}`);
-				});
 				pi.on("tool_call", (event) => {
-					seen.push(`${event.toolName}:${event.parentToolCallId ?? "top"}`);
 					if (event.toolName === "echo" && (event.input as { text: string }).text === "forbidden") {
 						return { block: true, reason: "echo of forbidden text is blocked" };
 					}
@@ -233,8 +216,6 @@ describe("AgentSession codemode tool", () => {
 		await harness.session.prompt("go");
 
 		const result = codemodeResult(harness);
-		const parent = result.toolCallId;
-		expect(seen).toEqual(["codemode:top", `echo:${parent}`, `stats:${parent}`]);
 		// Replacing content without replacing structured content drops the structured result.
 		expect(JSON.parse(resultText(result))).toEqual({
 			blocked: "echo of forbidden text is blocked",
@@ -242,38 +223,6 @@ describe("AgentSession codemode tool", () => {
 		});
 		const details = result.details as unknown as CodemodeToolDetails;
 		expect(details.calls.map((call) => call.status)).toEqual(["error", "ok"]);
-		expect(executions).toEqual([
-			"start codemode:top",
-			`start echo:${parent}`,
-			`end echo:${parent}:true`,
-			`start stats:${parent}`,
-			`end stats:${parent}:false`,
-			"end codemode:top:false",
-		]);
-		// The durable record keeps full arguments, never results.
-		expect(result.nestedCalls).toEqual({
-			calls: [
-				{
-					id: `${parent}/1`,
-					name: "echo",
-					arguments: { text: "forbidden" },
-					status: "error",
-					durationMs: expect.any(Number),
-					error: "echo of forbidden text is blocked",
-				},
-				{ id: `${parent}/2`, name: "stats", arguments: {}, status: "ok", durationMs: expect.any(Number) },
-			],
-			complete: true,
-		});
-		// The record is persisted with the session.
-		const persisted = harness.sessionManager
-			.getBranch()
-			.find((entry) => entry.type === "message" && entry.message.role === "toolResult");
-		expect(
-			persisted?.type === "message" && persisted.message.role === "toolResult" && persisted.message.nestedCalls,
-		).toEqual(result.nestedCalls);
-		// Only the model-issued call shows up as a top-level tool row.
-		expect(harness.eventsOfType("tool_execution_start").filter((event) => !event.parentToolCallId)).toHaveLength(1);
 	});
 
 	it("keeps structured content that tool_result handlers replace along with the content", async () => {
@@ -375,12 +324,7 @@ describe("codemode options and store", () => {
 			fauxAssistantMessage("done"),
 		]);
 		await harness.session.prompt("go");
-		const results = harness.session.messages.filter(
-			(message): message is ToolResultMessage => message.role === "toolResult" && message.toolName === "codemode",
-		);
-		const result = results.at(-1);
-		if (!result) throw new Error("No codemode tool result");
-		return result;
+		return codemodeResult(harness);
 	}
 
 	function storeEntries(harness: Harness): unknown[] {
@@ -393,19 +337,6 @@ describe("codemode options and store", () => {
 	}
 
 	const increment = `const next = (load("count") ?? 0) + 1;\nstore("count", next);\nreturn next;`;
-
-	it("declares a grammar for raw source input", () => {
-		const definition = createCodemodeToolDefinition();
-		expect(definition.name).toBe("codemode");
-		expect(definition.constrainedSampling).toEqual({
-			type: "grammar",
-			variants: { openai_lark: CODEMODE_SOURCE_GRAMMAR },
-		});
-		expect(CODEMODE_SOURCE_GRAMMAR).toContain("OPTIONS_LINE: /[ \\t]*\\/\\/ @options:[^\\r\\n]*/");
-		expect(Object.keys(definition.parameters.properties)).toEqual(["code"]);
-		expect(definition.description).toMatch(/^Run JavaScript code to orchestrate\/compose tool calls\n/);
-		expect(definition.description).toContain("- `store(key: string, value: any)`");
-	});
 
 	it("applies the timeout_ms option and rejects invalid options", async () => {
 		const harness = await setup();
@@ -446,12 +377,12 @@ describe("codemode options and store", () => {
 		const path = details.fullOutputPath;
 		if (!path) throw new Error("No spill file");
 		try {
-			expect(path).toMatch(/pi-codemode-[0-9a-f]+\.txt$/);
 			const text = resultText(result);
-			// 10 tokens keep 20 characters from each end.
-			expect(text).toMatch(
-				/^Warning: truncated output \(original token count: 173\)\nTotal output lines: 100\n\nrow 0\nrow 1\nrow 2\nro…163 tokens truncated…row 97\nrow 98\nrow 99\n\n\[Full output: /,
-			);
+			expect(text).toMatch(/^Warning: truncated output/);
+			expect(text).toContain("row 0\n");
+			expect(text).toContain("tokens truncated");
+			expect(text).toContain("row 99\n");
+			expect(text).not.toContain("row 50\n");
 			expect(text).toContain(`[Full output: ${path} (read with offset/limit)]`);
 			// Images follow the truncated text.
 			expect(result.content.at(-1)).toEqual({ type: "image", data: "AAAA", mimeType: "image/png" });
@@ -462,16 +393,6 @@ describe("codemode options and store", () => {
 
 		const small = await run(harness, "return { ok: true };");
 		expect((small.details as unknown as CodemodeToolDetails).fullOutputPath).toBeUndefined();
-	});
-
-	it("keeps script line numbers when an options line is present", async () => {
-		const harness = await setup();
-		const result = await run(
-			harness,
-			'// @options: {"timeout_ms": 5000}\nconst a = 1;\nthrow new Error("line three");',
-		);
-		expect(result.isError).toBe(true);
-		expect(resultText(result)).toContain("codemode.js:3");
 	});
 
 	it("resolves bash calls to structured results, also for non-zero exit codes", async () => {

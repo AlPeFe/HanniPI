@@ -47,6 +47,7 @@ describe("MCP config", () => {
 					bad: { args: ["no command"] },
 					legacy: { type: "sse", url: "https://example.com/sse" },
 					badUrl: { url: "example.com/mcp" },
+					"bad name": { command: "x" },
 				},
 			},
 			{ mcpServers: { shared: { command: "project-cmd", exposure: "direct" } } },
@@ -59,10 +60,11 @@ describe("MCP config", () => {
 			["remote", "global", { url: "https://example.com/mcp", headers: { Authorization: TOKEN_HEADER } }],
 			["off", "global", { command: "x", enabled: false }],
 		]);
-		expect(trusted.errors).toHaveLength(3);
+		expect(trusted.errors).toHaveLength(4);
 		expect(trusted.errors[0]).toContain('server "bad" needs either "command"');
 		expect(trusted.errors[1]).toContain("legacy SSE transport is not supported");
 		expect(trusted.errors[2]).toContain('server "badUrl": url must be an http or https URL');
+		expect(trusted.errors[3]).toContain('invalid server name "bad name"');
 
 		// Untrusted projects cannot add or override servers, since stdio servers run commands.
 		const untrusted = loadMcpConfig({ ...paths, projectTrusted: false });
