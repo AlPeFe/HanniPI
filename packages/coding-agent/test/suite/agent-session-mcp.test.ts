@@ -3,8 +3,8 @@ import type { SystemMessage, ToolResultMessage } from "@earendil-works/pi-ai/com
 import { type JsonRpcRequest, LATEST_PROTOCOL_VERSION } from "@earendil-works/pi-mcp";
 import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
-import type { ExtensionFactory } from "../../src/core/extensions/types.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ExtensionAPI, ExtensionFactory } from "../../src/core/extensions/types.ts";
 import { createCodemodeExtension } from "../../src/extensions/codemode/index.ts";
 import type { McpExposure, McpServerEntry } from "../../src/extensions/mcp/config.ts";
 import { createMcpExtension } from "../../src/extensions/mcp/index.ts";
@@ -528,5 +528,117 @@ describe("AgentSession MCP integration", () => {
 		]);
 		await harness.session.prompt("go");
 		expect(text(toolResult(harness, "tool_search"))).toBe("No matching tools found.");
+	});
+});
+
+describe("AgentSession MCP servers registered by extensions", () => {
+	const harnesses: Harness[] = [];
+
+	afterEach(() => {
+		while (harnesses.length > 0) harnesses.pop()?.cleanup();
+	});
+
+	/** `configured` are the mcp.json servers; `plugins` register servers through the extension API. */
+	async function setup(plugins: ExtensionFactory | ExtensionFactory[], configured: McpServerEntry[] = []) {
+		const connected: McpServerEntry[] = [];
+		const harness = await createHarness({
+			initialActiveToolNames: [],
+			extensionFactories: [
+				...(Array.isArray(plugins) ? plugins : [plugins]),
+				createCodemodeExtension(),
+				createMcpExtension({
+					loadConfig: () => ({ servers: configured, errors: [] }),
+					createTransport: (entry) => {
+						connected.push(entry);
+						const pair = createFakeServer([]);
+						void pair.server.start();
+						return pair.client;
+					},
+				}),
+			],
+		});
+		harnesses.push(harness);
+		await harness.session.bindExtensions({});
+		return { harness, connected };
+	}
+
+	it("connects servers registered while extensions load", async () => {
+		const { harness, connected } = await setup((pi) => {
+			pi.registerMcpServer("plugin", { url: "http://plugin.invalid", exposure: "direct" });
+		});
+		harness.setResponses([fauxAssistantMessage("ready")]);
+		await harness.session.prompt("start");
+
+		expect(connected.map((entry) => [entry.name, entry.scope])).toEqual([["plugin", "extension"]]);
+		expect(harness.session.getActiveToolNames()).toContain("mcp__plugin__search");
+	});
+
+	it("connects and disconnects servers registered during the session", async () => {
+		let api: ExtensionAPI | undefined;
+		const { harness, connected } = await setup((pi) => {
+			api = pi;
+		});
+		if (!api) throw new Error("No extension API");
+		const pi = api;
+
+		pi.registerMcpServer("late", { url: "http://late.invalid" });
+		await vi.waitFor(() => expect(harness.session.getCallableToolNames()).toContain("mcp__late__search"));
+		expect(connected.map((entry) => entry.name)).toEqual(["late"]);
+		// Codemode-exposed tools need the codemode tool, which is activated for them.
+		expect(harness.session.getActiveToolNames()).toContain("codemode");
+
+		pi.unregisterMcpServer("late");
+		await vi.waitFor(() => expect(harness.session.getCallableToolNames()).not.toContain("mcp__late__search"));
+	});
+
+	it("prefers the mcp.json server over a registered server of the same name", async () => {
+		const configured: McpServerEntry = { name: "docs", config: { url: "http://config.invalid" }, source: "mcp.json" };
+		const { harness, connected } = await setup(
+			(pi) => {
+				pi.registerMcpServer("docs", { url: "http://plugin.invalid" });
+			},
+			[configured],
+		);
+		harness.setResponses([fauxAssistantMessage("ready")]);
+		await harness.session.prompt("start");
+
+		expect(connected).toEqual([configured]);
+	});
+
+	it("rejects invalid configs and names another extension registered", async () => {
+		const errors: string[] = [];
+		const record = (fn: () => void) => {
+			try {
+				fn();
+			} catch (error) {
+				errors.push(error instanceof Error ? error.message : String(error));
+			}
+		};
+		await setup([
+			(pi) => {
+				record(() => pi.registerMcpServer("bad name", { url: "http://x.invalid" }));
+				record(() => pi.registerMcpServer("ftp", { url: "ftp://x.invalid" }));
+				pi.registerMcpServer("taken", { url: "http://x.invalid" });
+				// Registering again replaces the extension's own registration.
+				pi.registerMcpServer("taken", { url: "http://y.invalid" });
+			},
+			(pi) => record(() => pi.registerMcpServer("taken", { url: "http://z.invalid" })),
+		]);
+		expect(errors).toEqual([
+			expect.stringContaining('invalid server name "bad name"'),
+			expect.stringContaining('server "ftp": url must be an http or https URL'),
+			expect.stringMatching(/MCP server "taken" is already registered by extension/),
+		]);
+	});
+
+	it("reports registered servers when no extension connects them", async () => {
+		const harness = await createHarness({
+			extensionFactories: [(pi) => pi.registerMcpServer("orphan", { url: "http://orphan.invalid" })],
+		});
+		harnesses.push(harness);
+		const errors: string[] = [];
+		await harness.session.bindExtensions({ onError: (error) => errors.push(error.error) });
+
+		expect(errors).toEqual([expect.stringContaining('MCP server "orphan" is registered, but no loaded extension')]);
 	});
 });

@@ -1,7 +1,9 @@
 /**
  * Built-in MCP integration.
  *
- * Connects the servers from `mcp.json` when a session starts and registers their tools as
+ * Connects the servers from `mcp.json` and the servers extensions register with
+ * `pi.registerMcpServer()` when a session starts, and servers registered later right away. A server
+ * in `mcp.json` takes precedence over a registered server of the same name. Tools are registered as
  * `mcp__<server>__<tool>`. By default (`"exposure": "codemode"`) the tools are only callable from
  * codemode scripts, which keeps large MCP tool lists out of the model's tool declarations; the
  * codemode tool is activated for that unless `autoEnableCodemode` is false. `"exposure": "direct"`
@@ -13,7 +15,8 @@
  *
  * Problems found at startup (config errors, failed connections, servers that need a sign-in) are
  * reported once. `/mcp` opens a manager to sign in, reconnect, enable or disable servers, and change
- * their exposure; the last two are saved to the `mcp.json` that defines the server.
+ * their exposure; the last two are saved to the `mcp.json` that defines the server, or apply to the
+ * current session for registered servers.
  */
 
 import { resolve } from "node:path";
@@ -70,6 +73,8 @@ const DEFAULT_STARTUP_WAIT_MS = 10_000;
 interface McpServer {
 	entry: McpServerEntry;
 	connection?: McpServerConnection;
+	/** For servers extensions registered: the config as registered, to detect re-registrations. */
+	registeredConfig?: string;
 	/** Result of the last `/mcp` action that failed, shown in the manager. */
 	message?: string;
 }
@@ -143,7 +148,13 @@ const MCP_USAGE = "Usage: /mcp, /mcp login [server], /mcp logout [server], /mcp 
 export function createMcpExtension(options: McpExtensionOptions = {}): ExtensionFactory {
 	return (pi: ExtensionAPI) => {
 		let servers: McpServer[] = [];
+		/** Servers from `mcp.json`, which take precedence over registered servers of the same name. */
+		let configuredEntries: McpServerEntry[] = [];
 		let configErrors: string[] = [];
+		/** Registered servers that `mcp.json` overrides, shown in `/mcp`. */
+		let overridden: string[] = [];
+		/** Between session_start and session_shutdown. Registrations before that are read on session_start. */
+		let sessionActive = false;
 		let autoEnableCodemode = true;
 		/** Whether the "codemode tools unreachable" warning was shown since the session started. */
 		let warnedUnreachable = false;
@@ -173,6 +184,24 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 
 		const connections = () => servers.flatMap((server) => (server.connection ? [server.connection] : []));
 		const findServer = (name: string) => servers.find((server) => server.entry.name === name);
+
+		/** Servers extensions registered, except names `mcp.json` defines, which take precedence. */
+		const registeredServers = (): { servers: McpServer[]; overridden: string[] } => {
+			const registered: McpServer[] = [];
+			const overriddenNames: string[] = [];
+			for (const { name, config, extensionPath } of pi.getMcpServers()) {
+				const configured = configuredEntries.find((entry) => entry.name === name);
+				if (configured) {
+					overriddenNames.push(`"${name}" registered by ${extensionPath} is overridden by ${configured.source}`);
+					continue;
+				}
+				registered.push({
+					entry: { name, config, source: extensionPath, scope: "extension" },
+					registeredConfig: JSON.stringify(config),
+				});
+			}
+			return { servers: registered, overridden: overriddenNames };
+		};
 
 		const getCredentials = (runtime: typeof McpRuntime): McpOAuthCredentialStore => {
 			credentials ??= new runtime.McpOAuthCredentialStore();
@@ -298,10 +327,13 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			return connection;
 		};
 
-		/** One message for everything that needs the user after startup. */
-		const reportProblems = (ctx: ExtensionContext) => {
-			const lines = configErrors.map((error) => `config: ${error}`);
-			for (const server of servers) {
+		/**
+		 * One message for everything that needs the user after startup, or only for `only`, servers
+		 * that connected later.
+		 */
+		const reportProblems = (ctx: ExtensionContext, only?: readonly McpServer[]) => {
+			const lines = only ? [] : configErrors.map((error) => `config: ${error}`);
+			for (const server of only ?? servers) {
 				const state = server.connection?.state;
 				if (state === "needs-auth" || state === "failed")
 					lines.push(`${server.entry.name}: ${describeState(server)}`);
@@ -313,12 +345,17 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			);
 		};
 
-		/** Save a config change; returns an error message when the file could not be updated. */
+		/**
+		 * Save a config change; returns an error message when the file could not be updated. Changes to
+		 * registered servers only apply to the current session.
+		 */
 		const saveConfig = (server: McpServer, patch: McpServerConfigPatch): string | undefined => {
-			try {
-				updateConfig(server.entry, patch);
-			} catch (error) {
-				return `Could not update ${server.entry.source}: ${errorMessage(error)}`;
+			if (server.entry.scope !== "extension") {
+				try {
+					updateConfig(server.entry, patch);
+				} catch (error) {
+					return `Could not update ${server.entry.source}: ${errorMessage(error)}`;
+				}
 			}
 			server.entry = { ...server.entry, config: { ...server.entry.config, ...patch } };
 			return undefined;
@@ -403,9 +440,14 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		// Manager (`/mcp` in the TUI)
 		// ---------------------------------------------------------------------------------------
 
+		const notices = () => [
+			...configErrors.map((error) => `config: ${error}`),
+			...overridden.map((line) => `overridden: ${line}`),
+		];
+
 		const serversMenu = (): McpMenu => ({
 			title: "MCP servers",
-			error: configErrors.length > 0 ? configErrors.map((error) => `config: ${error}`).join("\n") : undefined,
+			error: notices().join("\n") || undefined,
 			items: [...servers]
 				.sort((a, b) => attentionRank(a) - attentionRank(b) || a.entry.name.localeCompare(b.entry.name))
 				.map((server) => ({
@@ -430,7 +472,12 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				};
 			}
 			const { entry, connection } = server;
-			const saved = entry.scope ? `saved to the ${entry.scope} mcp.json` : "saved to mcp.json";
+			const saved =
+				entry.scope === "extension"
+					? "for this session"
+					: entry.scope
+						? `saved to the ${entry.scope} mcp.json`
+						: "saved to mcp.json";
 			const items: SelectItem[] = [];
 			if (!isEnabled(server)) {
 				items.push({ value: "enable", label: "Enable", description: saved });
@@ -489,7 +536,10 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			const current = exposureOf(server.entry);
 			const choice = await ui.menu(() => ({
 				title: `Exposure of ${server.entry.name}`,
-				details: `Saved to ${server.entry.source}.`,
+				details:
+					server.entry.scope === "extension"
+						? `Applies to this session; the server is registered by ${server.entry.source}.`
+						: `Saved to ${server.entry.source}.`,
 				items: (Object.keys(EXPOSURE_DESCRIPTIONS) as (keyof typeof EXPOSURE_DESCRIPTIONS)[]).map((exposure) => ({
 					value: exposure,
 					label: exposure === current ? `${exposure} (current)` : exposure,
@@ -566,7 +616,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		// ---------------------------------------------------------------------------------------
 
 		const formatStatus = (): string => {
-			if (servers.length === 0 && configErrors.length === 0) {
+			if (servers.length === 0 && configErrors.length === 0 && overridden.length === 0) {
 				return `No MCP servers configured. Add them to ${resolve(getAgentDir(), "mcp.json")} or .pi/mcp.json.`;
 			}
 			const lines = servers.map((server) => {
@@ -588,6 +638,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				return `${name}: ${state}${tools} (${exposure})${error}`;
 			});
 			for (const error of configErrors) lines.push(`config error: ${error}`);
+			for (const line of overridden) lines.push(`overridden: ${line}`);
 			return lines.join("\n");
 		};
 
@@ -659,7 +710,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			waitedForStartup = false;
 			sessionCwd = ctx.cwd;
 			const current = ++generation;
-			servers = loaded.servers.map((entry) => ({ entry }));
+			sessionActive = true;
+			configuredEntries = loaded.servers;
+			const registered = registeredServers();
+			overridden = registered.overridden;
+			servers = [...loaded.servers.map((entry) => ({ entry })), ...registered.servers];
 			emitChange();
 			const enabled = servers.filter(isEnabled);
 			if (enabled.length === 0) {
@@ -679,7 +734,12 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 					ensureCodemodeActive(ctx);
 					reportProblems(ctx);
 				})
-				.catch((error: unknown) => ctx.ui.notify(`MCP failed to load: ${errorMessage(error)}`, "error"));
+				.catch((error: unknown) => {
+					// The session may have been disposed meanwhile, which makes ctx stale.
+					try {
+						ctx.ui.notify(`MCP failed to load: ${errorMessage(error)}`, "error");
+					} catch {}
+				});
 		});
 
 		// The first prompt waits for startup connections so their tools are available to it, but not
@@ -706,7 +766,45 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			if (tokensAtSignIn.size > 0) await reconnectSignedIn(ctx);
 		});
 
+		// Servers registered or unregistered during the session connect or disconnect right away.
+		pi.on("mcp_servers_change", async (_event, ctx) => {
+			if (!sessionActive) return;
+			const current = generation;
+			const registered = registeredServers();
+			overridden = registered.overridden;
+			const next = new Map(registered.servers.map((server) => [server.entry.name, server]));
+			// Unregistered servers and re-registered ones with a new config are dropped; the latter come back below.
+			const removed = servers.filter(
+				(server) =>
+					server.entry.scope === "extension" &&
+					next.get(server.entry.name)?.registeredConfig !== server.registeredConfig,
+			);
+			servers = servers.filter((server) => !removed.includes(server));
+			for (const server of removed) hideTools(server.entry.name);
+			const added = registered.servers.filter((server) => !findServer(server.entry.name));
+			servers.push(...added);
+			emitChange();
+			await Promise.all(removed.map((server) => server.connection?.close()));
+			const connecting = added.filter(isEnabled);
+			if (current !== generation || connecting.length === 0) return;
+			try {
+				const started = await Promise.all(connecting.map((server) => createConnection(server)));
+				if (current !== generation) {
+					await Promise.all(started.map((connection) => connection.close()));
+					return;
+				}
+				await Promise.allSettled(started.map((connection) => connection.getClient()));
+			} catch (error) {
+				ctx.ui.notify(`MCP failed to load: ${errorMessage(error)}`, "error");
+				return;
+			}
+			if (current !== generation) return;
+			ensureCodemodeActive(ctx);
+			reportProblems(ctx, connecting);
+		});
+
 		pi.on("session_shutdown", async () => {
+			sessionActive = false;
 			generation++;
 			const closing = connections();
 			servers = [];

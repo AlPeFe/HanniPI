@@ -25,64 +25,26 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CONFIG_DIR_NAME } from "../../config.ts";
+import { type McpExposure, type McpServerConfig, validateMcpServerConfig } from "../../core/mcp-servers.ts";
 
-/**
- * - `codemode`: tools are callable from codemode scripts and listed in its description, but not
- *   declared to the model.
- * - `deferred`: like `codemode`, but not listed in the codemode description.
- * - `direct`: tools are declared to the model like any other tool (and callable from codemode).
- * - `hidden`: tools are registered but unreachable.
- */
-export type McpExposure = "codemode" | "deferred" | "direct" | "hidden";
-
-const MCP_EXPOSURES: readonly string[] = ["codemode", "deferred", "direct", "hidden"] satisfies McpExposure[];
-
-interface McpServerConfigBase {
-	/** Default: `codemode`. */
-	exposure?: McpExposure;
-	/** Set to false to keep the entry without connecting. Default: true. */
-	enabled?: boolean;
-	/** Per-request timeout in seconds. Progress notifications from the server reset it. Default: 60. */
-	timeout?: number;
-}
-
-export interface McpStdioServerConfig extends McpServerConfigBase {
-	type?: "stdio";
-	command: string;
-	args?: string[];
-	/** Values may reference environment variables (`${NAME}`) or commands (`!cmd`). */
-	env?: Record<string, string>;
-	/** Relative paths resolve against the session working directory. */
-	cwd?: string;
-}
-
-/** OAuth client settings for servers that do not support dynamic client registration. */
-export interface McpOAuthConfig {
-	/** Pre-registered client id. Without it, pi registers a client with the authorization server. */
-	clientId?: string;
-	/** May reference environment variables (`${NAME}`) or commands (`!cmd`). */
-	clientSecret?: string;
-	/** Fixed loopback callback port, for clients registered with an exact redirect URI. */
-	callbackPort?: number;
-}
-
-export interface McpHttpServerConfig extends McpServerConfigBase {
-	type?: "http";
-	url: string;
-	/** Values may reference environment variables (`${NAME}`) or commands (`!cmd`). */
-	headers?: Record<string, string>;
-	oauth?: McpOAuthConfig;
-}
-
-export type McpServerConfig = McpStdioServerConfig | McpHttpServerConfig;
+export type {
+	McpExposure,
+	McpHttpServerConfig,
+	McpOAuthConfig,
+	McpServerConfig,
+	McpStdioServerConfig,
+} from "../../core/mcp-servers.ts";
 
 export interface McpServerEntry {
 	name: string;
 	config: McpServerConfig;
-	/** Config file that defined the entry. */
+	/** Config file that defined the entry, or the path of the extension that registered it. */
 	source: string;
-	/** Whether the entry comes from the global or the project `mcp.json`. */
-	scope?: "global" | "project";
+	/**
+	 * The global or the project `mcp.json`, or `extension` for servers registered with
+	 * `pi.registerMcpServer()`. Changes to extension servers are not saved.
+	 */
+	scope?: "global" | "project" | "extension";
 }
 
 export interface LoadedMcpConfig {
@@ -92,67 +54,8 @@ export interface LoadedMcpConfig {
 	errors: string[];
 }
 
-const SERVER_NAME = /^[A-Za-z0-9_-]+$/;
-
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isStringRecord(value: unknown): value is Record<string, string> {
-	return isRecord(value) && Object.values(value).every((entry) => typeof entry === "string");
-}
-
-function validateOAuth(value: unknown): string | undefined {
-	if (value === undefined) return undefined;
-	if (!isRecord(value)) return "oauth must be an object";
-	if (value.clientId !== undefined && typeof value.clientId !== "string") return "oauth.clientId must be a string";
-	if (value.clientSecret !== undefined && typeof value.clientSecret !== "string") {
-		return "oauth.clientSecret must be a string";
-	}
-	const port = value.callbackPort;
-	if (port !== undefined && (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535)) {
-		return "oauth.callbackPort must be a port number";
-	}
-	return undefined;
-}
-
-function validateServer(name: string, value: unknown): McpServerConfig | string {
-	if (!SERVER_NAME.test(name)) return `invalid server name "${name}" (use letters, digits, "_" and "-")`;
-	if (!isRecord(value)) return `server "${name}" must be an object`;
-	const { type, exposure, enabled, timeout } = value;
-	if (exposure !== undefined && (typeof exposure !== "string" || !MCP_EXPOSURES.includes(exposure))) {
-		return `server "${name}": exposure must be one of ${MCP_EXPOSURES.map((value) => `"${value}"`).join(", ")}`;
-	}
-	if (enabled !== undefined && typeof enabled !== "boolean") return `server "${name}": enabled must be a boolean`;
-	if (timeout !== undefined && (typeof timeout !== "number" || !(timeout > 0))) {
-		return `server "${name}": timeout must be a positive number of seconds`;
-	}
-	if (type === "sse") return `server "${name}": legacy SSE transport is not supported; use the streamable HTTP URL`;
-
-	if (typeof value.url === "string" && (type === undefined || type === "http" || type === "streamable-http")) {
-		if (!URL.canParse(value.url) || !/^https?:$/.test(new URL(value.url).protocol)) {
-			return `server "${name}": url must be an http or https URL`;
-		}
-		if (value.headers !== undefined && !isStringRecord(value.headers)) {
-			return `server "${name}": headers must map names to strings`;
-		}
-		const oauthError = validateOAuth(value.oauth);
-		if (oauthError) return `server "${name}": ${oauthError}`;
-		return value as unknown as McpHttpServerConfig;
-	}
-	if (typeof value.command === "string" && (type === undefined || type === "stdio")) {
-		if (
-			value.args !== undefined &&
-			!(Array.isArray(value.args) && value.args.every((arg) => typeof arg === "string"))
-		) {
-			return `server "${name}": args must be an array of strings`;
-		}
-		if (value.env !== undefined && !isStringRecord(value.env))
-			return `server "${name}": env must map names to strings`;
-		if (value.cwd !== undefined && typeof value.cwd !== "string") return `server "${name}": cwd must be a string`;
-		return value as unknown as McpStdioServerConfig;
-	}
-	return `server "${name}" needs either "command" (stdio) or "url" (streamable HTTP)`;
 }
 
 interface McpConfigState {
@@ -178,7 +81,7 @@ function readConfigFile(path: string, scope: "global" | "project", state: McpCon
 	if (typeof parsed.autoEnableCodemode === "boolean") state.autoEnableCodemode = parsed.autoEnableCodemode;
 	else if (parsed.autoEnableCodemode !== undefined) errors.push(`${path}: autoEnableCodemode must be a boolean`);
 	for (const [name, value] of Object.entries(parsed.mcpServers ?? {})) {
-		const config = validateServer(name, value);
+		const config = validateMcpServerConfig(name, value);
 		if (typeof config === "string") {
 			errors.push(`${path}: ${config}`);
 			continue;

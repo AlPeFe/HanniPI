@@ -121,6 +121,10 @@ Codemode scripts receive an MCP tool's whole `CallToolResult` (`content` blocks 
 
 Every MCP call goes through pi's tool pipeline, so `tool_call` and `tool_result` extension handlers, including permission gates, apply to MCP tools. Calls made from codemode scripts carry the `codemode` call's id as `parentToolCallId`.
 
+## Servers from extensions
+
+Extensions can add servers for the current session with `pi.registerMcpServer(name, config)`, using the same config shape as `mcp.json` (see [Extensions](extensions.md#mcp-servers)). They connect like configured servers and appear in `/mcp` with the extension as their source. Enabling, disabling, and exposure changes for them apply to the current session only. A server in `mcp.json` with the same name takes precedence; `/mcp` lists the overridden registration. `pi mcp` shell commands do not load extensions and only see `mcp.json` servers.
+
 ## Other MCP extensions
 
 An installed extension that registers the `/mcp` command, such as `pi-mcp-adapter`, replaces the built-in MCP support: pi then neither reads `mcp.json` in sessions nor connects servers, and `/mcp` belongs to that extension. Remove the extension to use the built-in support. Likewise, an extension that registers a tool named `codemode` or `tool_search` replaces the built-in tool of that name. `pi mcp` shell commands always use the built-in support.
