@@ -62,7 +62,7 @@ import { SettingsManager } from "./core/settings-manager.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { builtInExtensions } from "./extensions/index.ts";
-import { LLAMA_SUPERVISOR_FLAG, runLlamaSupervisorProcess } from "./extensions/llama/supervisor.ts";
+import { LLAMA_SUPERVISOR_FLAG, runLlamaSupervisorProcess } from "./extensions/llama/managed.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
 import { initTheme, setThemeJsonValidator, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
