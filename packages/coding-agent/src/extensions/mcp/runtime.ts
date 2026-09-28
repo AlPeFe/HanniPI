@@ -23,9 +23,11 @@ import { McpOAuthAuthorizationRequiredError, type OAuthChallenge } from "@earend
 import { VERSION } from "../../config.ts";
 import { resolveConfigValueOrThrow, resolveHeadersOrThrow } from "../../core/resolve-config-value.ts";
 import type { McpServerEntry } from "./config.ts";
+import type { McpServerLog } from "./log.ts";
 import { createMcpAuthProvider, type McpOAuthCredentialStore, type McpOAuthSettings } from "./oauth.ts";
 import type { McpToolCaller } from "./tools.ts";
 
+export { McpServerLog } from "./log.ts";
 export { McpOAuthCredentialStore, McpSignInCancelledError, signInMcpServer } from "./oauth.ts";
 
 const DEFAULT_TIMEOUT_SECONDS = 60;
@@ -114,6 +116,7 @@ export class McpServerConnection implements McpToolCaller {
 	private readonly authProvider: AuthProvider | undefined;
 	private readonly onTools: (connection: McpServerConnection) => void;
 	private readonly onChange: ((connection: McpServerConnection) => void) | undefined;
+	private readonly log: McpServerLog | undefined;
 
 	constructor(options: {
 		entry: McpServerEntry;
@@ -123,12 +126,15 @@ export class McpServerConnection implements McpToolCaller {
 		onTools: (connection: McpServerConnection) => void;
 		/** Called when `state`, `error`, or `tools` change. */
 		onChange?: (connection: McpServerConnection) => void;
+		/** Receives the server's log messages (`notifications/message`). */
+		log?: McpServerLog;
 	}) {
 		this.entry = options.entry;
 		this.cwd = options.cwd;
 		this.createTransport = options.createTransport;
 		this.onTools = options.onTools;
 		this.onChange = options.onChange;
+		this.log = options.log;
 		const url = this.oauthUrl;
 		this.authProvider = url
 			? createMcpAuthProvider({
@@ -257,6 +263,8 @@ export class McpServerConnection implements McpToolCaller {
 			requestTimeoutMs: this.timeoutMs,
 			roots: [{ uri: pathToFileURL(this.cwd).href, name: basename(this.cwd) }],
 		});
+		const log = this.log;
+		if (log) client.onNotification("notifications/message", (params) => log.write(this.entry.name, params));
 		let transport: McpTransport | undefined;
 		try {
 			transport = this.createTransport(this.entry, this.cwd, this.authProvider);

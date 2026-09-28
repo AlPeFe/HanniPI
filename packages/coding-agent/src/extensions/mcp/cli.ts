@@ -1,7 +1,8 @@
 /**
- * `pi mcp`: check MCP servers and sign in to them outside a session. Agents run it through bash to
- * verify an `mcp.json` they wrote and to start an OAuth sign-in; the user only approves access in
- * the browser. Running sessions pick up new credentials on their next turn.
+ * `pi mcp`: add, remove, and check MCP servers and sign in to them outside a session. Agents run it
+ * through bash to configure servers, verify an `mcp.json` they wrote, and start an OAuth sign-in;
+ * the user only approves access in the browser. Running sessions pick up new credentials on their
+ * next turn.
  */
 
 import { existsSync } from "node:fs";
@@ -9,31 +10,61 @@ import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME } from "../../config.ts";
+import { validateMcpServerConfig } from "../../core/mcp-servers.ts";
 import { ProjectTrustStore } from "../../core/trust-manager.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
-import { type LoadedMcpConfig, loadMcpConfig, type McpServerEntry } from "./config.ts";
+import {
+	addMcpServerConfig,
+	type LoadedMcpConfig,
+	loadMcpConfig,
+	type McpServerEntry,
+	removeMcpServerConfig,
+} from "./config.ts";
 import {
 	createDefaultTransport,
 	McpOAuthCredentialStore,
 	McpServerConnection,
+	McpServerLog,
 	McpSignInCancelledError,
 	signInMcpServer,
 } from "./runtime.ts";
 
 const HELP = `${chalk.bold("Usage:")}
+  ${APP_NAME} mcp add <server> [options] -- <command> [args...]
+  ${APP_NAME} mcp add <server> [options] --url <url>
+  ${APP_NAME} mcp remove <server> [--project]
   ${APP_NAME} mcp list [--json]
   ${APP_NAME} mcp login <server> [--timeout <seconds>]
   ${APP_NAME} mcp logout <server>
 
-Check MCP servers and sign in to OAuth servers without starting a session.
+Configure and check MCP servers and sign in to OAuth servers without starting a session.
 Reads ~/${CONFIG_DIR_NAME}/agent/mcp.json and, in trusted projects, ${CONFIG_DIR_NAME}/mcp.json.
 
 Commands:
+  add <server>            Add or replace a server in mcp.json
+  remove <server>         Remove a server from mcp.json
   list                    Show state, tools, and errors (exits 1 on failure)
   login <server>          Sign in through the browser
   logout <server>         Delete the stored OAuth credentials
 
-Options:
+Options for add and remove:
+  --project               Use ${CONFIG_DIR_NAME}/mcp.json in the current project instead of the global file
+
+Options for add:
+  --url <url>             Streamable HTTP server URL (instead of a command)
+  --env <KEY=VALUE>       Environment variable for a stdio server (repeatable)
+  --cwd <dir>             Working directory for a stdio server
+  --header <KEY=VALUE>    HTTP header (repeatable)
+  --bearer-token-env-var <NAME>
+                          Send "Authorization: Bearer \${NAME}"
+  --oauth-client-id <id>  Pre-registered OAuth client id
+  --oauth-client-secret <secret>
+                          OAuth client secret (may be \${NAME} or !command)
+  --oauth-callback-port <port>
+                          Fixed OAuth callback port
+  --exposure <mode>       codemode (default), deferred, direct, or hidden
+
+Other options:
   --json                  Print the list as JSON
   --timeout <seconds>     How long login waits for the browser (default: 300)`;
 
@@ -80,20 +111,38 @@ function createConnection(entry: McpServerEntry, options: McpCommandOptions, cre
 		cwd: options.cwd,
 		createTransport: createDefaultTransport,
 		credentials,
+		log: new McpServerLog(join(options.agentDir, "mcp.log")),
 		onTools: () => {},
 	});
 }
 
-/** Parse `--name value` options; returns undefined and reports unknown ones. */
+interface ParsedOptions {
+	positional: string[];
+	values: Map<string, string | true>;
+	/** Values of `list` options, in order. */
+	lists: Map<string, string[]>;
+}
+
+/**
+ * Parse `--name value` options; returns undefined and reports unknown ones. `--` ends the options,
+ * as does reaching `maxPositionals` positional arguments: the remaining arguments are positional,
+ * so a command's own options (`add <server> <command> --flag`) are passed through.
+ */
 function parseOptions(
 	args: string[],
-	known: Record<string, "flag" | "value">,
+	known: Record<string, "flag" | "value" | "list">,
 	error: (line: string) => void,
-): { positional: string[]; values: Map<string, string | true> } | undefined {
+	maxPositionals = Number.POSITIVE_INFINITY,
+): ParsedOptions | undefined {
 	const positional: string[] = [];
 	const values = new Map<string, string | true>();
+	const lists = new Map<string, string[]>();
 	for (let index = 0; index < args.length; index++) {
 		const arg = args[index];
+		if (arg === "--" || positional.length >= maxPositionals) {
+			positional.push(...args.slice(arg === "--" ? index + 1 : index));
+			break;
+		}
 		if (!arg.startsWith("--")) {
 			positional.push(arg);
 			continue;
@@ -113,9 +162,10 @@ function parseOptions(
 			error(`${arg} needs a value.`);
 			return undefined;
 		}
-		values.set(name, value);
+		if (kind === "list") lists.set(name, [...(lists.get(name) ?? []), value]);
+		else values.set(name, value);
 	}
-	return { positional, values };
+	return { positional, values, lists };
 }
 
 /** Run `pi mcp <args>` and return the exit code. */
@@ -129,6 +179,11 @@ export async function runMcpCommand(args: string[], options: McpCommandOptions):
 	}
 
 	const projectConfig = join(options.cwd, CONFIG_DIR_NAME, "mcp.json");
+	if (command === "add" || command === "remove") {
+		return command === "add"
+			? add(rest, projectConfig, options, log, error)
+			: remove(rest, projectConfig, options, log, error);
+	}
 	const projectTrusted = new ProjectTrustStore(options.agentDir).get(options.cwd) === true;
 	const loaded = loadMcpConfig({ agentDir: options.agentDir, cwd: options.cwd, projectTrusted });
 	const untrustedNote =
@@ -189,6 +244,166 @@ export async function runMcpCommand(args: string[], options: McpCommandOptions):
 			error(`Unknown mcp command "${command}".\n${HELP_HINT}`);
 			return 1;
 	}
+}
+
+/** Parse `KEY=VALUE` pairs of a repeatable option into a record. */
+function parsePairs(option: string, pairs: string[] | undefined, error: (line: string) => void) {
+	if (!pairs) return {};
+	const record: Record<string, string> = {};
+	for (const pair of pairs) {
+		const separator = pair.indexOf("=");
+		if (separator <= 0) {
+			error(`--${option} expects KEY=VALUE, got "${pair}".`);
+			return undefined;
+		}
+		record[pair.slice(0, separator)] = pair.slice(separator + 1);
+	}
+	return record;
+}
+
+function add(
+	args: string[],
+	projectConfig: string,
+	options: McpCommandOptions,
+	log: (line: string) => void,
+	error: (line: string) => void,
+): number {
+	const usage = `Usage: ${APP_NAME} mcp add <server> [options] (--url <url> | -- <command> [args...])\n${HELP_HINT}`;
+	const parsed = parseOptions(
+		args,
+		{
+			project: "flag",
+			url: "value",
+			env: "list",
+			cwd: "value",
+			header: "list",
+			"bearer-token-env-var": "value",
+			"oauth-client-id": "value",
+			"oauth-client-secret": "value",
+			"oauth-callback-port": "value",
+			exposure: "value",
+		},
+		error,
+		2,
+	);
+	if (!parsed) return 1;
+	const { positional, values, lists } = parsed;
+	const [name, ...command] = positional;
+	const url = values.get("url");
+	if (!name || (url === undefined) === (command.length === 0)) {
+		error(usage);
+		return 1;
+	}
+	const value = (option: string) => {
+		const found = values.get(option);
+		return typeof found === "string" ? found : undefined;
+	};
+	const exposure = value("exposure");
+	const httpOnly = ["header", "bearer-token-env-var", "oauth-client-id", "oauth-client-secret", "oauth-callback-port"];
+	const stdioOnly = ["env", "cwd"];
+	const misplaced = (url === undefined ? httpOnly : stdioOnly).find(
+		(option) => values.has(option) || lists.has(option),
+	);
+	if (misplaced) {
+		error(`--${misplaced} only applies to ${url === undefined ? "HTTP servers (--url)" : "stdio servers"}.`);
+		return 1;
+	}
+
+	let config: Record<string, unknown>;
+	if (typeof url === "string") {
+		const headers = parsePairs("header", lists.get("header"), error);
+		if (!headers) return 1;
+		const bearer = value("bearer-token-env-var");
+		if (bearer !== undefined) headers.Authorization = `Bearer \${${bearer}}`;
+		const port = value("oauth-callback-port");
+		const oauth = {
+			...(value("oauth-client-id") === undefined ? {} : { clientId: value("oauth-client-id") }),
+			...(value("oauth-client-secret") === undefined ? {} : { clientSecret: value("oauth-client-secret") }),
+			...(port === undefined ? {} : { callbackPort: Number(port) }),
+		};
+		config = {
+			url,
+			...(Object.keys(headers).length > 0 ? { headers } : {}),
+			...(Object.keys(oauth).length > 0 ? { oauth } : {}),
+		};
+	} else {
+		const env = parsePairs("env", lists.get("env"), error);
+		if (!env) return 1;
+		const [executable, ...commandArgs] = command;
+		config = {
+			command: executable,
+			...(commandArgs.length > 0 ? { args: commandArgs } : {}),
+			...(Object.keys(env).length > 0 ? { env } : {}),
+			...(value("cwd") === undefined ? {} : { cwd: value("cwd") }),
+		};
+	}
+	if (exposure !== undefined) config.exposure = exposure;
+	const validated = validateMcpServerConfig(name, config);
+	if (typeof validated === "string") {
+		error(validated);
+		return 1;
+	}
+
+	const project = values.has("project");
+	const path = project ? projectConfig : join(options.agentDir, "mcp.json");
+	const scope = project ? "project" : "global";
+	let replaced: boolean;
+	try {
+		replaced = addMcpServerConfig(path, name, validated);
+	} catch (addError) {
+		error(`Could not update ${path}: ${errorMessage(addError)}`);
+		return 1;
+	}
+	log(`${replaced ? "Replaced" : "Added"} ${scope} MCP server "${name}" in ${path}.`);
+	if (project && new ProjectTrustStore(options.agentDir).get(options.cwd) !== true) {
+		log(`The project is not trusted, so ${path} is ignored until you start ${APP_NAME} in the project and trust it.`);
+	}
+	// HTTP servers without an Authorization header may use OAuth.
+	const mayNeedSignIn =
+		"url" in validated &&
+		!Object.keys(validated.headers ?? {}).some((header) => header.toLowerCase() === "authorization");
+	log(
+		`Check it with: ${APP_NAME} mcp list${mayNeedSignIn ? `. If it requires sign-in: ${APP_NAME} mcp login ${name}` : ""}`,
+	);
+	return 0;
+}
+
+function remove(
+	args: string[],
+	projectConfig: string,
+	options: McpCommandOptions,
+	log: (line: string) => void,
+	error: (line: string) => void,
+): number {
+	const parsed = parseOptions(args, { project: "flag" }, error);
+	if (!parsed) return 1;
+	const [name, ...extra] = parsed.positional;
+	if (!name || extra.length > 0) {
+		error(`Usage: ${APP_NAME} mcp remove <server> [--project]\n${HELP_HINT}`);
+		return 1;
+	}
+	const project = parsed.values.has("project");
+	const globalConfig = join(options.agentDir, "mcp.json");
+	const path = project ? projectConfig : globalConfig;
+	const scope = project ? "project" : "global";
+	let removed: boolean;
+	try {
+		removed = removeMcpServerConfig(path, name);
+	} catch (removeError) {
+		error(`Could not update ${path}: ${errorMessage(removeError)}`);
+		return 1;
+	}
+	if (removed) {
+		log(`Removed ${scope} MCP server "${name}" from ${path}.`);
+		return 0;
+	}
+	const other = loadMcpConfig({ agentDir: options.agentDir, cwd: options.cwd, projectTrusted: true }).servers.find(
+		(server) => server.name === name && server.scope !== scope,
+	);
+	error(
+		`No ${scope} MCP server named "${name}" in ${path}.${other ? ` It is defined in ${other.source}${other.scope === "project" ? "; use --project" : "; omit --project"}.` : ""}`,
+	);
+	return 1;
 }
 
 async function list(

@@ -30,6 +30,15 @@ Add servers to `~/.pi/agent/mcp.json`, or to `.pi/mcp.json` in a project. The fo
 
 Project entries replace global entries with the same name. A project `mcp.json` is only read after the project is trusted, because stdio servers run commands.
 
+`pi mcp add` and `pi mcp remove` edit the file from a shell (see [MCP commands](cli.md#mcp-commands)):
+
+```bash
+pi mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem .
+pi mcp add docs --url https://example.com/mcp --bearer-token-env-var DOCS_TOKEN --exposure direct
+pi mcp add --project tools --env API_KEY='${TOOLS_KEY}' -- uvx tools-mcp
+pi mcp remove docs
+```
+
 Rules that are easy to get wrong:
 
 - Server names may only contain letters, digits, `_`, and `-`. Tools are named `mcp__<server>__<tool>`.
@@ -42,7 +51,7 @@ Rules that are easy to get wrong:
 
 When asked to add an MCP server, the agent should:
 
-1. Put personal servers and servers with credentials in `~/.pi/agent/mcp.json`. Use the project `.pi/mcp.json` only for servers the project itself needs, and only in trusted projects.
+1. Add simple servers with `pi mcp add` (add `--project` for the project file), or edit `mcp.json` directly for settings the command does not cover. Put personal servers and servers with credentials in `~/.pi/agent/mcp.json`. Use the project `.pi/mcp.json` only for servers the project itself needs, and only in trusted projects.
 2. Convert entries written for other clients:
    - Claude Desktop, Claude Code, and Cursor use the same `mcpServers` shape; copy the entry.
    - VS Code uses a top-level `servers` object and `inputs` prompts; move the entry under `mcpServers` and replace `${input:...}` with `${NAME}` environment variables.
@@ -55,6 +64,8 @@ When asked to add an MCP server, the agent should:
 Pi connects when a session starts. The first prompt waits up to 10 seconds for startup connections; the tools of servers that take longer become available once they connect. HTTP connections that fail with a network error or a transient status (408, 429, 5xx) are retried twice. A server that drops its connection shows as disconnected and is reconnected on the next call. When a server announces that its tool list changed, new tools are added and withdrawn tools become unreachable until the server offers them again.
 
 Config errors, servers that failed to connect, and servers that need a sign-in are reported once after startup.
+
+Log messages servers send with MCP logging notifications are appended to `~/.pi/agent/mcp.log` as `<time> [<server>] <level> <logger>: <message>`. The file is moved to `mcp.log.1` when it grows past 5 MB.
 
 ## Manage servers
 
@@ -71,7 +82,7 @@ Exposure changes and enabling or disabling are saved to the `mcp.json` that defi
 
 Outside the interactive TUI, `/mcp` prints the server status. `/mcp login <server>`, `/mcp logout <server>`, and `/mcp reconnect <server>` run those actions directly.
 
-From a shell, `pi mcp list`, `pi mcp login <server>`, and `pi mcp logout <server>` do the same without a session (see [MCP commands](cli.md#mcp-commands)).
+From a shell, `pi mcp add`, `pi mcp remove`, `pi mcp list`, `pi mcp login <server>`, and `pi mcp logout <server>` manage servers without a session (see [MCP commands](cli.md#mcp-commands)).
 
 Stopping a stdio server closes its stdin, then sends SIGTERM and finally SIGKILL to its whole process group, so servers started through wrappers such as `npx` or `uvx` do not linger.
 

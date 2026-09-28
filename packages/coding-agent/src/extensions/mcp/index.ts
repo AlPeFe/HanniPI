@@ -19,7 +19,7 @@
  * current session for registered servers.
  */
 
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
 import { getAgentDir } from "../../config.ts";
@@ -43,7 +43,7 @@ import {
 import type { McpOAuthCredentialStore, McpSignInPrompt } from "./oauth.ts";
 import { loadMcpRuntime } from "./runtime.lazy.ts";
 import type * as McpRuntime from "./runtime.ts";
-import type { McpServerConnection, McpTransportFactory } from "./runtime.ts";
+import type { McpServerConnection, McpServerLog, McpTransportFactory } from "./runtime.ts";
 import { createMcpToolDefinition, createMcpToolName, type McpToolDetails } from "./tools.ts";
 import { type McpMenu, type McpUi, showMcpManager } from "./ui.ts";
 
@@ -56,6 +56,8 @@ export interface McpExtensionOptions {
 	createTransport?: McpTransportFactory;
 	/** Defaults to `mcp-auth.json` in the agent directory. */
 	credentials?: McpOAuthCredentialStore;
+	/** File server log messages are appended to. Defaults to `mcp.log` in the agent directory. */
+	logPath?: string;
 	/** Opens the OAuth authorization URL. Defaults to the platform browser. */
 	openUrl?: (url: string) => void;
 	/** Saves `/mcp` changes to the server's config file. Defaults to editing its `mcp.json`. */
@@ -167,6 +169,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		/** Working directory of the session, for stdio servers. */
 		let sessionCwd = process.cwd();
 		let credentials = options.credentials;
+		let serverLog: McpServerLog | undefined;
 		const openUrl = options.openUrl ?? openBrowser;
 		const updateConfig =
 			options.updateConfig ?? ((entry, patch) => updateMcpServerConfig(entry.source, entry.name, patch));
@@ -206,6 +209,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		const getCredentials = (runtime: typeof McpRuntime): McpOAuthCredentialStore => {
 			credentials ??= new runtime.McpOAuthCredentialStore();
 			return credentials;
+		};
+
+		const getServerLog = (runtime: typeof McpRuntime): McpServerLog => {
+			serverLog ??= new runtime.McpServerLog(options.logPath ?? join(getAgentDir(), "mcp.log"));
+			return serverLog;
 		};
 
 		/** pi tool name to the `<server>\0<tool>` it was assigned to, so names stay unique and stable. */
@@ -319,6 +327,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				cwd: sessionCwd,
 				createTransport: options.createTransport ?? runtime.createDefaultTransport,
 				credentials: getCredentials(runtime),
+				log: getServerLog(runtime),
 				onTools: registerTools,
 				onChange: onConnectionChange,
 			});

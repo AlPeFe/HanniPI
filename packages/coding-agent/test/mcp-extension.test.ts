@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,7 +12,7 @@ import { createInMemoryTransportPair, type InMemoryTransport } from "@earendil-w
 import { afterEach, describe, expect, it } from "vitest";
 import { InMemoryAuthStorageBackend } from "../src/core/auth-storage.ts";
 import { loadMcpConfig, type McpServerEntry } from "../src/extensions/mcp/config.ts";
-import { McpOAuthCredentialStore, McpServerConnection } from "../src/extensions/mcp/runtime.ts";
+import { McpOAuthCredentialStore, McpServerConnection, McpServerLog } from "../src/extensions/mcp/runtime.ts";
 import { convertMcpResult, createMcpToolName } from "../src/extensions/mcp/tools.ts";
 
 // Config values are resolved at connect time, so the literal reference must survive loading.
@@ -185,13 +185,18 @@ describe("MCP connections", () => {
 		return pair.client;
 	}
 
-	function connect(entry: McpServerEntry, transports: (() => ReturnType<typeof createTransport>)[]) {
+	function connect(
+		entry: McpServerEntry,
+		transports: (() => ReturnType<typeof createTransport>)[],
+		log?: McpServerLog,
+	) {
 		let opened = 0;
 		const connection = new McpServerConnection({
 			entry,
 			cwd: process.cwd(),
 			createTransport: () => transports[opened++](),
 			credentials: new McpOAuthCredentialStore(new InMemoryAuthStorageBackend()),
+			log,
 			onTools: () => {},
 		});
 		return { connection, opened: () => opened };
@@ -288,6 +293,36 @@ describe("MCP connections", () => {
 		await expect(connection.getClient()).rejects.toThrow('MCP server "fake" requires sign-in. Run /mcp to sign in.');
 		expect(connection.state).toBe("needs-auth");
 		await connection.close();
+	});
+
+	it("appends server log messages to the log file", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-mcp-log-"));
+		try {
+			const path = join(dir, "mcp.log");
+			const { connection } = connect(
+				{ name: "fake", config: { command: "unused" }, source: "test" },
+				[() => createTransport()],
+				new McpServerLog(path),
+			);
+			await connection.getClient();
+			const server = servers.at(-1);
+			await server?.send({
+				jsonrpc: "2.0",
+				method: "notifications/message",
+				params: { level: "warning", logger: "db", data: "slow\nquery" },
+			});
+			await server?.send({
+				jsonrpc: "2.0",
+				method: "notifications/message",
+				params: { level: "error", data: { code: 7 } },
+			});
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			const lines = readFileSync(path, "utf8").replace(/^\S+ /gm, "");
+			expect(lines).toBe('[fake] warning db: slow\n    query\n[fake] error {"code":7}\n');
+			await connection.close();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("resolves the OAuth client secret lazily", async () => {
