@@ -2,12 +2,15 @@ import {
 	type ApiKeyCredential,
 	type AuthContext,
 	type AuthResult,
+	type ClassifierModel,
+	isModelType,
 	lazyStream,
 	type Model,
 	type Provider,
 	type ProviderStreamOptions,
 	type RefreshModelsContext,
 } from "@earendil-works/pi-ai";
+import { llamaCppClassifyApi } from "@earendil-works/pi-ai/api/llama-cpp-classify.lazy";
 import { stream, streamSimple } from "@earendil-works/pi-ai/compat";
 import {
 	LlamaClient,
@@ -16,7 +19,7 @@ import {
 	llamaInferenceUrl,
 	normalizeLlamaServerUrl,
 } from "./client.ts";
-import { createManagedLlama, type ManagedLlama } from "./managed.ts";
+import { createManagedLlama, type ManagedLlama, type ManagedLlamaServerInfo } from "./managed.ts";
 
 export const LLAMA_PROVIDER_ID = "llama.cpp";
 export const DEFAULT_LLAMA_SERVER_URL = "http://127.0.0.1:8080";
@@ -78,9 +81,28 @@ async function routerAutoloadEnabled(
 	}
 }
 
-function toPiModel(model: LlamaModelInfo, serverUrl: string, props?: LlamaServerProps): Model<"openai-completions"> {
+function contextWindowOf(model: LlamaModelInfo): number {
 	const reportedContextWindow = model.meta?.n_ctx ?? model.meta?.n_ctx_train;
-	const contextWindow = reportedContextWindow && reportedContextWindow > 0 ? reportedContextWindow : 128000;
+	return reportedContextWindow && reportedContextWindow > 0 ? reportedContextWindow : 128000;
+}
+
+/** The same llama.cpp model used as a classifier: answers are read from next-token label probabilities. */
+function toPiClassifierModel(model: LlamaModelInfo, serverUrl: string): ClassifierModel<"llama-cpp-classify"> {
+	return {
+		type: "classifier",
+		id: model.id,
+		name: model.id,
+		api: "llama-cpp-classify",
+		provider: LLAMA_PROVIDER_ID,
+		baseUrl: serverUrl,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: contextWindowOf(model),
+	};
+}
+
+function toPiModel(model: LlamaModelInfo, serverUrl: string, props?: LlamaServerProps): Model<"openai-completions"> {
+	const contextWindow = contextWindowOf(model);
 	const reasoning = props?.chat_template?.includes("enable_thinking") === true;
 	return {
 		id: model.id,
@@ -121,6 +143,8 @@ export interface LlamaProviderController {
 
 export function createLlamaProvider(managed: ManagedLlama = createManagedLlama()): LlamaProviderController {
 	let models: readonly Model<"openai-completions">[] = [];
+	let classifiers: readonly ClassifierModel<"llama-cpp-classify">[] = [];
+	const classifier = llamaCppClassifyApi();
 
 	const setCatalog = (
 		catalog: readonly LlamaModelInfo[],
@@ -128,9 +152,12 @@ export function createLlamaProvider(managed: ManagedLlama = createManagedLlama()
 		options: LlamaCatalogOptions = {},
 	): void => {
 		const isManaged = options.managed === true;
-		models = catalog
-			.filter((model) => modelIsSelectable(model, options.routerAutoload === true, isManaged))
-			.map((model) => toPiModel(model, isManaged ? MANAGED_LLAMA_SERVER_URL : serverUrl));
+		const modelServerUrl = isManaged ? MANAGED_LLAMA_SERVER_URL : serverUrl;
+		const selectable = catalog.filter((model) =>
+			modelIsSelectable(model, options.routerAutoload === true, isManaged),
+		);
+		models = selectable.map((model) => toPiModel(model, modelServerUrl));
+		classifiers = selectable.map((model) => toPiClassifierModel(model, modelServerUrl));
 	};
 
 	// Managed models carry the placeholder URL; start or join the server and send the request to its real URL.
@@ -228,16 +255,23 @@ export function createLlamaProvider(managed: ManagedLlama = createManagedLlama()
 			},
 		},
 		getModels: () => models,
+		getAllModels: () => [...models, ...classifiers],
 		refreshModels: async (context: RefreshModelsContext): Promise<void> => {
 			if (context.stored) {
-				const restored = context.stored.models.filter(
+				const stored = context.stored.models.filter((model) => model.provider === LLAMA_PROVIDER_ID);
+				const restored = stored.filter(
 					(model): model is Model<"openai-completions"> =>
-						model.provider === LLAMA_PROVIDER_ID && model.api === "openai-completions",
+						isModelType(model, "chat") && model.api === "openai-completions",
+				);
+				const restoredClassifiers = stored.filter(
+					(model): model is ClassifierModel<"llama-cpp-classify"> =>
+						isModelType(model, "classifier") && model.api === "llama-cpp-classify",
 				);
 				if (
 					!(await context.publish({
 						update: () => {
 							models = restored;
+							classifiers = restoredClassifiers;
 						},
 					}))
 				) {
@@ -266,23 +300,24 @@ export function createLlamaProvider(managed: ManagedLlama = createManagedLlama()
 			if (context.signal.aborted) return;
 			const routerAutoload = await routerAutoloadEnabled(client, catalog, isManaged, context.signal);
 			if (context.signal.aborted) return;
+			const selectable = catalog.filter((model) => modelIsSelectable(model, routerAutoload, isManaged));
 			const refreshed = await Promise.all(
-				catalog
-					.filter((model) => modelIsSelectable(model, routerAutoload, isManaged))
-					.map(async (model) => {
-						// Only loaded models expose their template without side effects. Unloaded autoload models
-						// would need to be loaded, while querying sleeping models may wake them. Those models remain
-						// unclassified until they are loaded or woken and a later catalog refresh discovers them.
-						if (model.status.value !== "loaded") return toPiModel(model, modelServerUrl);
-						const props = await client.props({ model: model.id, signal: context.signal });
-						return toPiModel(model, modelServerUrl, props);
-					}),
+				selectable.map(async (model) => {
+					// Only loaded models expose their template without side effects. Unloaded autoload models
+					// would need to be loaded, while querying sleeping models may wake them. Those models remain
+					// unclassified until they are loaded or woken and a later catalog refresh discovers them.
+					if (model.status.value !== "loaded") return toPiModel(model, modelServerUrl);
+					const props = await client.props({ model: model.id, signal: context.signal });
+					return toPiModel(model, modelServerUrl, props);
+				}),
 			);
+			const refreshedClassifiers = selectable.map((model) => toPiClassifierModel(model, modelServerUrl));
 			if (context.signal.aborted) return;
 			await context.publish({
-				persist: { models: refreshed, checkedAt: Date.now() },
+				persist: { models: [...refreshed, ...refreshedClassifiers], checkedAt: Date.now() },
 				update: () => {
 					models = refreshed;
+					classifiers = refreshedClassifiers;
 				},
 			});
 		},
@@ -294,6 +329,25 @@ export function createLlamaProvider(managed: ManagedLlama = createManagedLlama()
 			withManagedServer(model, options, (requestModel, requestOptions) =>
 				streamSimple(requestModel, context, requestOptions),
 			),
+		classify: async (model, context, options) => {
+			if (model.baseUrl !== MANAGED_LLAMA_SERVER_URL) return classifier.classify(model, context, options);
+			let server: ManagedLlamaServerInfo;
+			try {
+				server = await managed.acquire(options?.signal);
+			} catch (error) {
+				// Classifiers report failures in the result, like the stream path does through lazyStream.
+				return {
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					answers: {},
+					stopReason: options?.signal?.aborted ? "aborted" : "error",
+					errorMessage: error instanceof Error ? error.message : String(error),
+					timestamp: Date.now(),
+				};
+			}
+			return classifier.classify({ ...model, baseUrl: server.url }, context, { ...options, apiKey: server.apiKey });
+		},
 	};
 
 	return { provider, setCatalog };

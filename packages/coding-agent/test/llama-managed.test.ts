@@ -4,7 +4,13 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { type AuthContext, type AuthPrompt, type Model, normalizeContext } from "@earendil-works/pi-ai";
+import {
+	type AuthContext,
+	type AuthPrompt,
+	type ClassifierModel,
+	type Model,
+	normalizeContext,
+} from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { LlamaClient } from "../src/extensions/llama/client.ts";
 import { loadManagedLlamaSettings, type ManagedLlama, ManagedLlamaClient } from "../src/extensions/llama/managed.ts";
@@ -342,5 +348,32 @@ describe("managed llama.cpp provider", () => {
 		expect(result.stopReason).toBe("error");
 		expect(calls).toEqual(["probe", "acquire"]);
 		expect(requests.at(-1)).toEqual({ url: "/v1/chat/completions", authorization: "Bearer secret" });
+
+		// Classifier models use the same placeholder and are routed to the running server too.
+		const classifierModel = provider.getAllModels?.().find((model) => model.type === "classifier");
+		expect(classifierModel?.baseUrl).toBe(MANAGED_LLAMA_SERVER_URL);
+		const classification = await provider.classify!(
+			classifierModel as ClassifierModel<"llama-cpp-classify">,
+			{
+				state: {},
+				questions: { ok: { type: "bool", instructions: "ok?", criteria: { true: "yes", false: "no" } } },
+			},
+			{ apiKey: "managed" },
+		);
+		expect(classification.stopReason).toBe("error");
+		expect(calls).toEqual(["probe", "acquire", "acquire"]);
+		expect(requests.at(-1)?.authorization).toBe("Bearer secret");
+		expect(requests.at(-1)?.url.startsWith("/v1")).toBe(false);
+	});
+
+	it("reports a managed server that cannot start as a classifier error", async () => {
+		const { provider, setCatalog } = createLlamaProvider(fakeManaged(undefined, []));
+		setCatalog([{ id: "local", status: { value: "loaded" } }], "", { managed: true });
+		const classifierModel = provider.getAllModels?.().find((model) => model.type === "classifier");
+		const result = await provider.classify!(classifierModel as ClassifierModel<"llama-cpp-classify">, {
+			state: {},
+			questions: { ok: { type: "bool", instructions: "ok?", criteria: { true: "yes", false: "no" } } },
+		});
+		expect(result).toMatchObject({ stopReason: "error", errorMessage: "not running", answers: {} });
 	});
 });
