@@ -155,16 +155,16 @@ describe("pi mcp", () => {
 	});
 
 	it("adds and removes project servers", async () => {
-		const added = await run(["add", "--project", "local", "--", "node", "server.js"], undefined);
+		const added = await run(["add", "-l", "local", "--", "node", "server.js"], undefined);
 		expect(added.output).toContain("The project is not trusted");
 		const projectConfig = join(added.agentDir, ".pi", "mcp.json");
 		expect(readConfig(projectConfig)).toEqual({ mcpServers: { local: { command: "node", args: ["server.js"] } } });
 
 		const wrongScope = await run(["remove", "local"], undefined, added.agentDir);
 		expect(wrongScope.exitCode).toBe(1);
-		expect(wrongScope.output).toContain(`It is defined in ${projectConfig}; use --project.`);
+		expect(wrongScope.output).toContain(`It is defined in ${projectConfig}; use --local.`);
 
-		const removed = await run(["remove", "local", "--project"], undefined, added.agentDir);
+		const removed = await run(["remove", "local", "--local"], undefined, added.agentDir);
 		expect(removed.exitCode).toBe(0);
 		expect(removed.output).toContain('Removed project MCP server "local"');
 		expect(readConfig(projectConfig)).toEqual({ mcpServers: {} });

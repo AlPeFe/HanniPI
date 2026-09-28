@@ -35,7 +35,7 @@ Project entries replace global entries with the same name. A project `mcp.json` 
 ```bash
 pi mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem .
 pi mcp add docs --url https://example.com/mcp --bearer-token-env-var DOCS_TOKEN --exposure direct
-pi mcp add --project tools --env API_KEY='${TOOLS_KEY}' -- uvx tools-mcp
+pi mcp add -l tools --env API_KEY='${TOOLS_KEY}' -- uvx tools-mcp
 pi mcp remove docs
 ```
 
@@ -51,7 +51,7 @@ Rules that are easy to get wrong:
 
 When asked to add an MCP server, the agent should:
 
-1. Add simple servers with `pi mcp add` (add `--project` for the project file), or edit `mcp.json` directly for settings the command does not cover. Put personal servers and servers with credentials in `~/.pi/agent/mcp.json`. Use the project `.pi/mcp.json` only for servers the project itself needs, and only in trusted projects.
+1. Add simple servers with `pi mcp add` (add `-l` for the project file), or edit `mcp.json` directly for settings the command does not cover. Put personal servers and servers with credentials in `~/.pi/agent/mcp.json`. Use the project `.pi/mcp.json` only for servers the project itself needs, and only in trusted projects.
 2. Convert entries written for other clients:
    - Claude Desktop, Claude Code, and Cursor use the same `mcpServers` shape; copy the entry.
    - VS Code uses a top-level `servers` object and `inputs` prompts; move the entry under `mcpServers` and replace `${input:...}` with `${NAME}` environment variables.

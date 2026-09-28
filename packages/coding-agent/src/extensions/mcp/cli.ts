@@ -32,7 +32,7 @@ import {
 const HELP = `${chalk.bold("Usage:")}
   ${APP_NAME} mcp add <server> [options] -- <command> [args...]
   ${APP_NAME} mcp add <server> [options] --url <url>
-  ${APP_NAME} mcp remove <server> [--project]
+  ${APP_NAME} mcp remove <server> [-l]
   ${APP_NAME} mcp list [--json]
   ${APP_NAME} mcp login <server> [--timeout <seconds>]
   ${APP_NAME} mcp logout <server>
@@ -48,7 +48,7 @@ Commands:
   logout <server>         Delete the stored OAuth credentials
 
 Options for add and remove:
-  --project               Use ${CONFIG_DIR_NAME}/mcp.json in the current project instead of the global file
+  -l, --local             Use ${CONFIG_DIR_NAME}/mcp.json in the current project instead of the global file
 
 Options for add:
   --url <url>             Streamable HTTP server URL (instead of a command)
@@ -116,6 +116,9 @@ function createConnection(entry: McpServerEntry, options: McpCommandOptions, cre
 	});
 }
 
+/** Short spellings of options. `-l`/`--local` match `pi install`. */
+const OPTION_ALIASES = new Map([["-l", "--local"]]);
+
 interface ParsedOptions {
 	positional: string[];
 	values: Map<string, string | true>;
@@ -138,7 +141,7 @@ function parseOptions(
 	const values = new Map<string, string | true>();
 	const lists = new Map<string, string[]>();
 	for (let index = 0; index < args.length; index++) {
-		const arg = args[index];
+		const arg = OPTION_ALIASES.get(args[index]) ?? args[index];
 		if (arg === "--" || positional.length >= maxPositionals) {
 			positional.push(...args.slice(arg === "--" ? index + 1 : index));
 			break;
@@ -272,7 +275,7 @@ function add(
 	const parsed = parseOptions(
 		args,
 		{
-			project: "flag",
+			local: "flag",
 			url: "value",
 			env: "list",
 			cwd: "value",
@@ -344,7 +347,7 @@ function add(
 		return 1;
 	}
 
-	const project = values.has("project");
+	const project = values.has("local");
 	const path = project ? projectConfig : join(options.agentDir, "mcp.json");
 	const scope = project ? "project" : "global";
 	let replaced: boolean;
@@ -375,14 +378,14 @@ function remove(
 	log: (line: string) => void,
 	error: (line: string) => void,
 ): number {
-	const parsed = parseOptions(args, { project: "flag" }, error);
+	const parsed = parseOptions(args, { local: "flag" }, error);
 	if (!parsed) return 1;
 	const [name, ...extra] = parsed.positional;
 	if (!name || extra.length > 0) {
-		error(`Usage: ${APP_NAME} mcp remove <server> [--project]\n${HELP_HINT}`);
+		error(`Usage: ${APP_NAME} mcp remove <server> [-l]\n${HELP_HINT}`);
 		return 1;
 	}
-	const project = parsed.values.has("project");
+	const project = parsed.values.has("local");
 	const globalConfig = join(options.agentDir, "mcp.json");
 	const path = project ? projectConfig : globalConfig;
 	const scope = project ? "project" : "global";
@@ -401,7 +404,7 @@ function remove(
 		(server) => server.name === name && server.scope !== scope,
 	);
 	error(
-		`No ${scope} MCP server named "${name}" in ${path}.${other ? ` It is defined in ${other.source}${other.scope === "project" ? "; use --project" : "; omit --project"}.` : ""}`,
+		`No ${scope} MCP server named "${name}" in ${path}.${other ? ` It is defined in ${other.source}${other.scope === "project" ? "; use --local" : "; omit --local"}.` : ""}`,
 	);
 	return 1;
 }
