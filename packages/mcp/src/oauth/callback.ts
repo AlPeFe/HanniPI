@@ -7,7 +7,13 @@ export interface OAuthCallback {
 }
 
 export interface OAuthCallbackServerOptions {
+	/** Address to listen on. Default: `127.0.0.1`. */
 	host?: string;
+	/**
+	 * Host name in `redirectUrl`, for example `localhost` for a client registered with it while
+	 * listening on `127.0.0.1`. Default: `host`.
+	 */
+	redirectHost?: string;
 	port?: number;
 	path?: string;
 	timeoutMs?: number;
@@ -40,7 +46,8 @@ export class OAuthCallbackServer {
 
 	static async listen(options: OAuthCallbackServerOptions = {}): Promise<OAuthCallbackServer> {
 		const host = options.host ?? "127.0.0.1";
-		const path = options.path ?? "/oauth/callback";
+		const redirectHost = options.redirectHost ?? host;
+		const path = options.path ?? "/callback";
 		let instance: OAuthCallbackServer | undefined;
 		const server = createServer((request, response) => instance?.handle(request.url ?? "/", response));
 		await new Promise<void>((resolve, reject) => {
@@ -54,7 +61,7 @@ export class OAuthCallbackServer {
 		if (!address || typeof address === "string") throw new Error("OAuth callback server did not bind to TCP");
 		instance = new OAuthCallbackServer(
 			server,
-			`http://${host.includes(":") ? `[${host}]` : host}:${address.port}${path}`,
+			`http://${redirectHost.includes(":") ? `[${redirectHost}]` : redirectHost}:${address.port}${path}`,
 			path,
 			options.timeoutMs ?? 5 * 60_000,
 		);

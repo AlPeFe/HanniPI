@@ -1,3 +1,4 @@
+import type { BlobResourceContents, ContentAnnotations, TextResourceContents } from "./content.ts";
 import type { JsonRpcId } from "./jsonrpc.ts";
 
 export const LATEST_PROTOCOL_VERSION = "2025-11-25";
@@ -86,5 +87,45 @@ export interface Tool {
 export interface ListToolsResult {
 	tools: Tool[];
 	nextCursor?: string;
+	_meta?: Record<string, unknown>;
+}
+
+/** A resource a server lists in `resources/list`. */
+export interface Resource {
+	uri: string;
+	name: string;
+	title?: string;
+	description?: string;
+	mimeType?: string;
+	size?: number;
+	annotations?: ContentAnnotations;
+	_meta?: Record<string, unknown>;
+}
+
+/** A family of resources, addressed by an RFC 6570 URI template, from `resources/templates/list`. */
+export interface ResourceTemplate {
+	uriTemplate: string;
+	name: string;
+	title?: string;
+	description?: string;
+	mimeType?: string;
+	annotations?: ContentAnnotations;
+	_meta?: Record<string, unknown>;
+}
+
+export interface ListResourcesResult {
+	resources: Resource[];
+	nextCursor?: string;
+	_meta?: Record<string, unknown>;
+}
+
+export interface ListResourceTemplatesResult {
+	resourceTemplates: ResourceTemplate[];
+	nextCursor?: string;
+	_meta?: Record<string, unknown>;
+}
+
+export interface ReadResourceResult {
+	contents: (TextResourceContents | BlobResourceContents)[];
 	_meta?: Record<string, unknown>;
 }

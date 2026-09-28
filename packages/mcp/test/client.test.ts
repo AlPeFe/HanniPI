@@ -123,6 +123,40 @@ describe("McpClient", () => {
 		await client.close();
 	});
 
+	it("lists and reads resources", async () => {
+		const { client, server } = await connect();
+		server.setHandler("resources/list", (request) =>
+			(request.params as { cursor?: string } | undefined)?.cursor === undefined
+				? { resources: [{ uri: "file:///a", name: "a", mimeType: "text/plain" }], nextCursor: "2" }
+				: { resources: [{ uri: "file:///b" }] },
+		);
+		server.setHandler("resources/templates/list", () => ({
+			resourceTemplates: [{ uriTemplate: "repo://{owner}/{repo}", name: "repo" }],
+		}));
+		server.setHandler("resources/read", (request) => ({
+			contents: [{ uri: (request.params as { uri: string }).uri, text: "hello" }],
+		}));
+		// A missing name falls back to the URI.
+		expect(await client.listResources()).toEqual([
+			{ uri: "file:///a", name: "a", mimeType: "text/plain" },
+			{ uri: "file:///b", name: "file:///b" },
+		]);
+		expect(await client.listResourceTemplates()).toEqual([{ uriTemplate: "repo://{owner}/{repo}", name: "repo" }]);
+		// Single pages pass the cursor through.
+		expect(await client.listResourcesPage()).toEqual({
+			resources: [{ uri: "file:///a", name: "a", mimeType: "text/plain" }],
+			nextCursor: "2",
+		});
+		expect(await client.listResourcesPage("2")).toEqual({ resources: [{ uri: "file:///b", name: "file:///b" }] });
+		expect(await client.readResource("file:///a")).toEqual({ contents: [{ uri: "file:///a", text: "hello" }] });
+
+		server.setHandler("resources/read", () => ({ contents: [{ uri: "file:///a" }] }));
+		await expect(client.readResource("file:///a")).rejects.toThrow("Invalid contents in MCP resources/read result");
+		server.setHandler("resources/list", () => ({ resources: [{ name: "no uri" }] }));
+		await expect(client.listResources()).rejects.toThrow("Invalid entry in MCP resources/list result");
+		await client.close();
+	});
+
 	it("returns structured tool content and surfaces JSON-RPC errors", async () => {
 		const { client, server } = await connect();
 		server.setHandler("tools/call", (request) => {

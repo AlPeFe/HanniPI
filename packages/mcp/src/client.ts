@@ -21,8 +21,12 @@ import {
 	type Implementation,
 	type InitializeResult,
 	LATEST_PROTOCOL_VERSION,
-	type ListToolsResult,
+	type ListResourcesResult,
+	type ListResourceTemplatesResult,
 	type ProgressNotification,
+	type ReadResourceResult,
+	type Resource,
+	type ResourceTemplate,
 	type Root,
 	type ServerCapabilities,
 	SUPPORTED_PROTOCOL_VERSIONS,
@@ -80,19 +84,59 @@ function validateInitializeResult(value: unknown): InitializeResult {
 	return value as unknown as InitializeResult;
 }
 
-function validateListToolsResult(value: unknown): ListToolsResult {
-	if (!isObject(value) || !Array.isArray(value.tools)) {
-		throw new McpError(JSON_RPC_ERROR_CODES.invalidRequest, "Invalid MCP tools/list result");
-	}
-	for (const tool of value.tools) {
-		if (!isObject(tool) || typeof tool.name !== "string" || !isObject(tool.inputSchema)) {
-			throw new McpError(JSON_RPC_ERROR_CODES.invalidRequest, "Invalid MCP tool definition");
-		}
+function invalid(message: string): McpError {
+	return new McpError(JSON_RPC_ERROR_CODES.invalidRequest, message);
+}
+
+/** One page of a paginated list: the items under `key`, each checked by `isItem`. */
+function validateListPage(
+	method: string,
+	key: string,
+	value: unknown,
+	isItem: (item: Record<string, unknown>) => boolean,
+): { items: Record<string, unknown>[]; nextCursor?: string } {
+	const items = isObject(value) ? value[key] : undefined;
+	if (!isObject(value) || !Array.isArray(items)) throw invalid(`Invalid MCP ${method} result`);
+	for (const item of items) {
+		if (!isObject(item) || !isItem(item)) throw invalid(`Invalid entry in MCP ${method} result`);
 	}
 	if (value.nextCursor !== undefined && typeof value.nextCursor !== "string") {
-		throw new McpError(JSON_RPC_ERROR_CODES.invalidRequest, "Invalid MCP tools/list cursor");
+		throw invalid(`Invalid MCP ${method} cursor`);
 	}
-	return value as unknown as ListToolsResult;
+	return { items, ...(value.nextCursor === undefined ? {} : { nextCursor: value.nextCursor }) };
+}
+
+const isTool = (tool: Record<string, unknown>) => typeof tool.name === "string" && isObject(tool.inputSchema);
+// `name` is required by the spec, but some servers omit it; the URI stands in.
+const isResource = (resource: Record<string, unknown>) =>
+	typeof resource.uri === "string" && (resource.name === undefined || typeof resource.name === "string");
+const isResourceTemplate = (template: Record<string, unknown>) =>
+	typeof template.uriTemplate === "string" && (template.name === undefined || typeof template.name === "string");
+
+function toResource(item: Record<string, unknown>): Resource {
+	return { ...item, name: item.name ?? item.uri } as Resource;
+}
+
+function toResourceTemplate(item: Record<string, unknown>): ResourceTemplate {
+	return { ...item, name: item.name ?? item.uriTemplate } as ResourceTemplate;
+}
+
+function pageCursor(page: { nextCursor?: string }): { nextCursor?: string } {
+	return page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor };
+}
+
+function validateReadResourceResult(value: unknown): ReadResourceResult {
+	if (!isObject(value) || !Array.isArray(value.contents)) throw invalid("Invalid MCP resources/read result");
+	for (const contents of value.contents) {
+		if (
+			!isObject(contents) ||
+			typeof contents.uri !== "string" ||
+			(typeof contents.text !== "string" && typeof contents.blob !== "string")
+		) {
+			throw invalid("Invalid contents in MCP resources/read result");
+		}
+	}
+	return value as unknown as ReadResourceResult;
 }
 
 /** `content` is required by the spec, but servers that only return `structuredContent` omit it (the SDK defaults it too). */
@@ -248,21 +292,85 @@ export class McpClient {
 	}
 
 	async listTools(options: McpRequestOptions = {}): Promise<Tool[]> {
-		const tools: Tool[] = [];
+		return (await this.listAll("tools/list", "tools", isTool, options)) as unknown as Tool[];
+	}
+
+	/** Every resource, following `nextCursor` through all pages. */
+	async listResources(options: McpRequestOptions = {}): Promise<Resource[]> {
+		return (await this.listAll("resources/list", "resources", isResource, options)).map(toResource);
+	}
+
+	/** One page of resources, starting at `cursor`. */
+	async listResourcesPage(cursor?: string, options: McpRequestOptions = {}): Promise<ListResourcesResult> {
+		const page = await this.listPage("resources/list", "resources", isResource, cursor, options);
+		return { resources: page.items.map(toResource), ...pageCursor(page) };
+	}
+
+	/** Every resource template, following `nextCursor` through all pages. */
+	async listResourceTemplates(options: McpRequestOptions = {}): Promise<ResourceTemplate[]> {
+		const templates = await this.listAll(
+			"resources/templates/list",
+			"resourceTemplates",
+			isResourceTemplate,
+			options,
+		);
+		return templates.map(toResourceTemplate);
+	}
+
+	/** One page of resource templates, starting at `cursor`. */
+	async listResourceTemplatesPage(
+		cursor?: string,
+		options: McpRequestOptions = {},
+	): Promise<ListResourceTemplatesResult> {
+		const page = await this.listPage(
+			"resources/templates/list",
+			"resourceTemplates",
+			isResourceTemplate,
+			cursor,
+			options,
+		);
+		return { resourceTemplates: page.items.map(toResourceTemplate), ...pageCursor(page) };
+	}
+
+	async readResource(uri: string, options: McpRequestOptions = {}): Promise<ReadResourceResult> {
+		return validateReadResourceResult(await this.request("resources/read", { uri }, options));
+	}
+
+	private async listPage(
+		method: string,
+		key: string,
+		isItem: (item: Record<string, unknown>) => boolean,
+		cursor: string | undefined,
+		options: McpRequestOptions,
+	): Promise<{ items: Record<string, unknown>[]; nextCursor?: string }> {
+		return validateListPage(
+			method,
+			key,
+			await this.request(method, cursor === undefined ? undefined : { cursor }, options),
+			isItem,
+		);
+	}
+
+	/** Every item of a paginated list method. */
+	private async listAll(
+		method: string,
+		key: string,
+		isItem: (item: Record<string, unknown>) => boolean,
+		options: McpRequestOptions,
+	): Promise<Record<string, unknown>[]> {
+		const items: Record<string, unknown>[] = [];
 		const cursors = new Set<string>();
 		let cursor: string | undefined;
 		for (let pageNumber = 0; pageNumber < MAX_LIST_PAGES; pageNumber++) {
-			const page = validateListToolsResult(
-				await this.request("tools/list", cursor === undefined ? undefined : { cursor }, options),
-			);
-			tools.push(...page.tools);
-			if (page.nextCursor === undefined) return tools;
+			const page = await this.listPage(method, key, isItem, cursor, options);
+			items.push(...page.items);
+			if (page.nextCursor === undefined) return items;
 			if (cursors.has(page.nextCursor))
-				throw new Error(`MCP tools/list returned duplicate cursor: ${page.nextCursor}`);
+				throw new Error(`MCP ${method} returned duplicate cursor: ${page.nextCursor}`);
 			cursors.add(page.nextCursor);
 			cursor = page.nextCursor;
 		}
-		throw new Error(`MCP tools/list exceeded ${MAX_LIST_PAGES} pages`);
+		throw new Error(`MCP ${method} exceeded ${MAX_LIST_PAGES} pages`);
 	}
 
 	async callTool(
