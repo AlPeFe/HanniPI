@@ -34,6 +34,7 @@ export type {
 	McpServerConfig,
 	McpStdioServerConfig,
 } from "../../core/mcp-servers.ts";
+export { getMcpToolExposure } from "../../core/mcp-servers.ts";
 
 export interface McpServerEntry {
 	name: string;

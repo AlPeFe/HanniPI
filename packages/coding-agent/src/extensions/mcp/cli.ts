@@ -15,6 +15,7 @@ import { ProjectTrustStore } from "../../core/trust-manager.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
 import {
 	addMcpServerConfig,
+	getMcpToolExposure,
 	type LoadedMcpConfig,
 	loadMcpConfig,
 	type McpServerEntry,
@@ -93,6 +94,10 @@ interface ServerReport {
 	transport: string;
 	state: string;
 	tools: string[];
+	/** Tools whose exposure differs from the server's, from `toolExposure`. */
+	toolExposure?: Record<string, string>;
+	resources?: number;
+	resourceTemplates?: number;
 	error?: string;
 }
 
@@ -438,6 +443,15 @@ async function list(
 			}
 			report.state = connection.state;
 			report.tools = connection.tools.map((tool) => tool.name);
+			const overrides = connection.tools.flatMap((tool) => {
+				const exposure = getMcpToolExposure(entry.config, tool.name);
+				return exposure === report.exposure ? [] : [[tool.name, exposure] as const];
+			});
+			if (overrides.length > 0) report.toolExposure = Object.fromEntries(overrides);
+			if (connection.hasResources) {
+				report.resources = connection.resources.length;
+				report.resourceTemplates = connection.resourceTemplates.length;
+			}
 			if (connection.state !== "connected" && connection.error) report.error = connection.error;
 			await connection.close();
 			return report;
@@ -468,7 +482,16 @@ async function list(
 		log(`${report.name}: ${state} (${report.exposure}, ${report.scope})`);
 		log(`  ${report.transport}`);
 		if (report.state === "needs-auth") log(`  sign in with: ${APP_NAME} mcp login ${report.name}`);
-		if (report.tools.length > 0) log(`  tools: ${report.tools.join(", ")}`);
+		if (report.tools.length > 0) {
+			const tools = report.tools.map((tool) => {
+				const exposure = report.toolExposure?.[tool];
+				return exposure ? `${tool} [${exposure}]` : tool;
+			});
+			log(`  tools: ${tools.join(", ")}`);
+		}
+		if (report.resources !== undefined) {
+			log(`  resources: ${report.resources}, URI templates: ${report.resourceTemplates ?? 0}`);
+		}
 		if (report.error) log(`  ${report.error.split("\n").join("\n  ")}`);
 	}
 	for (const configError of loaded.errors) log(`config error: ${configError}`);

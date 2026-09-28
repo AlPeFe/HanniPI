@@ -27,7 +27,7 @@ import { APP_NAME, getAgentDir } from "../../config.ts";
 import { type AuthStorageBackend, FileAuthStorageBackend } from "../../core/auth-storage.ts";
 
 const CALLBACK_HOST = "127.0.0.1";
-const CALLBACK_PATH = "/oauth/callback";
+const CALLBACK_PATH = "/callback";
 /** Redirect URI for refreshes when none is stored. Refreshing never redirects the user. */
 const FALLBACK_REDIRECT_URL = `http://${CALLBACK_HOST}${CALLBACK_PATH}`;
 /** Access tokens this close to expiry are refreshed before they are sent. */
@@ -38,6 +38,49 @@ export interface McpOAuthSettings {
 	/** Already resolved. */
 	clientSecret?: string;
 	callbackPort?: number;
+	/** Loopback redirect URI; see `McpOAuthConfig.callbackUrl`. */
+	callbackUrl?: string;
+	/** Scopes to request, separated by spaces. */
+	scope?: string;
+}
+
+/** Where the loopback callback server listens and the redirect URI it serves. */
+interface CallbackSettings {
+	/** Address to listen on. */
+	host: string;
+	/** Host name in the redirect URI. */
+	redirectHost: string;
+	port: number | undefined;
+	path: string;
+	/** The exact redirect URI, when the port is fixed. */
+	fixedRedirectUrl: string | undefined;
+}
+
+function callbackSettings(settings: McpOAuthSettings): CallbackSettings {
+	const url = new URL(settings.callbackUrl ?? `http://${CALLBACK_HOST}${CALLBACK_PATH}`);
+	const address = url.hostname.replace(/^\[|\]$/g, "");
+	const port = url.port ? Number(url.port) : settings.callbackPort;
+	let fixedRedirectUrl: string | undefined;
+	// A configured URI with a port is sent exactly as written, since servers compare it as a string.
+	if (url.port) fixedRedirectUrl = settings.callbackUrl;
+	else if (port !== undefined) {
+		url.port = String(port);
+		fixedRedirectUrl = url.href;
+	}
+	return {
+		// `localhost` is served on 127.0.0.1; browsers fall back to it when ::1 refuses.
+		host: address === "localhost" ? CALLBACK_HOST : address,
+		redirectHost: address,
+		port,
+		path: url.pathname,
+		fixedRedirectUrl,
+	};
+}
+
+/** Scopes of both lists, each once. */
+function mergeScopes(...scopes: (string | undefined)[]): string | undefined {
+	const merged = [...new Set(scopes.flatMap((scope) => scope?.split(/\s+/).filter(Boolean) ?? []))];
+	return merged.length > 0 ? merged.join(" ") : undefined;
 }
 
 type StoredStates = Record<string, McpOAuthState>;
@@ -99,12 +142,6 @@ function registeredRedirectUrls(client: OAuthClientInformationMixed | undefined)
 	return client && "redirect_uris" in client ? client.redirect_uris : [];
 }
 
-function configuredRedirectUrl(settings: McpOAuthSettings): string | undefined {
-	return settings.callbackPort === undefined
-		? undefined
-		: `http://${CALLBACK_HOST}:${settings.callbackPort}${CALLBACK_PATH}`;
-}
-
 function createProvider(
 	serverUrl: string,
 	store: McpOAuthStateStore,
@@ -150,7 +187,7 @@ export function createMcpAuthProvider(options: {
 			if (!state?.tokens?.refresh_token) throw new McpOAuthAuthorizationRequiredError();
 			const settings = options.settings();
 			const redirectUrl =
-				configuredRedirectUrl(settings) ??
+				callbackSettings(settings).fixedRedirectUrl ??
 				registeredRedirectUrls(state.clientInformation)[0] ??
 				FALLBACK_REDIRECT_URL;
 			const provider = createProvider(serverUrl, store, settings, redirectUrl, () => {});
@@ -244,12 +281,18 @@ async function waitForAuthorizationCode(
 	}
 }
 
-async function listenForCallback(port: number | undefined, required: boolean): Promise<OAuthCallbackServer> {
+/** Listen on `port`, or on a free port when it is taken and not `required`. */
+async function listenForCallback(
+	settings: CallbackSettings,
+	port: number | undefined,
+	required: boolean,
+): Promise<OAuthCallbackServer> {
+	const options = { host: settings.host, redirectHost: settings.redirectHost, path: settings.path };
 	try {
-		return await OAuthCallbackServer.listen({ host: CALLBACK_HOST, port: port ?? 0, path: CALLBACK_PATH });
+		return await OAuthCallbackServer.listen({ ...options, port: port ?? 0 });
 	} catch (error) {
 		if (required || port === undefined) throw error;
-		return OAuthCallbackServer.listen({ host: CALLBACK_HOST, path: CALLBACK_PATH });
+		return OAuthCallbackServer.listen(options);
 	}
 }
 
@@ -266,18 +309,20 @@ export async function signInMcpServer(options: {
 }): Promise<void> {
 	const { serverUrl, store, settings } = options;
 	const stored = await store.load();
+	const callbackOptions = callbackSettings(settings);
 	// Reuse the port of the registered redirect URI so the registered client stays valid.
 	const registered = registeredRedirectUrls(stored?.clientInformation)[0];
 	const preferredPort =
-		settings.callbackPort ?? (registered ? Number(new URL(registered).port) || undefined : undefined);
-	const callback = await listenForCallback(preferredPort, settings.callbackPort !== undefined);
+		callbackOptions.port ?? (registered ? Number(new URL(registered).port) || undefined : undefined);
+	const callback = await listenForCallback(callbackOptions, preferredPort, callbackOptions.port !== undefined);
+	const redirectUrl = callbackOptions.fixedRedirectUrl ?? callback.redirectUrl;
 	try {
 		if (stored) {
 			const next: McpOAuthState = { ...stored };
 			// Every sign-in gets a fresh `state` parameter.
 			delete next.oauthState;
 			// A registered client cannot use another redirect URI, and its tokens belong to it.
-			if (!settings.clientId && !registeredRedirectUrls(stored.clientInformation).includes(callback.redirectUrl)) {
+			if (!settings.clientId && !registeredRedirectUrls(stored.clientInformation).includes(redirectUrl)) {
 				delete next.clientInformation;
 				delete next.tokens;
 				delete next.tokensExpireAt;
@@ -286,13 +331,14 @@ export async function signInMcpServer(options: {
 		}
 
 		let authorizationUrl: URL | undefined;
-		const provider = createProvider(serverUrl, store, settings, callback.redirectUrl, (url) => {
+		const provider = createProvider(serverUrl, store, settings, redirectUrl, (url) => {
 			authorizationUrl = url;
 		});
 		const flow = {
 			serverUrl,
 			resourceMetadataUrl: options.challenge?.resourceMetadataUrl,
-			scope: options.challenge?.scope,
+			// A server asking for more scope gets it on top of the configured scope.
+			scope: mergeScopes(settings.scope, options.challenge?.scope),
 		};
 		// A refresh keeps the granted scope; a server asking for more needs the browser flow.
 		const skipRefresh = options.challenge?.error === "insufficient_scope";

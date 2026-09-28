@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,8 +11,14 @@ import {
 import { createInMemoryTransportPair, type InMemoryTransport } from "@earendil-works/pi-mcp/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { InMemoryAuthStorageBackend } from "../src/core/auth-storage.ts";
-import { loadMcpConfig, type McpServerEntry } from "../src/extensions/mcp/config.ts";
-import { McpOAuthCredentialStore, McpServerConnection, McpServerLog } from "../src/extensions/mcp/runtime.ts";
+import { truncateMiddle } from "../src/core/tools/truncate.ts";
+import { getMcpToolExposure, loadMcpConfig, type McpServerEntry } from "../src/extensions/mcp/config.ts";
+import {
+	createDefaultTransport,
+	McpOAuthCredentialStore,
+	McpServerConnection,
+	McpServerLog,
+} from "../src/extensions/mcp/runtime.ts";
 import { convertMcpResult, createMcpToolName } from "../src/extensions/mcp/tools.ts";
 
 // Config values are resolved at connect time, so the literal reference must survive loading.
@@ -96,6 +102,60 @@ describe("MCP config", () => {
 		expect(trusted.autoEnableCodemode).toBe(false);
 		expect(trusted.errors).toContainEqual(expect.stringContaining("autoEnableCodemode must be a boolean"));
 	});
+
+	it("validates the OAuth callback URL and scope", () => {
+		const paths = setup(
+			{
+				mcpServers: {
+					ok: {
+						url: "https://a.example/mcp",
+						oauth: { callbackUrl: "http://localhost:8080/callback", scope: "a b" },
+					},
+					ipv6: { url: "https://a.example/mcp", oauth: { callbackUrl: "http://[::1]/cb", callbackPort: 9000 } },
+					same: { url: "https://a.example/mcp", oauth: { callbackUrl: "http://127.0.0.1:2/cb", callbackPort: 2 } },
+					remote: { url: "https://a.example/mcp", oauth: { callbackUrl: "https://example.com/callback" } },
+					both: { url: "https://a.example/mcp", oauth: { callbackUrl: "http://127.0.0.1:1/cb", callbackPort: 2 } },
+					scope: { url: "https://a.example/mcp", oauth: { scope: ["a"] } },
+				},
+			},
+			{},
+		);
+		const { servers, errors } = loadMcpConfig({ ...paths, projectTrusted: false });
+		expect(servers.map((server) => server.name)).toEqual(["ok", "ipv6", "same"]);
+		expect(errors).toEqual([
+			expect.stringContaining('server "remote": oauth.callbackUrl must be an http URI on localhost'),
+			expect.stringContaining('server "both": oauth.callbackUrl and oauth.callbackPort name different ports'),
+			expect.stringContaining('server "scope": oauth.scope must be a string'),
+		]);
+	});
+
+	it("resolves per-tool exposure from exact names, then patterns in order", () => {
+		const paths = setup(
+			{
+				mcpServers: {
+					gh: {
+						command: "x",
+						exposure: "deferred",
+						toolExposure: { "get_*": "codemode", get_me: "direct", "*delete*": "hidden", "get_file.*": "direct" },
+					},
+					bad: { command: "x", toolExposure: { a: "visible" } },
+				},
+			},
+			{},
+		);
+		const { servers, errors } = loadMcpConfig({ ...paths, projectTrusted: false });
+		expect(errors).toEqual([expect.stringContaining('server "bad": toolExposure "a" must be one of')]);
+		const config = servers[0].config;
+		expect(getMcpToolExposure(config, "get_me")).toBe("direct");
+		expect(getMcpToolExposure(config, "get_issue")).toBe("codemode");
+		expect(getMcpToolExposure(config, "get_delete_hint")).toBe("codemode");
+		expect(getMcpToolExposure(config, "delete_repo")).toBe("hidden");
+		expect(getMcpToolExposure(config, "list_issues")).toBe("deferred");
+		// Only `*` is special.
+		expect(getMcpToolExposure({ command: "x", toolExposure: { "get_file.*": "direct" } }, "get_file_x")).toBe(
+			"codemode",
+		);
+	});
 });
 
 describe("MCP tools", () => {
@@ -112,17 +172,21 @@ describe("MCP tools", () => {
 		expect(second).toMatch(/^mcp__s__a_b_[0-9a-f]{8}$/);
 	});
 
-	it("converts results, passing the CallToolResult to scripts and flagging errors", () => {
+	it("converts results, passing the CallToolResult to scripts and flagging errors", async () => {
 		const blocks = [
 			{ type: "resource_link" as const, uri: "file:///a", name: "a" },
 			{ type: "resource" as const, resource: { uri: "file:///b", text: "b text" } },
 			{ type: "audio" as const, data: "", mimeType: "audio/wav" },
 		];
 		expect(
-			convertMcpResult("docs", "t", { content: blocks, structuredContent: { ok: true }, _meta: { trace: "x" } }),
+			await convertMcpResult("docs", "t", {
+				content: blocks,
+				structuredContent: { ok: true },
+				_meta: { trace: "x" },
+			}),
 		).toEqual({
 			content: [
-				{ type: "text", text: "a: file:///a" },
+				{ type: "text", text: '[Resource file:///a "a"]' },
 				{ type: "text", text: "b text" },
 				{ type: "text", text: "[audio audio/wav omitted]" },
 			],
@@ -130,18 +194,104 @@ describe("MCP tools", () => {
 			// Scripts get the server's blocks as sent, without `_meta`.
 			structuredContent: { content: blocks, structuredContent: { ok: true } },
 		});
-		expect(convertMcpResult("docs", "t", { content: [], structuredContent: { n: 1 } }).content).toEqual([
+		expect((await convertMcpResult("docs", "t", { content: [], structuredContent: { n: 1 } })).content).toEqual([
 			{ type: "text", text: '{\n  "n": 1\n}' },
 		]);
-		expect(convertMcpResult("docs", "t", { content: [{ type: "text", text: "nope" }], isError: true })).toEqual({
-			content: [{ type: "text", text: "nope" }],
-			details: { server: "docs", tool: "t" },
-			structuredContent: { content: [{ type: "text", text: "nope" }], isError: true },
-			isError: true,
-		});
-		expect(convertMcpResult("docs", "t", { content: [], isError: true }).content).toEqual([
+		expect(await convertMcpResult("docs", "t", { content: [{ type: "text", text: "nope" }], isError: true })).toEqual(
+			{
+				content: [{ type: "text", text: "nope" }],
+				details: { server: "docs", tool: "t" },
+				structuredContent: { content: [{ type: "text", text: "nope" }], isError: true },
+				isError: true,
+			},
+		);
+		expect((await convertMcpResult("docs", "t", { content: [], isError: true })).content).toEqual([
 			{ type: "text", text: "MCP tool docs/t returned an error" },
 		]);
+	});
+
+	it("points resource links to read_mcp_resource and saves binary resources", async () => {
+		const saved: [string | Uint8Array, string][] = [];
+		const saveOutput = async (data: string | Uint8Array, extension: string) => {
+			saved.push([data, extension]);
+			return `/tmp/saved${extension}`;
+		};
+		const converted = await convertMcpResult(
+			"docs",
+			"t",
+			{
+				content: [
+					{
+						type: "resource_link",
+						uri: "docs://guide",
+						name: "guide",
+						title: "The Guide",
+						mimeType: "text/markdown",
+						size: 2048,
+						description: "How to use it",
+					},
+					{
+						type: "resource",
+						resource: { uri: "file:///r/report.pdf", mimeType: "application/pdf", blob: "JVBERg==" },
+					},
+					{ type: "resource", resource: { uri: "docs://logo", mimeType: "image/png", blob: "AAAA" } },
+				],
+			},
+			{ saveOutput, readableResources: true },
+		);
+		expect(converted.content).toEqual([
+			{
+				type: "text",
+				text: '[Resource docs://guide "The Guide" (text/markdown, 2.0KB): How to use it. Read it with read_mcp_resource (server "docs")]',
+			},
+			{ type: "text", text: "[Binary resource file:///r/report.pdf (application/pdf, 4B) saved to /tmp/saved.pdf]" },
+			{ type: "image", data: "AAAA", mimeType: "image/png" },
+		]);
+		expect(saved).toEqual([[Buffer.from("%PDF"), ".pdf"]]);
+	});
+
+	it("cuts the middle of model-facing text over 20KB and keeps the full result for scripts", async () => {
+		const saved: (string | Uint8Array)[] = [];
+		const saveOutput = async (data: string | Uint8Array) => {
+			saved.push(data);
+			return "/tmp/full.txt";
+		};
+		const lines = Array.from({ length: 3000 }, (_, index) => `line ${index + 1}`);
+		const full = lines.join("\n");
+		const image = { type: "image" as const, data: "AAAA", mimeType: "image/png" };
+		const result = { content: [{ type: "text" as const, text: full }, image] };
+		const converted = await convertMcpResult("docs", "snapshot", result, { saveOutput });
+		expect(converted.content).toHaveLength(2);
+		const text = (converted.content[0] as { text: string }).text;
+		// Codex's format: a header, the start and end of the text, then the file with the full text.
+		expect(text).toMatch(
+			new RegExp(
+				`^Warning: truncated output \\(original token count: ${Math.ceil(full.length / 4)}\\)\nTotal output lines: 3000\n\nline 1\nline 2\n`,
+			),
+		);
+		expect(text).toMatch(/…\d+ chars truncated…/);
+		expect(text.endsWith("line 3000\n\n[Full output: /tmp/full.txt (read it with offset/limit)]")).toBe(true);
+		expect(Buffer.byteLength(text)).toBeLessThan(21 * 1024);
+		expect(converted.content[1]).toEqual(image);
+		expect(converted.details).toEqual({ server: "docs", tool: "snapshot", fullOutputPath: "/tmp/full.txt" });
+		expect(saved).toEqual([full]);
+		expect(converted.structuredContent).toEqual(result);
+
+		// Text within the limit is not saved.
+		await convertMcpResult("docs", "small", { content: [{ type: "text", text: "ok" }] }, { saveOutput });
+		expect(saved).toHaveLength(1);
+	});
+
+	it("cuts multi-byte text only at character boundaries", () => {
+		const text = `${"é".repeat(20_000)}end`;
+		const result = truncateMiddle(text, 1001);
+		expect(result.truncated).toBe(true);
+		expect(result.content).not.toContain("\uFFFD");
+		expect(result.content.endsWith("end")).toBe(true);
+		const [head, tail] = result.content.split(/…\d+ chars truncated…/);
+		expect(Buffer.byteLength(head)).toBeLessThanOrEqual(500);
+		expect(Buffer.byteLength(tail)).toBeLessThanOrEqual(501);
+		expect(Array.from(head).length + Array.from(tail).length + result.removedChars).toBe(Array.from(text).length);
 	});
 });
 
@@ -170,7 +320,9 @@ describe("MCP connections", () => {
 						? options.noTools
 							? { jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" } }
 							: { jsonrpc: "2.0", id: message.id, result: { tools: [] } }
-						: { jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "ok" }] } };
+						: message.method === "resources/read"
+							? { jsonrpc: "2.0", id: message.id, result: { contents: [{ uri: "docs://a", text: "ok" }] } }
+							: { jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "ok" }] } };
 			queueMicrotask(() => void pair.server.send(response));
 		});
 		void pair.server.start();
@@ -215,6 +367,50 @@ describe("MCP connections", () => {
 		expect(opened()).toBe(2);
 		await connection.close();
 	});
+
+	it.skipIf(process.platform === "win32")(
+		"expands ~ in the command, arguments, and cwd of stdio servers",
+		async () => {
+			const home = mkdtempSync(join(tmpdir(), "pi-mcp-home-"));
+			const previousHome = process.env.HOME;
+			process.env.HOME = home;
+			mkdirSync(join(home, "work"));
+			// Answers every tool call with its working directory.
+			writeFileSync(
+				join(home, "server.mjs"),
+				`import { createInterface } from "node:readline";
+for await (const line of createInterface({ input: process.stdin })) {
+	const message = JSON.parse(line);
+	if (!("id" in message)) continue;
+	const result = message.method === "initialize"
+		? { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "cwd", version: "1" } }
+		: message.method === "tools/list"
+			? { tools: [{ name: "cwd", inputSchema: { type: "object" } }] }
+			: { content: [{ type: "text", text: process.cwd() }] };
+	process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }) + "\\n");
+}`,
+			);
+			const connection = new McpServerConnection({
+				entry: {
+					name: "home",
+					config: { command: process.execPath, args: ["~/server.mjs"], cwd: "~/work" },
+					source: "test",
+				},
+				cwd: tmpdir(),
+				createTransport: createDefaultTransport,
+				credentials: new McpOAuthCredentialStore(new InMemoryAuthStorageBackend()),
+				onTools: () => {},
+			});
+			try {
+				const result = await connection.callTool("cwd", {}, {});
+				expect(realpathSync((result.content[0] as { text: string }).text)).toBe(realpathSync(join(home, "work")));
+			} finally {
+				await connection.close();
+				process.env.HOME = previousHome;
+				rmSync(home, { recursive: true, force: true });
+			}
+		},
+	);
 
 	it("connects to servers without the tools capability without listing tools", async () => {
 		const methods: string[] = [];
@@ -278,6 +474,27 @@ describe("MCP connections", () => {
 		await expect(failing.connection.getClient()).rejects.toThrow("status 400: bad");
 		expect(failing.connection.state).toBe("failed");
 		expect(failing.opened()).toBe(1);
+	});
+
+	it("retries resource reads, but not tool calls, after a transient HTTP error", async () => {
+		const transport = createTransport();
+		const send = transport.send.bind(transport);
+		const failed = new Set<string>();
+		// The first read and the first call fail with 502.
+		transport.send = async (message) => {
+			const method = "method" in message ? message.method : "";
+			if ((method === "resources/read" || method === "tools/call") && !failed.has(method)) {
+				failed.add(method);
+				throw new McpHttpError(502, "MCP HTTP request failed with status 502");
+			}
+			return send(message);
+		};
+		const { connection } = connect({ name: "fake", config: { command: "unused" }, source: "test" }, [
+			() => transport,
+		]);
+		expect(await connection.readResource("docs://a", {})).toEqual({ contents: [{ uri: "docs://a", text: "ok" }] });
+		await expect(connection.callTool("echo", {}, {})).rejects.toThrow("status 502");
+		await connection.close();
 	});
 
 	it("asks OAuth servers that keep rejecting requests for a new sign-in", async () => {

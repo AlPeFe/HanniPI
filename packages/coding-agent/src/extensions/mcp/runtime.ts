@@ -4,18 +4,26 @@
  * server is configured.
  */
 
-import { basename, resolve } from "node:path";
+import { homedir } from "node:os";
+import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
 	type AuthProvider,
 	type CallToolResult,
+	JSON_RPC_ERROR_CODES,
+	type ListResourcesResult,
+	type ListResourceTemplatesResult,
 	McpAuthRequiredError,
 	McpClient,
+	McpError,
 	McpHttpError,
 	type McpRequestOptions,
 	McpSessionExpiredError,
 	type Tool as McpTool,
 	type McpTransport,
+	type ReadResourceResult,
+	type Resource,
+	type ResourceTemplate,
 	StdioTransport,
 	StreamableHttpTransport,
 } from "@earendil-works/pi-mcp";
@@ -25,6 +33,7 @@ import { resolveConfigValueOrThrow, resolveHeadersOrThrow } from "../../core/res
 import type { McpServerEntry } from "./config.ts";
 import type { McpServerLog } from "./log.ts";
 import { createMcpAuthProvider, type McpOAuthCredentialStore, type McpOAuthSettings } from "./oauth.ts";
+import { isMcpAppResource, type McpResourceServer } from "./resources.ts";
 import type { McpToolCaller } from "./tools.ts";
 
 export { McpServerLog } from "./log.ts";
@@ -51,8 +60,8 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-/** Network failures and overloaded or restarting servers, which are worth another connection attempt. */
-function isTransientConnectError(error: unknown): boolean {
+/** Network failures and overloaded or restarting servers, which are worth another attempt. */
+function isTransientError(error: unknown): boolean {
 	if (error instanceof McpHttpError) {
 		return error.status === 408 || error.status === 429 || (error.status >= 500 && error.status !== 501);
 	}
@@ -68,6 +77,15 @@ function usesOAuth(entry: McpServerEntry): boolean {
 	const { config } = entry;
 	if (!("url" in config)) return false;
 	return !Object.keys(config.headers ?? {}).some((header) => header.toLowerCase() === "authorization");
+}
+
+/** `~` and `~/…` (also `~\…` on Windows) name the home directory, like in a shell. */
+function expandHome(value: string): string {
+	if (value === "~") return homedir();
+	if (value.startsWith("~/") || (process.platform === "win32" && value.startsWith("~\\"))) {
+		return join(homedir(), value.slice(2));
+	}
+	return value;
 }
 
 export function createDefaultTransport(
@@ -88,20 +106,58 @@ export function createDefaultTransport(
 		env[key] = resolveConfigValueOrThrow(value, `MCP server "${name}" env "${key}"`);
 	}
 	return new StdioTransport({
-		command: config.command,
-		args: config.args,
-		cwd: resolve(cwd, config.cwd ?? "."),
+		command: expandHome(config.command),
+		args: config.args?.map(expandHome),
+		cwd: resolve(cwd, expandHome(config.cwd ?? ".")),
 		env,
 		stderr: "pipe",
 	});
 }
 
+/** Servers that do not implement `resources/templates/list` have no templates. */
+async function withoutTemplates<T>(list: () => Promise<T>, empty: T): Promise<T> {
+	try {
+		return await list();
+	} catch (error) {
+		if (error instanceof McpError && error.code === JSON_RPC_ERROR_CODES.methodNotFound) return empty;
+		throw error;
+	}
+}
+
+function listTemplates(client: McpClient, options: McpRequestOptions = {}): Promise<ResourceTemplate[]> {
+	return withoutTemplates(() => client.listResourceTemplates(options), []);
+}
+
+/**
+ * Resources and templates at connect time, for the counts in `/mcp` and `pi mcp list`. A server
+ * whose lists fail still connects: the resource tools list and read its resources on demand.
+ */
+async function fetchResources(
+	client: McpClient,
+): Promise<{ resources: Resource[]; resourceTemplates: ResourceTemplate[] }> {
+	const [resources, resourceTemplates] = await Promise.all([
+		client.listResources().catch(() => []),
+		listTemplates(client).catch(() => []),
+	]);
+	return {
+		resources: resources.filter((resource) => !isMcpAppResource(resource)),
+		resourceTemplates: resourceTemplates.filter((template) => !isMcpAppResource(template)),
+	};
+}
+
 /** One configured server. Reconnects lazily when a call finds the connection gone. */
-export class McpServerConnection implements McpToolCaller {
+export class McpServerConnection implements McpToolCaller, McpResourceServer {
 	readonly entry: McpServerEntry;
 	state: ServerState = "connecting";
 	error: string | undefined;
 	tools: McpTool[] = [];
+	/**
+	 * Whether the server offers resources. The lists below are what it listed at the last connect or
+	 * change, without MCP App resources.
+	 */
+	hasResources = false;
+	resources: Resource[] = [];
+	resourceTemplates: ResourceTemplate[] = [];
 	/** Server instructions from `initialize`, describing its tools as a group. */
 	instructions: string | undefined;
 	/** Last OAuth challenge from the server; sign-in uses its resource metadata URL and scope. */
@@ -148,6 +204,10 @@ export class McpServerConnection implements McpToolCaller {
 			: undefined;
 	}
 
+	get name(): string {
+		return this.entry.name;
+	}
+
 	get timeoutMs(): number {
 		return (this.entry.config.timeout ?? DEFAULT_TIMEOUT_SECONDS) * 1000;
 	}
@@ -167,6 +227,8 @@ export class McpServerConnection implements McpToolCaller {
 					? undefined
 					: resolveConfigValueOrThrow(oauth.clientSecret, `MCP server "${this.entry.name}" oauth.clientSecret`),
 			callbackPort: oauth.callbackPort,
+			callbackUrl: oauth.callbackUrl,
+			scope: oauth.scope,
 		};
 	}
 
@@ -179,14 +241,50 @@ export class McpServerConnection implements McpToolCaller {
 		return this.opening;
 	}
 
-	async callTool(name: string, args: Record<string, unknown>, options: McpRequestOptions): Promise<CallToolResult> {
+	callTool(name: string, args: Record<string, unknown>, options: McpRequestOptions): Promise<CallToolResult> {
+		return this.withClient((client) => client.callTool(name, args, options));
+	}
+
+	readResource(uri: string, options: McpRequestOptions): Promise<ReadResourceResult> {
+		return this.withClient((client) => client.readResource(uri, options), true);
+	}
+
+	resourcesPage(cursor: string | undefined, options: McpRequestOptions): Promise<ListResourcesResult> {
+		return this.withClient((client) => client.listResourcesPage(cursor, options), true);
+	}
+
+	resourceTemplatesPage(cursor: string | undefined, options: McpRequestOptions): Promise<ListResourceTemplatesResult> {
+		return this.withClient(
+			(client) =>
+				withoutTemplates(() => client.listResourceTemplatesPage(cursor, options), { resourceTemplates: [] }),
+			true,
+		);
+	}
+
+	allResources(options: McpRequestOptions): Promise<Resource[]> {
+		return this.withClient((client) => client.listResources(options), true);
+	}
+
+	allResourceTemplates(options: McpRequestOptions): Promise<ResourceTemplate[]> {
+		return this.withClient((client) => listTemplates(client, options), true);
+	}
+
+	/**
+	 * Run a request, reconnecting when needed. `readOnly` requests are retried once after a transient
+	 * HTTP error; tool calls are not, since they may have run.
+	 */
+	private async withClient<T>(run: (client: McpClient) => Promise<T>, readOnly = false): Promise<T> {
 		for (let attempt = 1; ; attempt++) {
 			const client = await this.getClient();
 			try {
-				return await client.callTool(name, args, options);
+				return await run(client);
 			} catch (error) {
+				if (readOnly && attempt === 1 && error instanceof McpHttpError && isTransientError(error)) {
+					await new Promise((resolve) => setTimeout(resolve, CONNECT_RETRY_DELAYS_MS[0]));
+					continue;
+				}
 				if (error instanceof McpSessionExpiredError && attempt === 1) {
-					// The server no longer knows the session (restart, deploy), so it did not run this call.
+					// The server no longer knows the session (restart, deploy), so it did not run the request.
 					// Retry once on a new session. The old client is detached but not closed: closing would
 					// fail its other in-flight calls, which instead get the same 404 and retry the same way.
 					if (this.client === client) this.client = undefined;
@@ -247,7 +345,7 @@ export class McpServerConnection implements McpToolCaller {
 				return await this.connectOnce();
 			} catch (error) {
 				const delay = retries[attempt];
-				if (this.closed || delay === undefined || !isTransientConnectError(error)) {
+				if (this.closed || delay === undefined || !isTransientError(error)) {
 					throw this.connectFailed(error);
 				}
 				await new Promise((resolve) => setTimeout(resolve, delay));
@@ -272,14 +370,24 @@ export class McpServerConnection implements McpToolCaller {
 			client.onNotification("notifications/tools/list_changed", () => {
 				void this.refreshTools(client);
 			});
+			client.onNotification("notifications/resources/list_changed", () => {
+				void this.refreshResources(client);
+			});
 			const stdio = transport instanceof StdioTransport ? transport : undefined;
 			client.onClose(() => this.handleClientClose(client, stdio));
 			// Servers without the tools capability (prompts or resources only) do not answer tools/list.
-			const tools = client.serverCapabilities?.tools ? await client.listTools() : [];
+			const hasResources = client.serverCapabilities?.resources !== undefined;
+			const [tools, resources] = await Promise.all([
+				client.serverCapabilities?.tools ? client.listTools() : [],
+				hasResources ? fetchResources(client) : { resources: [], resourceTemplates: [] },
+			]);
 			if (this.closed) throw new Error("shut down while connecting");
 			if (client.connectionState !== "connected") throw new Error("connection closed during setup");
 			this.client = client;
 			this.tools = tools;
+			this.hasResources = hasResources;
+			this.resources = resources.resources;
+			this.resourceTemplates = resources.resourceTemplates;
 			this.instructions = client.instructions?.trim() || undefined;
 			this.state = "connected";
 			this.error = undefined;
@@ -325,6 +433,15 @@ export class McpServerConnection implements McpToolCaller {
 		} catch (error) {
 			this.error = `Failed to refresh tools: ${errorMessage(error)}`;
 		}
+		this.changed();
+	}
+
+	private async refreshResources(client: McpClient): Promise<void> {
+		const { resources, resourceTemplates } = await fetchResources(client);
+		if (this.client !== client || this.closed) return;
+		this.resources = resources;
+		this.resourceTemplates = resourceTemplates;
+		this.onTools(this);
 		this.changed();
 	}
 

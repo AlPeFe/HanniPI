@@ -508,6 +508,21 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
  */
 export type ToolExposure = "direct" | "model-only" | "codemode" | "deferred" | "hidden";
 
+/**
+ * Hints about what a tool does, with the meaning of MCP tool annotations. They come from the tool's
+ * author and are not verified; permission extensions can use them to decide which calls to confirm.
+ */
+export interface ToolAnnotations {
+	/** The tool does not modify its environment. */
+	readOnlyHint?: boolean;
+	/** The tool may delete or overwrite data, rather than only add to it. Meaningful when not read-only. */
+	destructiveHint?: boolean;
+	/** Repeating a call with the same arguments has no further effect. Meaningful when not read-only. */
+	idempotentHint?: boolean;
+	/** The tool reaches an open world of external entities, such as the web, rather than a closed domain. */
+	openWorldHint?: boolean;
+}
+
 /** A group of related tools, such as the tools of one MCP server. Codemode tools list them together. */
 export interface ToolNamespace {
 	/** For example `mcp__docs`. */
@@ -576,6 +591,9 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 
 	/** Group the tool belongs to, for example its MCP server. */
 	namespace?: ToolNamespace;
+
+	/** Hints about what the tool does, for example from an MCP server. */
+	annotations?: ToolAnnotations;
 
 	/**
 	 * Whether registering the tool activates it. Default: `true` for `direct` and `model-only` tools;
@@ -2032,6 +2050,7 @@ export type GetActiveToolsHandler = () => string[];
 export type ToolInfo = Pick<ToolDefinition, "name" | "description" | "parameters" | "promptGuidelines"> & {
 	exposure: ToolExposure;
 	namespace?: ToolNamespace;
+	annotations?: ToolAnnotations;
 	sourceInfo: SourceInfo;
 };
 

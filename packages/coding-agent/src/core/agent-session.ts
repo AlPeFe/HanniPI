@@ -1453,6 +1453,7 @@ export class AgentSession {
 			promptGuidelines: definition.promptGuidelines,
 			exposure: this._getToolExposure(definition.name),
 			...(definition.namespace ? { namespace: definition.namespace } : {}),
+			...(definition.annotations ? { annotations: { ...definition.annotations } } : {}),
 			sourceInfo,
 		}));
 	}

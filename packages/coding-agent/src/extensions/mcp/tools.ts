@@ -1,32 +1,58 @@
 /**
  * Adapts MCP tools to pi tool definitions.
  *
- * Results map onto pi's model-facing content (text and images). Codemode scripts receive
- * the whole `CallToolResult` without `_meta` (`content` blocks as sent by the server,
- * `structuredContent`, `isError`): it is the tool's `structuredContent`, and every MCP tool
- * declares a `CallToolResult` output schema. MCP errors (`isError`) are error results for the
- * model, but scripts still resolve to the result.
+ * Results map onto pi's model-facing content (text and images). Text over 20KB keeps its start and
+ * end with the middle cut out, like Codex does, and the full text is saved to a temp file the model
+ * can read. Binary resources other than images are saved to temp files too, and resource links name
+ * the `read_mcp_resource` tool. Codemode scripts receive the whole `CallToolResult` without `_meta`
+ * (`content` blocks as sent by the server, `structuredContent`, `isError`), never truncated: it is
+ * the tool's `structuredContent`, and every MCP tool declares a `CallToolResult` output schema. MCP
+ * errors (`isError`) are error results for the model, but scripts still resolve to the result.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ImageContent, JsonValue, TextContent } from "@earendil-works/pi-ai";
 import {
 	type CallToolResult,
+	type ContentBlock,
 	type McpRequestOptions,
 	type Tool as McpTool,
 	toLlmContent,
 } from "@earendil-works/pi-mcp";
 import type { TSchema } from "typebox";
-import type { ToolDefinition, ToolNamespace } from "../../core/extensions/types.ts";
+import type { ToolAnnotations, ToolDefinition, ToolNamespace } from "../../core/extensions/types.ts";
+import { formatSize, truncateMiddle } from "../../core/tools/truncate.ts";
 import type { McpExposure } from "./config.ts";
 
 /** Provider tool names are limited to 64 characters of `[A-Za-z0-9_-]`. */
 const MAX_TOOL_NAME_LENGTH = 64;
+/** Model-facing text of an MCP result beyond this is cut in the middle. */
+export const MCP_OUTPUT_MAX_BYTES = 20 * 1024;
+/** Tool that reads the resources named by resource links. */
+export const READ_MCP_RESOURCE_TOOL = "read_mcp_resource";
 
 export interface McpToolDetails {
 	server: string;
 	tool: string;
+	/** Temp file with the full text output, when the model-facing text was truncated. */
+	fullOutputPath?: string;
+}
+
+/**
+ * Saves the full text of a truncated result, or a binary resource, and returns the file path.
+ * `extension` includes the dot, for example `.txt`.
+ */
+export type McpOutputSaver = (data: string | Uint8Array, extension: string) => Promise<string>;
+
+export async function saveToTempFile(data: string | Uint8Array, extension: string): Promise<string> {
+	const path = join(tmpdir(), `pi-mcp-${randomBytes(8).toString("hex")}${extension}`);
+	// Results can carry private data, so only the user may read the file.
+	await writeFile(path, data, { mode: 0o600 });
+	return path;
 }
 
 export interface McpToolCaller {
@@ -74,20 +100,113 @@ export function createMcpResultSchema(structuredContentSchema: Record<string, un
 	} as unknown as TSchema;
 }
 
+/**
+ * Keep model-facing text within {@link MCP_OUTPUT_MAX_BYTES}. Longer text becomes one text block in
+ * Codex's truncation format, followed by the path of the file with the full text; images follow it.
+ */
+export async function limitMcpContent(
+	content: (TextContent | ImageContent)[],
+	saveOutput: McpOutputSaver = saveToTempFile,
+): Promise<{ content: (TextContent | ImageContent)[]; fullOutputPath?: string }> {
+	const combined = textOf(content);
+	const truncation = truncateMiddle(combined, MCP_OUTPUT_MAX_BYTES);
+	if (!truncation.truncated) return { content };
+	let fullOutputPath: string | undefined;
+	let where: string;
+	try {
+		fullOutputPath = await saveOutput(combined, ".txt");
+		where = `[Full output: ${fullOutputPath} (read it with offset/limit)]`;
+	} catch (error) {
+		where = `[Could not save the full output: ${error instanceof Error ? error.message : String(error)}]`;
+	}
+	const tokens = Math.ceil(truncation.totalBytes / 4);
+	const text = `Warning: truncated output (original token count: ${tokens})\nTotal output lines: ${truncation.totalLines}\n\n${truncation.content}\n\n${where}`;
+	return {
+		content: [{ type: "text", text }, ...content.filter((block) => block.type === "image")],
+		...(fullOutputPath ? { fullOutputPath } : {}),
+	};
+}
+
+export interface ConvertMcpResultOptions {
+	/** Saves truncated text and binary resources. Default: a temp file. */
+	saveOutput?: McpOutputSaver;
+	/** Whether the server's resources can be read with `read_mcp_resource`, which resource links then name. */
+	readableResources?: boolean;
+}
+
+/** File extension for a saved binary resource: the one its URI ends in, else `.bin`. */
+function extensionOf(uri: string): string {
+	const path = URL.canParse(uri) ? new URL(uri).pathname : uri;
+	return /\.[A-Za-z0-9]{1,8}$/.exec(path)?.[0] ?? ".bin";
+}
+
+/** Blobs of these types are shown as text. */
+function isTextMimeType(mimeType: string | undefined): boolean {
+	if (!mimeType) return false;
+	const type = mimeType.split(";", 1)[0].trim().toLowerCase();
+	return type.startsWith("text/") || type === "application/json" || type.endsWith("+json") || type.endsWith("+xml");
+}
+
+/** Model-facing content of one block of `server`'s result. */
+async function blockToContent(
+	server: string,
+	block: ContentBlock,
+	options: ConvertMcpResultOptions,
+): Promise<(TextContent | ImageContent)[]> {
+	if (block.type === "resource_link") {
+		const details = [block.mimeType, block.size === undefined ? undefined : formatSize(block.size)].filter(Boolean);
+		const read = options.readableResources ? `. Read it with ${READ_MCP_RESOURCE_TOOL} (server "${server}")` : "";
+		const description = block.description ? `: ${block.description}` : "";
+		return [
+			{
+				type: "text",
+				text: `[Resource ${block.uri} "${block.title ?? block.name}"${details.length > 0 ? ` (${details.join(", ")})` : ""}${description}${read}]`,
+			},
+		];
+	}
+	if (block.type === "resource" && "blob" in block.resource && !block.resource.mimeType?.startsWith("image/")) {
+		const { uri, mimeType, blob } = block.resource;
+		const data = Buffer.from(blob, "base64");
+		if (isTextMimeType(mimeType)) return [{ type: "text", text: data.toString("utf8") }];
+		const kind = `${mimeType ?? "unknown type"}, ${formatSize(data.length)}`;
+		try {
+			const path = await (options.saveOutput ?? saveToTempFile)(data, extensionOf(uri));
+			return [{ type: "text", text: `[Binary resource ${uri} (${kind}) saved to ${path}]` }];
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			return [{ type: "text", text: `[Binary resource ${uri} (${kind}) could not be saved: ${reason}]` }];
+		}
+	}
+	return toLlmContent({ content: [block] });
+}
+
+/** Model-facing content of `server`'s content blocks, before the output limit. */
+export async function toModelContent(
+	server: string,
+	blocks: readonly ContentBlock[],
+	options: ConvertMcpResultOptions = {},
+): Promise<(TextContent | ImageContent)[]> {
+	return (await Promise.all(blocks.map((block) => blockToContent(server, block, options)))).flat();
+}
+
 /** Convert an MCP result. `isError` results become error results that keep the structured result. */
-export function convertMcpResult(
+export async function convertMcpResult(
 	server: string,
 	tool: string,
 	result: CallToolResult,
-): AgentToolResult<McpToolDetails> {
-	const content: (TextContent | ImageContent)[] = toLlmContent(result);
-	if (result.isError && textOf(content) === "") {
-		content.push({ type: "text", text: `MCP tool ${server}/${tool} returned an error` });
+	options: ConvertMcpResultOptions = {},
+): Promise<AgentToolResult<McpToolDetails>> {
+	// Without content blocks, toLlmContent falls back to the structured content as JSON.
+	const converted: (TextContent | ImageContent)[] =
+		result.content.length > 0 ? await toModelContent(server, result.content, options) : toLlmContent(result);
+	if (result.isError && textOf(converted) === "") {
+		converted.push({ type: "text", text: `MCP tool ${server}/${tool} returned an error` });
 	}
+	const { content, fullOutputPath } = await limitMcpContent(converted, options.saveOutput);
 	const { _meta: _ignored, ...scriptResult } = result;
 	return {
 		content,
-		details: { server, tool },
+		details: { server, tool, ...(fullOutputPath ? { fullOutputPath } : {}) },
 		structuredContent: scriptResult as unknown as JsonValue,
 		...(result.isError ? { isError: true } : {}),
 	};
@@ -105,6 +224,18 @@ function toParameters(schema: Record<string, unknown>): TSchema {
 	} as unknown as TSchema;
 }
 
+const ANNOTATION_HINTS = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] as const;
+
+/** The boolean hints of an MCP tool's annotations, or undefined when it has none. */
+function toToolAnnotations(tool: McpTool): ToolAnnotations | undefined {
+	const annotations: ToolAnnotations = {};
+	for (const hint of ANNOTATION_HINTS) {
+		const value = tool.annotations?.[hint];
+		if (typeof value === "boolean") annotations[hint] = value;
+	}
+	return Object.keys(annotations).length > 0 ? annotations : undefined;
+}
+
 export function createMcpToolDefinition(options: {
 	server: string;
 	tool: McpTool;
@@ -113,9 +244,12 @@ export function createMcpToolDefinition(options: {
 	namespace: ToolNamespace;
 	timeoutMs: number;
 	getClient: () => Promise<McpToolCaller>;
+	/** Whether `read_mcp_resource` can read the server's resources. */
+	readableResources?: () => boolean;
 }): ToolDefinition<TSchema, McpToolDetails> {
 	const { server, tool } = options;
 	const title = tool.title ?? tool.annotations?.title;
+	const annotations = toToolAnnotations(tool);
 	return {
 		name: options.name,
 		label: `${server}/${tool.name}`,
@@ -124,6 +258,7 @@ export function createMcpToolDefinition(options: {
 		outputSchema: createMcpResultSchema(tool.outputSchema),
 		exposure: options.exposure,
 		namespace: options.namespace,
+		...(annotations ? { annotations } : {}),
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const client = await options.getClient();
 			const result = await client.callTool(tool.name, (params ?? {}) as Record<string, unknown>, {
@@ -135,7 +270,7 @@ export function createMcpToolDefinition(options: {
 					onUpdate?.({ content: [{ type: "text", text }], details: { server, tool: tool.name } });
 				},
 			});
-			return convertMcpResult(server, tool.name, result);
+			return convertMcpResult(server, tool.name, result, { readableResources: options.readableResources?.() });
 		},
 	};
 }

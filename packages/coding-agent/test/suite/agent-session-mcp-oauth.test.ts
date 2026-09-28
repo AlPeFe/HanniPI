@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
@@ -6,7 +7,7 @@ import type { ToolResultMessage } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it } from "vitest";
 import { InMemoryAuthStorageBackend } from "../../src/core/auth-storage.ts";
 import { runMcpCommand } from "../../src/extensions/mcp/cli.ts";
-import type { McpServerEntry } from "../../src/extensions/mcp/config.ts";
+import type { McpOAuthConfig, McpServerEntry } from "../../src/extensions/mcp/config.ts";
 import { createMcpExtension } from "../../src/extensions/mcp/index.ts";
 import { McpOAuthCredentialStore } from "../../src/extensions/mcp/oauth.ts";
 import { createHarness, createTestUiContext, getMessageText, type Harness } from "./harness.ts";
@@ -19,12 +20,17 @@ describe("AgentSession MCP OAuth", () => {
 		while (cleanups.length > 0) await cleanups.pop()?.();
 	});
 
-	async function setup(browser: "follow" | "paste") {
+	async function setup(browser: "follow" | "paste", oauth?: McpOAuthConfig) {
 		const server = await startOAuthMcpServer();
 		cleanups.push(server.close);
 		const backend = new InMemoryAuthStorageBackend();
-		const entry: McpServerEntry = { name: "issues", config: { url: server.url, exposure: "direct" }, source: "test" };
+		const entry: McpServerEntry = {
+			name: "issues",
+			config: { url: server.url, exposure: "direct", ...(oauth ? { oauth } : {}) },
+			source: "test",
+		};
 		const notifications: string[] = [];
+		const opened: URL[] = [];
 		let redirectLocation: Promise<string> | undefined;
 		const harness: Harness = await createHarness({
 			initialActiveToolNames: [],
@@ -33,6 +39,7 @@ describe("AgentSession MCP OAuth", () => {
 					loadConfig: () => ({ servers: [entry], errors: [] }),
 					credentials: new McpOAuthCredentialStore(backend),
 					openUrl: (url) => {
+						opened.push(new URL(url));
 						if (browser === "follow") {
 							// The browser follows the authorization redirect to the loopback callback.
 							void fetch(url);
@@ -59,7 +66,7 @@ describe("AgentSession MCP OAuth", () => {
 							),
 			}),
 		});
-		return { harness, server, notifications, backend };
+		return { harness, server, notifications, backend, opened };
 	}
 
 	async function callWhoami(harness: Harness): Promise<ToolResultMessage> {
@@ -119,6 +126,38 @@ describe("AgentSession MCP OAuth", () => {
 		expect(notifications.at(-1)).toBe('Signed in to MCP server "issues" (1 tools).');
 		expect(getMessageText(await callWhoami(harness))).toBe(`token access-1`);
 		expect(server.log).toContain("token code");
+	});
+
+	async function freePort(): Promise<number> {
+		return new Promise<number>((resolve) => {
+			const probe = createServer().listen(0, "127.0.0.1", () => {
+				const address = probe.address() as AddressInfo;
+				probe.close(() => resolve(address.port));
+			});
+		});
+	}
+
+	it("uses the configured callback URL and scope", async () => {
+		const callbackUrl = `http://localhost:${await freePort()}/callback`;
+		const { harness, notifications, opened } = await setup("follow", { callbackUrl, scope: "issues:read" });
+
+		await harness.session.prompt("/mcp login issues");
+		expect(notifications.at(-1)).toBe('Signed in to MCP server "issues" (1 tools).');
+		expect(opened[0].searchParams.get("redirect_uri")).toBe(callbackUrl);
+		expect(opened[0].searchParams.get("scope")).toBe("issues:read");
+		expect(getMessageText(await callWhoami(harness))).toBe("token access-1");
+	});
+
+	it("adds the listening port to a callback URL without one", async () => {
+		const { harness, notifications, opened } = await setup("follow", { callbackUrl: "http://127.0.0.1/oauth/done" });
+		await harness.session.prompt("/mcp login issues");
+		expect(notifications.at(-1)).toBe('Signed in to MCP server "issues" (1 tools).');
+		expect(opened[0].searchParams.get("redirect_uri")).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/oauth\/done$/);
+
+		const port = await freePort();
+		const fixed = await setup("follow", { callbackUrl: "http://127.0.0.1/oauth/done", callbackPort: port });
+		await fixed.harness.session.prompt("/mcp login issues");
+		expect(fixed.opened[0].searchParams.get("redirect_uri")).toBe(`http://127.0.0.1:${port}/oauth/done`);
 	});
 
 	it("uses credentials from pi mcp login on the next turn", async () => {

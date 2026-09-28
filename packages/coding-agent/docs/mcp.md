@@ -22,7 +22,7 @@ Add servers to `~/.pi/agent/mcp.json`, or to `.pi/mcp.json` in a project. The fo
 }
 ```
 
-- stdio servers take `command`, `args`, `env`, and `cwd`. Relative `cwd` resolves against the session directory.
+- stdio servers take `command`, `args`, `env`, and `cwd`. Relative `cwd` resolves against the session directory. A leading `~/` in `command`, an argument, or `cwd` names the home directory.
 - HTTP servers take `url`, `headers`, and `oauth` (see [Sign in with OAuth](#sign-in-with-oauth)). The legacy SSE transport is not supported.
 - `env` and `headers` values can reference environment variables (`${NAME}`) or commands (`!command`), like provider API keys.
 - `timeout` sets the per-request timeout in seconds (default 60). Progress notifications from the server reset it.
@@ -44,7 +44,7 @@ Rules that are easy to get wrong:
 - Server names may only contain letters, digits, `_`, and `-`. Tools are named `mcp__<server>__<tool>`.
 - `type` is optional: a `command` makes a stdio server and a `url` a streamable HTTP server. When present, it must be `stdio`, `http`, or `streamable-http`. `sse` is rejected; most servers that document an SSE endpoint also serve streamable HTTP, often at `/mcp` instead of `/sse`.
 - `command` is a single executable and `args` its arguments, not one shell string.
-- Keep secrets out of the file: use `${NAME}` for environment variables or `!command` to run a command, for example `"Authorization": "Bearer !op read op://vault/github/token"`.
+- Keep secrets out of the file: use `${NAME}` for environment variables, as in `"Authorization": "Bearer ${GITHUB_TOKEN}"`, or `!command` to run a command. A command must make up the whole value, so it has to print the header value itself: `"Authorization": "!echo Bearer $(gh auth token)"`.
 - Invalid entries are skipped and reported; the other servers still connect.
 
 ## Set up servers
@@ -115,7 +115,9 @@ OAuth applies to HTTP servers without an `Authorization` header. For authorizati
 }
 ```
 
-`callbackPort` fixes the redirect URI to `http://127.0.0.1:<port>/oauth/callback`, which must match the redirect URI registered for the client. `clientSecret` is optional and can reference environment variables or commands.
+The redirect URI must match the one registered for the client. `callbackPort` fixes it to `http://127.0.0.1:<port>/callback`. For another redirect URI, set `callbackUrl`, for example `"callbackUrl": "http://localhost:8080/oauth/callback"`. It must be an `http` URI on `localhost`, `127.0.0.1`, or `[::1]`, and is sent exactly as written. Without a port in `callbackUrl`, pi listens on `callbackPort`, or on a free port, and adds it to the URI; authorization servers accept any port for loopback redirects (RFC 8252). `clientSecret` is optional and can reference environment variables or commands.
+
+`scope` sets the scopes to request, separated by spaces, for servers that do not advertise the ones they need. Without it, pi requests the scopes the server advertises. When a server later asks for more scope, pi requests those on top of `scope`.
 
 ## Exposure
 
@@ -126,11 +128,49 @@ Each server's tools are registered as `mcp__<server>__<tool>`. The `exposure` se
 - `direct`: the tools are declared to the model like built-in tools, and are also callable from codemode.
 - `hidden`: the tools are registered but cannot be called.
 
+`toolExposure` sets the exposure of single tools and overrides `exposure` for them. Keys are tool names as the server offers them, or patterns where `*` matches any characters. An exact name wins over patterns; among patterns, the first match in the object wins. With `hidden` as the server's exposure, only the listed tools are reachable:
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "url": "https://api.githubcopilot.com/mcp/",
+      "exposure": "deferred",
+      "toolExposure": {
+        "search_code": "direct",
+        "get_*": "codemode",
+        "delete_*": "hidden"
+      }
+    }
+  }
+}
+```
+
+`pi mcp list` marks tools whose exposure differs from the server's, and the Tools view in `/mcp` shows it too.
+
 Codemode-only tools do not depend on the active tool set, so they stay callable after `/tree`, resume, and fork. To keep pi from activating the `codemode` tool, set `"autoEnableCodemode": false` at the top level of `mcp.json`, next to `mcpServers`. A project `mcp.json` value overrides the global one. Pi then warns once that codemode-only tools cannot be called until `codemode` is activated.
+
+Text results over 20KB reach the model with the middle cut out, in the format Codex uses: the start and end of the text around a `…N chars truncated…` marker. The full text is saved to a temp file whose path the result names. Codemode scripts always receive the whole result, so a script can filter a large result down to what the model needs.
 
 Codemode scripts receive an MCP tool's whole `CallToolResult` (`content` blocks as sent by the server, `structuredContent`, and `isError`), and the `codemode` description declares it as `CallToolResult<T>`. A result with `isError` resolves in scripts and is reported to the model as an error for direct calls. `image(result.content[0])` forwards an image block to the model. The server's `instructions` describe its tools in the `codemode` description.
 
-Every MCP call goes through pi's tool pipeline, so `tool_call` and `tool_result` extension handlers, including permission gates, apply to MCP tools. Calls made from codemode scripts carry the `codemode` call's id as `parentToolCallId`.
+## Resources
+
+When a connected server offers [resources](https://modelcontextprotocol.io/specification/2025-11-25/server/resources), pi adds the resource tools Codex and opencode use:
+
+- `list_mcp_resources` lists resources as JSON: `{ server?, resources: [{ server, uri, name, ... }], nextCursor? }`. With `server`, it lists one page of that server, and `cursor` continues with the next one. Without, it lists every resource of every server.
+- `list_mcp_resource_templates` lists URI templates for resources the servers do not list, in the same way.
+- `read_mcp_resource` reads a resource given `server` and `uri`. Text resources reach the model as text and images as images; other binary resources are saved to temp files, and the model sees the file path. Scripts receive `{ server, uri, contents }`.
+
+The tools reach every enabled server with resources whose exposure is not `hidden`, and take the widest exposure among them: `direct` if one of the servers is direct, else `codemode`, else `deferred`. Resource links in tool results name `read_mcp_resource` and the server.
+
+Resources for MCP Apps (`ui://` URIs or `text/html;profile=mcp-app`) are left out of the listings, since pi does not render them, and so are resource icons.
+
+Reading and listing resources is retried once after a transient HTTP error (408, 429, 5xx). Tool calls are not retried, since the server may have run them.
+
+## Permissions
+
+Every MCP call goes through pi's tool pipeline, so `tool_call` and `tool_result` extension handlers, including permission gates, apply to MCP tools. Calls made from codemode scripts carry the `codemode` call's id as `parentToolCallId`. `pi.getAllTools()` reports the tool annotations servers declare (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), so a permission extension can confirm only calls that change something (see [Extensions](extensions.md#tool-exposure)). The resource tools are marked read-only.
 
 ## Servers from extensions
 

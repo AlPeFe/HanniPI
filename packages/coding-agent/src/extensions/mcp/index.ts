@@ -8,7 +8,9 @@
  * codemode scripts, which keeps large MCP tool lists out of the model's tool declarations; the
  * codemode tool is activated for that unless `autoEnableCodemode` is false. `"exposure": "direct"`
  * declares them to the model as well, `"deferred"` leaves them out of the codemode description, and
- * `"hidden"` makes them unreachable.
+ * `"hidden"` makes them unreachable. `toolExposure` overrides the exposure of single tools. Servers
+ * with resources are reached through Codex's `list_mcp_resources`, `list_mcp_resource_templates`, and
+ * `read_mcp_resource` tools (resources.ts).
  *
  * Every call runs through pi's tool pipeline, so `tool_call`/`tool_result` hooks and permission
  * extensions apply to MCP tools the same way they do to built-in tools.
@@ -33,6 +35,7 @@ import type {
 import { openBrowser } from "../../utils/open-browser.ts";
 import { CODEMODE_TOOL_NAME, isCodemodeTool } from "../codemode/tool.ts";
 import {
+	getMcpToolExposure,
 	type LoadedMcpConfig,
 	loadMcpConfig,
 	type McpExposure,
@@ -41,6 +44,7 @@ import {
 	updateMcpServerConfig,
 } from "./config.ts";
 import type { McpOAuthCredentialStore, McpSignInPrompt } from "./oauth.ts";
+import { createMcpResourceToolDefinitions } from "./resources.ts";
 import { loadMcpRuntime } from "./runtime.lazy.ts";
 import type * as McpRuntime from "./runtime.ts";
 import type { McpServerConnection, McpServerLog, McpTransportFactory } from "./runtime.ts";
@@ -113,8 +117,12 @@ function describeState(server: McpServer, withError = true): string {
 			return "needs sign-in";
 		case "failed":
 			return withError ? `failed: ${firstLine(connection.error ?? "unknown error")}` : "failed";
-		case "connected":
-			return `connected · ${connection.tools.length} tool${connection.tools.length === 1 ? "" : "s"}`;
+		case "connected": {
+			const { tools, resources } = connection;
+			const count = resources.length;
+			const resourceCount = count > 0 ? ` · ${count} resource${count === 1 ? "" : "s"}` : "";
+			return `connected · ${tools.length} tool${tools.length === 1 ? "" : "s"}${resourceCount}`;
+		}
 		case "connecting":
 			return "connecting…";
 		default:
@@ -226,7 +234,6 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		const registerTools = (connection: McpServerConnection) => {
 			const server = connection.entry.name;
 			const entry = findServer(server)?.entry ?? connection.entry;
-			const exposure = exposureOf(entry);
 			const namespaceName = `mcp__${server}`;
 			const namespace = {
 				name: namespaceName,
@@ -234,24 +241,27 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			};
 			const previous = serverTools.get(server) ?? new Set<string>();
 			const current = new Set<string>();
-			for (const tool of connection.tools) {
-				const owner = `${server}\0${tool.name}`;
-				const name = createMcpToolName(server, tool.name, (candidate) => {
+			const assignName = (tool: string, owner: string) => {
+				const name = createMcpToolName(server, tool, (candidate) => {
 					const existing = toolOwners.get(candidate);
 					return (existing !== undefined && existing !== owner) || current.has(candidate);
 				});
 				toolOwners.set(name, owner);
 				current.add(name);
+				return name;
+			};
+			for (const tool of connection.tools) {
 				const definition = createMcpToolDefinition({
 					server,
 					tool,
-					name,
-					exposure,
+					name: assignName(tool.name, `${server}\0${tool.name}`),
+					exposure: getMcpToolExposure(entry.config, tool.name),
 					namespace,
 					timeoutMs: connection.timeoutMs,
 					getClient: async () => connection,
+					readableResources: () => resourceServers().includes(connection),
 				});
-				definitions.set(name, definition);
+				definitions.set(definition.name, definition);
 				pi.registerTool(definition);
 			}
 			serverTools.set(server, current);
@@ -261,6 +271,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				const definition = definitions.get(name);
 				if (!current.has(name) && definition) pi.registerTool({ ...definition, exposure: "hidden" });
 			}
+			syncResourceTools();
 		};
 
 		/** Make a disabled server's tools unreachable. */
@@ -270,13 +281,47 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				if (definition) pi.registerTool({ ...definition, exposure: "hidden" });
 			}
 			serverTools.set(server, new Set());
+			syncResourceTools();
+		};
+
+		/** Enabled servers with resources whose exposure is not `hidden`, which the resource tools reach. */
+		const serversWithResources = (): McpServer[] =>
+			servers.filter(
+				(server) => server.connection?.hasResources && isEnabled(server) && exposureOf(server.entry) !== "hidden",
+			);
+		const resourceServers = (): McpServerConnection[] =>
+			serversWithResources().flatMap((server) => (server.connection ? [server.connection] : []));
+
+		/** Exposure the resource tools were last registered with; undefined until a server has resources. */
+		let resourceToolsExposure: McpExposure | undefined;
+		/**
+		 * Register the resource tools with the widest exposure of the servers they reach: `direct` when
+		 * one of them is direct, and so on. They are hidden when no server has resources.
+		 */
+		const syncResourceTools = () => {
+			const exposures = new Set(serversWithResources().map((server) => exposureOf(server.entry)));
+			const exposure = (["direct", "codemode", "deferred"] as const).find((candidate) => exposures.has(candidate));
+			const next = exposure ?? "hidden";
+			if (next === resourceToolsExposure || (resourceToolsExposure === undefined && next === "hidden")) return;
+			const wasDirect = resourceToolsExposure === "direct";
+			resourceToolsExposure = next;
+			const resourceDefinitions = createMcpResourceToolDefinitions({ exposure: next, servers: resourceServers });
+			for (const definition of resourceDefinitions) pi.registerTool(definition);
+			if (wasDirect) {
+				const names = new Set(resourceDefinitions.map((definition) => definition.name));
+				pi.setActiveTools(pi.getActiveTools().filter((name) => !names.has(name)));
+			}
 		};
 
 		/** Codemode-exposed tools are unreachable without the codemode tool, so turn it on. */
 		const ensureCodemodeActive = (ctx: ExtensionContext) => {
 			const needsCodemode = servers.some((server) => {
-				const exposure = exposureOf(server.entry);
-				return server.connection?.state === "connected" && (exposure === "codemode" || exposure === "deferred");
+				const { connection, entry } = server;
+				if (connection?.state !== "connected") return false;
+				const indirect = (exposure: McpExposure) => exposure === "codemode" || exposure === "deferred";
+				// Resource tools share the server's exposure.
+				if (connection.hasResources && indirect(exposureOf(entry))) return true;
+				return connection.tools.some((tool) => indirect(getMcpToolExposure(entry.config, tool.name)));
 			});
 			if (!needsCodemode) return;
 			// Another extension's tool named `codemode` cannot call MCP tools, so never activate it.
@@ -437,10 +482,17 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		const setExposure = (server: McpServer, exposure: McpExposure): string | undefined => {
 			const failed = saveConfig(server, { exposure });
 			if (failed) return failed;
-			const tools = serverTools.get(server.entry.name) ?? new Set<string>();
 			if (server.connection?.state === "connected") registerTools(server.connection);
+			syncResourceTools();
 			// Tools no longer exposed directly leave the declared set; direct tools are activated on registration.
-			if (exposure !== "direct") pi.setActiveTools(pi.getActiveTools().filter((name) => !tools.has(name)));
+			const indirect = new Set(
+				pi
+					.getAllTools()
+					.filter((tool) => tool.exposure !== "direct")
+					.map((tool) => tool.name),
+			);
+			const tools = serverTools.get(server.entry.name) ?? new Set<string>();
+			pi.setActiveTools(pi.getActiveTools().filter((name) => !tools.has(name) || !indirect.has(name)));
 			emitChange();
 			return undefined;
 		};
@@ -527,14 +579,19 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 
 		const showTools = async (ui: McpUi, server: McpServer) => {
 			const exposure = exposureOf(server.entry);
+			const overridden = Object.keys(server.entry.config.toolExposure ?? {}).length > 0;
 			await ui.menu(() => ({
 				title: `Tools of ${server.entry.name}`,
-				details: `Exposure ${exposure}: ${exposure === "hidden" ? "unreachable" : EXPOSURE_DESCRIPTIONS[exposure]}`,
-				items: (server.connection?.tools ?? []).map((tool) => ({
-					value: tool.name,
-					label: tool.name,
-					description: firstLine(tool.description ?? ""),
-				})),
+				details: `Exposure ${exposure}: ${exposure === "hidden" ? "unreachable" : EXPOSURE_DESCRIPTIONS[exposure]}${overridden ? "\nSome tools override it with toolExposure." : ""}`,
+				items: (server.connection?.tools ?? []).map((tool) => {
+					const toolExposure = getMcpToolExposure(server.entry.config, tool.name);
+					const description = firstLine(tool.description ?? "");
+					return {
+						value: tool.name,
+						label: tool.name,
+						description: toolExposure === exposure ? description : `[${toolExposure}] ${description}`,
+					};
+				}),
 				empty: "The server offers no tools.",
 				confirmLabel: "back",
 				cancelLabel: "back",
@@ -699,7 +756,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				promptForRedirectUrl: (signal) =>
 					ctx.ui.input(
 						`Waiting for sign-in to "${name}". If the browser cannot reach this machine, paste the URL it was redirected to.`,
-						"http://127.0.0.1:.../oauth/callback?code=...",
+						"http://127.0.0.1:.../callback?code=...",
 						{ signal },
 					),
 			});

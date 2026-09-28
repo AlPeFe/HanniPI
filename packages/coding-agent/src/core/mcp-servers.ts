@@ -19,6 +19,13 @@ const MCP_EXPOSURES: readonly string[] = ["codemode", "deferred", "direct", "hid
 interface McpServerConfigBase {
 	/** Default: `codemode`. */
 	exposure?: McpExposure;
+	/**
+	 * Exposure of single tools, overriding `exposure`. Keys are tool names as the server offers them,
+	 * or patterns where `*` matches any characters. An exact name wins over patterns; among patterns
+	 * the first match in the object wins. `hidden` removes tools, so `"exposure": "hidden"` with
+	 * overrides for a few tools exposes only those.
+	 */
+	toolExposure?: Record<string, McpExposure>;
 	/** Set to false to keep the entry without connecting. Default: true. */
 	enabled?: boolean;
 	/** Per-request timeout in seconds. Progress notifications from the server reset it. Default: 60. */
@@ -41,8 +48,28 @@ export interface McpOAuthConfig {
 	clientId?: string;
 	/** May reference environment variables (`${NAME}`) or commands (`!cmd`). */
 	clientSecret?: string;
-	/** Fixed loopback callback port, for clients registered with an exact redirect URI. */
+	/**
+	 * Port of the loopback callback server, for clients registered with a fixed redirect URI. Without
+	 * `callbackUrl`, the redirect URI is `http://127.0.0.1:<port>/callback`.
+	 */
 	callbackPort?: number;
+	/**
+	 * Redirect URI registered for `clientId`, for example `http://localhost:8080/oauth/callback`. It must
+	 * be an `http` URI on `localhost`, `127.0.0.1`, or `[::1]`. Without a port, the callback server
+	 * listens on `callbackPort` or a free port, which is added to the URI (RFC 8252).
+	 */
+	callbackUrl?: string;
+	/** Scopes to request, separated by spaces. Default: the scopes the server advertises. */
+	scope?: string;
+}
+
+const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
+
+/** Whether a redirect URI can be served by pi's loopback callback server. */
+export function isLoopbackRedirectUri(value: string): boolean {
+	if (!URL.canParse(value)) return false;
+	const url = new URL(value);
+	return url.protocol === "http:" && LOOPBACK_HOSTS.includes(url.hostname) && url.search === "" && url.hash === "";
 }
 
 export interface McpHttpServerConfig extends McpServerConfigBase {
@@ -76,16 +103,56 @@ function validateOAuth(value: unknown): string | undefined {
 	if (port !== undefined && (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535)) {
 		return "oauth.callbackPort must be a port number";
 	}
+	if (value.callbackUrl !== undefined) {
+		if (typeof value.callbackUrl !== "string" || !isLoopbackRedirectUri(value.callbackUrl)) {
+			return "oauth.callbackUrl must be an http URI on localhost, 127.0.0.1, or [::1] without query or fragment";
+		}
+		const urlPort = new URL(value.callbackUrl).port;
+		if (urlPort && port !== undefined && Number(urlPort) !== port) {
+			return "oauth.callbackUrl and oauth.callbackPort name different ports";
+		}
+	}
+	if (value.scope !== undefined && typeof value.scope !== "string") return "oauth.scope must be a string";
 	return undefined;
+}
+
+function isExposure(value: unknown): value is McpExposure {
+	return typeof value === "string" && MCP_EXPOSURES.includes(value);
+}
+
+function toolPatternRegExp(pattern: string): RegExp {
+	const source = pattern
+		.split("*")
+		.map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+		.join(".*");
+	return new RegExp(`^${source}$`);
+}
+
+/** Exposure of one tool of a server: its `toolExposure` entry, else the server's `exposure`. */
+export function getMcpToolExposure(config: McpServerConfig, toolName: string): McpExposure {
+	const overrides = config.toolExposure ?? {};
+	const exact = overrides[toolName];
+	if (exact !== undefined) return exact;
+	for (const [pattern, exposure] of Object.entries(overrides)) {
+		if (pattern.includes("*") && toolPatternRegExp(pattern).test(toolName)) return exposure;
+	}
+	return config.exposure ?? "codemode";
 }
 
 /** Validate one server entry of the `mcpServers` shape. Returns the config or an error message. */
 export function validateMcpServerConfig(name: string, value: unknown): McpServerConfig | string {
 	if (!SERVER_NAME.test(name)) return `invalid server name "${name}" (use letters, digits, "_" and "-")`;
 	if (!isRecord(value)) return `server "${name}" must be an object`;
-	const { type, exposure, enabled, timeout } = value;
-	if (exposure !== undefined && (typeof exposure !== "string" || !MCP_EXPOSURES.includes(exposure))) {
-		return `server "${name}": exposure must be one of ${MCP_EXPOSURES.map((value) => `"${value}"`).join(", ")}`;
+	const { type, exposure, enabled, timeout, toolExposure } = value;
+	const exposures = MCP_EXPOSURES.map((value) => `"${value}"`).join(", ");
+	if (exposure !== undefined && !isExposure(exposure)) {
+		return `server "${name}": exposure must be one of ${exposures}`;
+	}
+	if (toolExposure !== undefined) {
+		if (!isRecord(toolExposure)) return `server "${name}": toolExposure must map tool names to exposures`;
+		for (const [tool, value] of Object.entries(toolExposure)) {
+			if (!isExposure(value)) return `server "${name}": toolExposure "${tool}" must be one of ${exposures}`;
+		}
 	}
 	if (enabled !== undefined && typeof enabled !== "boolean") return `server "${name}": enabled must be a boolean`;
 	if (timeout !== undefined && (typeof timeout !== "number" || !(timeout > 0))) {

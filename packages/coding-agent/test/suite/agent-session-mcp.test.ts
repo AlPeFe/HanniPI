@@ -1,5 +1,5 @@
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import type { SystemMessage } from "@earendil-works/pi-ai/compat";
+import type { SystemMessage, ToolResultMessage } from "@earendil-works/pi-ai/compat";
 import { type JsonRpcRequest, LATEST_PROTOCOL_VERSION } from "@earendil-works/pi-mcp";
 import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
 import { Type } from "typebox";
@@ -32,23 +32,47 @@ const SERVER_TOOLS = [
 			required: ["hits"],
 		},
 	},
-	{ name: "fail", description: "Always fails.", inputSchema: { type: "object", properties: {} } },
+	{
+		name: "fail",
+		description: "Always fails.",
+		inputSchema: { type: "object", properties: {} },
+		annotations: { title: "Fail", destructiveHint: true, readOnlyHint: false, idempotentHint: "yes" },
+	},
 	{ name: "shot", description: "Returns an image.", inputSchema: { type: "object", properties: {} } },
 ];
 
 /** Minimal MCP server over an in-memory transport. Records the tool calls it receives. */
-function createFakeServer(calls: string[], listTools: () => unknown[] = () => SERVER_TOOLS) {
+function createFakeServer(calls: string[], listTools: () => unknown[] = () => SERVER_TOOLS, resources = false) {
 	const pair = createInMemoryTransportPair();
 	const respond = (request: JsonRpcRequest): unknown => {
 		switch (request.method) {
 			case "initialize":
 				return {
 					protocolVersion: LATEST_PROTOCOL_VERSION,
-					capabilities: { tools: {} },
+					capabilities: { tools: {}, ...(resources ? { resources: {} } : {}) },
 					serverInfo: { name: "docs", version: "1.0.0" },
 				};
 			case "tools/list":
 				return { tools: listTools() };
+			case "resources/list":
+				return {
+					resources: [
+						{ uri: "docs://intro", name: "intro", mimeType: "text/markdown", _meta: { x: 1 } },
+						// MCP App user interfaces are left out.
+						{ uri: "ui://docs/viewer", name: "viewer", mimeType: "text/html;profile=mcp-app" },
+					],
+				};
+			case "resources/templates/list":
+				return {
+					resourceTemplates: [
+						{ uriTemplate: "docs://pages/{slug}", name: "page", icons: [{ src: "data:image/png;base64,AAAA" }] },
+					],
+				};
+			case "resources/read": {
+				const { uri } = request.params as { uri: string };
+				calls.push(`read:${uri}`);
+				return { contents: [{ uri, mimeType: "text/markdown", text: `# ${uri}` }] };
+			}
 			case "tools/call": {
 				const params = request.params as { name: string; arguments?: { query?: string } };
 				calls.push(`${params.name}:${JSON.stringify(params.arguments ?? {})}`);
@@ -85,14 +109,20 @@ describe("AgentSession MCP integration", () => {
 	async function setup(
 		exposure: McpExposure,
 		listTools?: () => unknown[],
-		options: { autoEnableCodemode?: boolean; builtInTools?: string[]; extensionFactories?: ExtensionFactory[] } = {},
+		options: {
+			autoEnableCodemode?: boolean;
+			builtInTools?: string[];
+			extensionFactories?: ExtensionFactory[];
+			toolExposure?: Record<string, McpExposure>;
+			resources?: boolean;
+		} = {},
 	) {
-		const { builtInTools, extensionFactories = [], ...configOptions } = options;
+		const { builtInTools, extensionFactories = [], toolExposure, resources, ...configOptions } = options;
 		const calls: string[] = [];
 		const servers: ReturnType<typeof createFakeServer>["server"][] = [];
 		const entry: McpServerEntry = {
 			name: "docs",
-			config: { url: "http://unused.invalid", exposure },
+			config: { url: "http://unused.invalid", exposure, ...(toolExposure ? { toolExposure } : {}) },
 			source: "test",
 		};
 		// `builtInTools` are the built-in tools active at the start. The MCP extension activates codemode.
@@ -105,7 +135,7 @@ describe("AgentSession MCP integration", () => {
 				createMcpExtension({
 					loadConfig: () => ({ servers: [entry], errors: [], ...configOptions }),
 					createTransport: () => {
-						const pair = createFakeServer(calls, listTools);
+						const pair = createFakeServer(calls, listTools, resources);
 						servers.push(pair.server);
 						void pair.server.start();
 						return pair.client;
@@ -231,6 +261,10 @@ describe("AgentSession MCP integration", () => {
 
 		expect(declaredToolNames(harness)).toEqual(["mcp__docs__search", "mcp__docs__fail", "mcp__docs__shot"]);
 		expect(harness.session.getActiveToolNames()).not.toContain("codemode");
+		// Boolean annotation hints are passed on for permission extensions.
+		const annotations = new Map(harness.session.getAllTools().map((tool) => [tool.name, tool.annotations]));
+		expect(annotations.get("mcp__docs__fail")).toEqual({ destructiveHint: true, readOnlyHint: false });
+		expect(annotations.get("mcp__docs__search")).toBeUndefined();
 		const result = toolResult(harness, "mcp__docs__search");
 		expect(getMessageText(result)).toBe("direct guide\ndirect faq");
 	});
@@ -263,6 +297,87 @@ describe("AgentSession MCP integration", () => {
 			expect(reachable()).toContain("mcp__docs__fail");
 		},
 	);
+
+	it("lists and reads resources with Codex's resource tools", async () => {
+		const { harness, calls } = await setup("direct", undefined, { resources: true });
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("list_mcp_resources", {}),
+					fauxToolCall("list_mcp_resource_templates", { server: "docs" }),
+					fauxToolCall("read_mcp_resource", { server: "docs", uri: "docs://pages/setup" }),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage([fauxToolCall("read_mcp_resource", { server: "nope", uri: "docs://x" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("done"),
+		]);
+
+		await harness.session.prompt("read");
+
+		// The resource tools take the exposure of the servers they reach.
+		expect(harness.session.getActiveToolNames()).toEqual(
+			expect.arrayContaining(["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]),
+		);
+		expect(JSON.parse(getMessageText(toolResult(harness, "list_mcp_resources")))).toEqual({
+			resources: [{ server: "docs", uri: "docs://intro", name: "intro", mimeType: "text/markdown" }],
+		});
+		expect(JSON.parse(getMessageText(toolResult(harness, "list_mcp_resource_templates")))).toEqual({
+			server: "docs",
+			resourceTemplates: [{ server: "docs", uriTemplate: "docs://pages/{slug}", name: "page" }],
+		});
+		const results = harness.session.messages.filter(
+			(message): message is ToolResultMessage =>
+				message.role === "toolResult" && message.toolName === "read_mcp_resource",
+		);
+		expect(getMessageText(results[0])).toBe("# docs://pages/setup");
+		expect(results[1].isError).toBe(true);
+		expect(getMessageText(results[1])).toBe('MCP server "nope" has no resources. Servers with resources: docs');
+		expect(calls).toEqual(["read:docs://pages/setup"]);
+		const annotations = harness.session.getAllTools().find((tool) => tool.name === "read_mcp_resource");
+		expect(annotations?.annotations).toEqual({ readOnlyHint: true });
+	});
+
+	it("makes the resource tools callable from codemode for codemode servers", async () => {
+		const { harness, calls } = await setup("codemode", undefined, { resources: true });
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("codemode", {
+						code: `const listed = await tools.list_mcp_resources({ server: "docs" });
+const read = await tools.read_mcp_resource({ server: "docs", uri: listed.resources[0].uri });
+return { uris: listed.resources.map((r) => r.uri), text: read.contents[0].text };`,
+					}),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("done"),
+		]);
+
+		await harness.session.prompt("read");
+
+		expect(harness.session.getActiveToolNames()).toEqual(["codemode"]);
+		expect(JSON.parse(getMessageText(toolResult(harness, "codemode")).split("\n").at(-1) ?? "")).toEqual({
+			uris: ["docs://intro"],
+			text: "# docs://intro",
+		});
+		expect(calls).toEqual(["read:docs://intro"]);
+	});
+
+	it("applies per-tool exposure overrides", async () => {
+		const { harness } = await setup("hidden", undefined, { toolExposure: { search: "direct", "s*": "codemode" } });
+		harness.setResponses([fauxAssistantMessage("ready")]);
+		await harness.session.prompt("start");
+
+		// `search` is declared, `shot` is only callable from codemode, `fail` keeps the server's `hidden`.
+		expect(declaredToolNames(harness)).toEqual(["mcp__docs__search", "codemode"]);
+		expect(nestedToolNames(harness)).toEqual(["mcp__docs__search", "mcp__docs__shot"]);
+		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "codemode");
+		expect(codemode?.description).toContain("### `mcp__docs__shot`");
+		expect(codemode?.description).not.toContain("mcp__docs__fail");
+	});
 
 	it("keeps deferred MCP tools callable from codemode but out of its description", async () => {
 		const { harness, calls } = await setup("deferred");
