@@ -29,12 +29,12 @@ To learn more about Pi:
 nix run github:earendil-works/pi
 ```
 
-Supports ARM64 and x86-64 on Linux and macOS. Use `nix build .` or `nix run .` to build or run your checkout. Model data is pinned in `nix/model-catalog.json`.
+Supports ARM64 and x86-64 on Linux and macOS. Use `nix build .` or `nix run .` to build or run your checkout.
 
-After a successful release, update the model baseline with:
+Nix builds are offline, so the bundled model data comes from a pi.dev model catalog revision pinned in `nix/model-catalog.json`. The Nix workflow replaces the pin on `main` when it no longer matches the checkout, for example after a provider is added. To refresh it by hand:
 
 ```bash
-npm run update:model-catalog-pin -- --release X.Y.Z
+npm run update:model-catalog-pin
 ```
 
 ## All Packages

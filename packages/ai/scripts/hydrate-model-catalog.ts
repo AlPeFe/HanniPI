@@ -31,9 +31,14 @@ function isCatalogEntry(value: unknown): value is CatalogEntry {
 
 /**
  * Hydrate the checkout's provider data files from a published typed catalog
- * (`models.all.json`) without network access.
+ * (`models.all.json`) without network access. With `validateOnly`, stage and
+ * validate the data without replacing the checkout's current data.
  */
-export function hydrateModelCatalog(packageRoot: string, catalogPath: string): void {
+export function hydrateModelCatalog(
+	packageRoot: string,
+	catalogPath: string,
+	options: { validateOnly?: boolean } = {},
+): void {
 	const catalog: unknown = JSON.parse(readFileSync(catalogPath, "utf8"));
 	if (!isRecord(catalog)) throw new Error("Model catalog must be an object");
 
@@ -41,8 +46,9 @@ export function hydrateModelCatalog(packageRoot: string, catalogPath: string): v
 	const structure: ModelDataStructure = {};
 	for (const provider of readModelDataProviderIds(packageRoot)) {
 		const models = catalog[provider];
+		if (models === undefined) throw new Error(`Model catalog is missing provider: ${provider}`);
 		if (!Array.isArray(models) || models.length === 0) {
-			throw new Error(`Model catalog is missing provider: ${provider}`);
+			throw new Error(`Model catalog has no typed model list for provider: ${provider}`);
 		}
 		const entries: CatalogEntry[] = [];
 		for (const model of models) {
@@ -65,6 +71,7 @@ export function hydrateModelCatalog(packageRoot: string, catalogPath: string): v
 		for (const [name, content] of Object.entries(files)) writeFileSync(join(stagedData, name), content);
 		writeFileSync(join(stagedData, MODEL_DATA_MANIFEST_FILE), `${JSON.stringify(manifest)}\n`);
 		validateModelDataDirectory(structure, stagedData);
+		if (options.validateOnly) return;
 		const dataDir = join(providersDir, "data");
 		rmSync(dataDir, { recursive: true, force: true });
 		renameSync(stagedData, dataDir);

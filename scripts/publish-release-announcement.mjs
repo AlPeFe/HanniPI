@@ -1,14 +1,10 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { serializeModelCatalog } from "../packages/ai/scripts/export-model-catalog.ts";
-import { readModelCatalog } from "../packages/ai/scripts/model-data.ts";
-import { getModelCatalogArtifactKey } from "./model-catalog-protocol.ts";
 import { getPublicWorkspacePackages } from "./release-packages.mjs";
 
 const RELEASES_PREFIX = "releases/v1";
@@ -26,7 +22,6 @@ function parseArgs(args) {
 		endpoint: undefined,
 		installerPackageJson: undefined,
 		installerPackageLock: undefined,
-		modelCatalog: undefined,
 		sourceCommit: undefined,
 		version: undefined,
 	};
@@ -38,7 +33,6 @@ function parseArgs(args) {
 			arg !== "--endpoint" &&
 			arg !== "--installer-package-json" &&
 			arg !== "--installer-package-lock" &&
-			arg !== "--model-catalog" &&
 			arg !== "--source-commit" &&
 			arg !== "--version"
 		) {
@@ -52,14 +46,12 @@ function parseArgs(args) {
 				"--endpoint": "endpoint",
 				"--installer-package-json": "installerPackageJson",
 				"--installer-package-lock": "installerPackageLock",
-				"--model-catalog": "modelCatalog",
 				"--source-commit": "sourceCommit",
 				"--version": "version",
 			}[arg]
 		] = value;
 	}
 
-	if (!options.modelCatalog) throw new Error("--model-catalog is required");
 	if (!options.bucket) throw new Error("--bucket is required");
 	if (!options.endpoint) throw new Error("--endpoint is required");
 	if (!options.version || !STABLE_SEMVER_RE.test(options.version)) {
@@ -274,7 +266,9 @@ export async function advanceLatestRelease(version, readLatest, writeLatest) {
 	throw new Error(`Could not advance the Pi release marker to ${version} after ${MAX_POINTER_UPDATE_ATTEMPTS} attempts.`);
 }
 
-export async function createVerifiedRelease(options, packages) {
+async function main() {
+	const options = parseArgs(process.argv.slice(2));
+	const packages = getPublicWorkspacePackages();
 	for (const pkg of packages) {
 		if (pkg.version !== options.version) {
 			throw new Error(`${pkg.name} is ${pkg.version}; expected ${options.version}`);
@@ -282,69 +276,13 @@ export async function createVerifiedRelease(options, packages) {
 	}
 
 	const publishedPackages = await verifyPackagesAreAvailable(packages);
-	return {
+	const release = {
 		schemaVersion: 1,
 		version: options.version,
 		sourceCommit: options.sourceCommit ?? gitSourceCommit(),
 		publishedAt: new Date().toISOString(),
 		packages: publishedPackages,
-		// Catalog revisions hash the typed catalog, as for scheduled catalog publications.
-		modelCatalogRevision: `sha256-${createHash("sha256").update(readFileSync(join(options.modelCatalog, "models.all.json"))).digest("hex")}`,
 	};
-}
-
-/** Check that the exported catalog is exactly the model data shipped in the published pi-ai package. */
-export async function verifyPublishedModelCatalog(packages, modelCatalog) {
-	const ai = packages.find((pkg) => pkg.name === "@earendil-works/pi-ai");
-	if (!ai) throw new Error("Verified release has no pi-ai package");
-	const response = await fetch(ai.tarball);
-	if (!response.ok) throw new Error(`Published pi-ai tarball is unavailable: HTTP ${response.status}`);
-	const bytes = Buffer.from(await response.arrayBuffer());
-	const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
-	if (!ai.integrity.split(/\s+/).includes(integrity)) throw new Error("Published pi-ai tarball integrity mismatch");
-
-	const temporaryDirectory = mkdtempSync(join(tmpdir(), "pi-published-models-"));
-	try {
-		const archive = join(temporaryDirectory, "pi-ai.tgz");
-		writeFileSync(archive, bytes);
-		execFileSync("tar", ["-xzf", archive, "-C", temporaryDirectory, "package/dist/providers/data"]);
-		const actual = serializeModelCatalog(readModelCatalog(join(temporaryDirectory, "package/dist/providers/data")));
-		if (actual !== readFileSync(join(modelCatalog, "models.all.json"), "utf8")) {
-			throw new Error("Release model snapshot differs from the published pi-ai package; reuse the original release snapshot");
-		}
-	} finally {
-		rmSync(temporaryDirectory, { recursive: true, force: true });
-	}
-}
-
-async function main() {
-	const options = parseArgs(process.argv.slice(2));
-	const release = await createVerifiedRelease(options, getPublicWorkspacePackages());
-	await verifyPublishedModelCatalog(release.packages, options.modelCatalog);
-	validateInstallerArtifacts(options.installerPackageJson, options.installerPackageLock, options.version);
-
-	// Only publish the immutable snapshot after npm availability is verified.
-	// Do not move the live model index: scheduled catalog updates are independent.
-	// A matching scheduled publication may already own these keys; its bytes are identical.
-	for (const artifact of ["models.all.json", "models.json"]) {
-		putObject(
-			options.bucket,
-			options.endpoint,
-			join(options.modelCatalog, artifact),
-			getModelCatalogArtifactKey(release.modelCatalogRevision, artifact),
-			"public, max-age=31536000, immutable",
-			{ missing: true },
-		);
-	}
-	const catalogResponse = await fetch(
-		`https://pi.dev/api/models/revisions/${release.modelCatalogRevision}?types=chat,image,classifier`,
-	);
-	if (!catalogResponse.ok) throw new Error(`Released model catalog is unavailable: HTTP ${catalogResponse.status}`);
-	const catalogHash = createHash("sha256").update(Buffer.from(await catalogResponse.arrayBuffer())).digest("hex");
-	if (`sha256-${catalogHash}` !== release.modelCatalogRevision) {
-		throw new Error("Released model catalog does not match its revision");
-	}
-
 	const temporaryDirectory = mkdtempSync(join(tmpdir(), "pi-release-announcement-"));
 	try {
 		const releasePath = join(temporaryDirectory, "release.json");
@@ -360,20 +298,11 @@ async function main() {
 				{ missing: true },
 			)
 		) {
-			const existingPath = join(temporaryDirectory, "existing-release.json");
-			runAws([
-				"s3api", "get-object", "--bucket", options.bucket,
-				"--key", `${RELEASES_PREFIX}/releases/${options.version}.json`,
-				"--endpoint-url", options.endpoint, existingPath,
-			]);
-			const existing = JSON.parse(readFileSync(existingPath, "utf8"));
-			if (existing.modelCatalogRevision !== release.modelCatalogRevision) {
-				throw new Error(`Release ${options.version} already records a different model catalog`);
-			}
 			console.log(`Release record ${options.version} already exists.`);
 		}
 
 		writeFileSync(latestPath, `${JSON.stringify(release, null, "\t")}\n`);
+		validateInstallerArtifacts(options.installerPackageJson, options.installerPackageLock, options.version);
 		const installerReleasePrefix = `${INSTALLER_PREFIX}/releases/${options.version}`;
 		putObject(
 			options.bucket,

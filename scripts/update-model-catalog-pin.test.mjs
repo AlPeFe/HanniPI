@@ -6,107 +6,121 @@ import { join } from "node:path";
 import { afterEach, beforeEach, mock, test } from "node:test";
 import { updateModelCatalogPin } from "./update-model-catalog-pin.mjs";
 
-const body = '{"test-provider":[]}\n';
-const revision = `sha256-${createHash("sha256").update(body).digest("hex")}`;
-const originalPin = `${JSON.stringify({ revision: `sha256-${"a".repeat(64)}` })}\n`;
+const model = {
+	type: "chat",
+	id: "model-a",
+	name: "Model A",
+	api: "openai-completions",
+	provider: "test-provider",
+	baseUrl: "https://example.test/v1",
+	reasoning: false,
+	input: ["text"],
+	cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 1000,
+	maxTokens: 100,
+};
+const catalog = (models) => `${JSON.stringify({ "test-provider": models })}\n`;
+const revisionOf = (body) => `sha256-${createHash("sha256").update(body).digest("hex")}`;
+const pinFile = (revision) => `${JSON.stringify({ revision }, null, 2)}\n`;
+
+const liveBody = catalog([model, { ...model, id: "model-b" }]);
+const liveRevision = revisionOf(liveBody);
+const currentBody = catalog([model]);
+const currentRevision = revisionOf(currentBody);
+// Hydration fails when a checkout provider is missing, e.g. after main adds one.
+const staleBody = `${JSON.stringify({ "other-provider": [model] })}\n`;
+const staleRevision = revisionOf(staleBody);
+const bodies = new Map([
+	[liveRevision, liveBody],
+	[currentRevision, currentBody],
+	[staleRevision, staleBody],
+]);
+const typed = "types=chat,image,classifier";
+
 let root;
 beforeEach(() => {
 	root = mkdtempSync(join(tmpdir(), "pi-catalog-pin-"));
 	mkdirSync(join(root, "packages/coding-agent"), { recursive: true });
+	mkdirSync(join(root, "packages/ai/src/providers"), { recursive: true });
 	mkdirSync(join(root, "nix"));
 	writeFileSync(join(root, "packages/coding-agent/package.json"), JSON.stringify({ version: "0.85.1" }));
-	writeFileSync(join(root, "nix/model-catalog.json"), originalPin);
+	writeFileSync(
+		join(root, "packages/ai/src/models.generated.ts"),
+		'import { TEST_PROVIDER_CLASSIFIER_MODELS, TEST_PROVIDER_IMAGE_MODELS, TEST_PROVIDER_MODELS } from "./providers/test-provider.models.ts";\n',
+	);
+	writeFileSync(join(root, "packages/ai/src/providers/test-provider.models.ts"), "");
+	writeFileSync(join(root, "nix/model-catalog.json"), pinFile(currentRevision));
 });
 afterEach(() => {
 	mock.restoreAll();
 	rmSync(root, { recursive: true, force: true });
 });
 
-test("discovers a compatible revision and verifies its immutable URL before pinning", async () => {
-	const requests = [];
-	mock.method(globalThis, "fetch", async (url) => {
-		requests.push(url);
-		return new Response(body, { headers: { "x-pi-model-catalog-revision": revision } });
-	});
-	assert.equal(await updateModelCatalogPin(root), revision);
-	assert.deepEqual(requests, [
-		"https://pi.dev/api/models?pi-version=0.85.1&types=chat,image,classifier",
-		`https://pi.dev/api/models/revisions/${revision}?types=chat,image,classifier`,
-	]);
-	assert.deepEqual(JSON.parse(readFileSync(join(root, "nix/model-catalog.json"), "utf8")), { revision });
-});
-
-for (const failure of ["discovery-http", "revision", "discovery-hash", "pinned-http", "pinned-hash"]) {
-	test(`keeps the old pin on ${failure} failure`, async () => {
-		mock.method(globalThis, "fetch", async (url) => {
-			const pinned = url.includes("/revisions/");
-			if (failure === (pinned ? "pinned-http" : "discovery-http")) return new Response(null, { status: 503 });
-			return new Response(failure === (pinned ? "pinned-hash" : "discovery-hash") ? "wrong" : body, {
-				headers: { "x-pi-model-catalog-revision": failure === "revision" ? "latest" : revision },
-			});
-		});
-		await assert.rejects(updateModelCatalogPin(root));
-		assert.equal(readFileSync(join(root, "nix/model-catalog.json"), "utf8"), originalPin);
-	});
+function readPin() {
+	return readFileSync(join(root, "nix/model-catalog.json"), "utf8");
 }
 
-test("pins the verified release revision, never the live catalog, and can be rerun", async () => {
+function mockPiDev({ live = liveRevision, failure } = {}) {
 	const requests = [];
 	mock.method(globalThis, "fetch", async (url) => {
 		requests.push(url);
-		if (url === "https://pi.dev/api/installer/releases/0.85.1") {
-			return Response.json({ schemaVersion: 1, version: "0.85.1", modelCatalogRevision: revision });
+		const revision = /\/revisions\/(sha256-[0-9a-f]+)\?/.exec(url)?.[1];
+		if (revision) {
+			if (failure === "revision-http") return new Response(null, { status: 503 });
+			return new Response(failure === "revision-hash" ? "wrong" : bodies.get(revision));
 		}
-		assert.equal(url, `https://pi.dev/api/models/revisions/${revision}?types=chat,image,classifier`);
-		return new Response(body);
-	});
-	for (let attempt = 0; attempt < 2; attempt++) {
-		assert.equal(await updateModelCatalogPin(root, "0.85.1"), revision);
-		assert.deepEqual(JSON.parse(readFileSync(join(root, "nix/model-catalog.json"), "utf8")), {
-			revision, baselineRelease: "0.85.1",
+		if (failure === "discovery-http") return new Response(null, { status: 503 });
+		return new Response(failure === "discovery-hash" ? "wrong" : bodies.get(live), {
+			headers: { "x-pi-model-catalog-revision": failure === "discovery-revision" ? "latest" : live },
 		});
-	}
-	assert.equal(requests.length, 4);
+	});
+	return requests;
+}
+
+test("pins the live typed catalog after verifying its immutable URL", async () => {
+	const requests = mockPiDev();
+	assert.deepEqual(await updateModelCatalogPin(root), { revision: liveRevision, updated: true });
+	assert.deepEqual(requests, [
+		`https://pi.dev/api/models?pi-version=0.85.1&${typed}`,
+		`https://pi.dev/api/models/revisions/${liveRevision}?${typed}`,
+	]);
+	assert.equal(readPin(), pinFile(liveRevision));
 });
 
-for (const failure of ["unpublished", "wrong-version", "wrong-schema", "missing-revision", "hash"]) {
-	test(`preserves the pin when release metadata fails: ${failure}`, async () => {
-		mock.method(globalThis, "fetch", async (url) => {
-			if (url.includes("/models/revisions/")) return new Response("wrong");
-			if (failure === "unpublished") return new Response(null, { status: 404 });
-			return Response.json({
-				schemaVersion: failure === "wrong-schema" ? 2 : 1,
-				version: failure === "wrong-version" ? "0.85.0" : "0.85.1",
-				modelCatalogRevision: failure === "missing-revision" ? undefined : revision,
-			});
-		});
-		await assert.rejects(updateModelCatalogPin(root, "0.85.1"));
-		assert.equal(readFileSync(join(root, "nix/model-catalog.json"), "utf8"), originalPin);
+test("keeps a pin that still hydrates the checkout", async () => {
+	const requests = mockPiDev();
+	assert.deepEqual(await updateModelCatalogPin(root, { ifStale: true }), {
+		revision: currentRevision,
+		updated: false,
+	});
+	assert.deepEqual(requests, [`https://pi.dev/api/models/revisions/${currentRevision}?${typed}`]);
+	assert.equal(readPin(), pinFile(currentRevision));
+});
+
+test("replaces a pin that no longer hydrates the checkout", async (t) => {
+	t.mock.method(console, "error", () => {});
+	writeFileSync(join(root, "nix/model-catalog.json"), pinFile(staleRevision));
+	mockPiDev();
+	assert.deepEqual(await updateModelCatalogPin(root, { ifStale: true }), { revision: liveRevision, updated: true });
+	assert.equal(readPin(), pinFile(liveRevision));
+});
+
+test("refuses to pin a live catalog that cannot hydrate the checkout", async () => {
+	mockPiDev({ live: staleRevision });
+	await assert.rejects(updateModelCatalogPin(root), /cannot hydrate this checkout/);
+	assert.equal(readPin(), pinFile(currentRevision));
+});
+
+for (const failure of ["discovery-http", "discovery-revision", "discovery-hash", "revision-http", "revision-hash"]) {
+	test(`keeps the old pin on ${failure} failure`, async () => {
+		mockPiDev({ failure });
+		await assert.rejects(updateModelCatalogPin(root));
+		assert.equal(readPin(), pinFile(currentRevision));
 	});
 }
 
-test("rejects a baseline downgrade before making network requests", async () => {
-	const pin = JSON.stringify({ revision, baselineRelease: "0.85.1" });
-	writeFileSync(join(root, "nix/model-catalog.json"), pin);
-	const fetchMock = mock.method(globalThis, "fetch", async () => { throw new Error("Unexpected fetch"); });
-	await assert.rejects(updateModelCatalogPin(root, "0.85.0"), /downgrade/);
-	assert.equal(fetchMock.mock.callCount(), 0);
-	assert.equal(readFileSync(join(root, "nix/model-catalog.json"), "utf8"), pin);
+test("does not treat an unreachable pinned revision as stale", async () => {
+	mockPiDev({ failure: "revision-http" });
+	await assert.rejects(updateModelCatalogPin(root, { ifStale: true }), /unavailable/);
+	assert.equal(readPin(), pinFile(currentRevision));
 });
-
-test("manual updates retain the release baseline downgrade guard", async () => {
-	writeFileSync(join(root, "nix/model-catalog.json"), JSON.stringify({ revision, baselineRelease: "0.85.1" }));
-	mock.method(globalThis, "fetch", async () => new Response(body, {
-		headers: { "x-pi-model-catalog-revision": revision },
-	}));
-	await updateModelCatalogPin(root);
-	assert.equal(JSON.parse(readFileSync(join(root, "nix/model-catalog.json"), "utf8")).baselineRelease, "0.85.1");
-});
-
-for (const version of ["latest", "0.85.1-beta.1", "0.86.0"]) {
-	test(`rejects invalid or newer-than-checkout release ${version}`, async () => {
-		const fetchMock = mock.method(globalThis, "fetch", async () => { throw new Error("Unexpected fetch"); });
-		await assert.rejects(updateModelCatalogPin(root, version));
-		assert.equal(fetchMock.mock.callCount(), 0);
-	});
-}
