@@ -21,8 +21,11 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKSPACE = {
 	"@earendil-works/chord": "packages/chord/src",
 	"@earendil-works/pi-ai": "packages/ai/src",
+	"@earendil-works/pi-durable": "packages/durable/src",
 	"@earendil-works/pi-agent-core": "packages/agent/src",
+	"@earendil-works/pi-codemode": "packages/codemode/src",
 	"@earendil-works/pi-telemetry": "packages/telemetry/src",
+	"@earendil-works/pi-mcp": "packages/mcp/src",
 	"@earendil-works/pi-tui": "packages/tui/src",
 };
 

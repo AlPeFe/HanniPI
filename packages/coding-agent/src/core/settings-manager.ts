@@ -1,6 +1,11 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Transport } from "@earendil-works/pi-ai";
-import type { TuiMode as RendererTuiMode, ScrollViewScrollbar, TerminalCapabilities } from "@earendil-works/pi-tui";
+import { DEFAULT_MAX_AGENT_RETRY_DELAY_MS, type Model, type Transport } from "@earendil-works/pi-ai";
+import type {
+	TuiMode as RendererTuiMode,
+	ScrollViewScrollbar,
+	TerminalCapabilities,
+	WheelScrollLines,
+} from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
@@ -10,10 +15,21 @@ import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 
+export interface CompactionModelOverride {
+	reserveTokens?: number;
+	keepRecentTokens?: number;
+}
+
+const DEFAULT_COMPACTION_TOKEN_SETTINGS: Required<CompactionModelOverride> = {
+	reserveTokens: 16384,
+	keepRecentTokens: 20000,
+};
+
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
 	reserveTokens?: number; // default: 16384
 	keepRecentTokens?: number; // default: 20000
+	modelOverrides?: Record<string, CompactionModelOverride>; // exact "provider/modelId" keys
 }
 
 export interface BranchSummarySettings {
@@ -31,6 +47,7 @@ export interface RetrySettings {
 	enabled?: boolean; // default: true
 	maxRetries?: number; // default: 3
 	baseDelayMs?: number; // default: 2000 (exponential backoff: 2s, 4s, 8s)
+	maxAgentDelayMs?: number; // default: 60000
 	provider?: ProviderRetrySettings;
 }
 
@@ -61,6 +78,10 @@ export interface ThinkingBudgetsSettings {
 
 export type MermaidRenderingMode = "off" | "final" | "streaming";
 
+/** Cache-warming profile. "idle" also warms between agent runs. */
+export const CACHE_WARMING_MODES = ["off", "streaming", "idle"] as const;
+export type CacheWarmingMode = (typeof CACHE_WARMING_MODES)[number];
+
 export interface MarkdownSettings {
 	codeBlockIndent?: string; // default: "  "
 	mermaid?: MermaidRenderingMode; // default: "streaming"
@@ -68,6 +89,22 @@ export interface MarkdownSettings {
 
 export interface WarningSettings {
 	anthropicExtraUsage?: boolean; // default: true
+}
+
+/**
+ * How the codemode tool presents tools while it is active.
+ * - `on`: declared tools that scripts can call get their codemode declaration appended to their
+ *   description; the codemode description lists only the tools without `direct` exposure.
+ * - `only`: the codemode description lists every tool scripts can call, and active `direct` tools are
+ *   not declared to the model.
+ */
+export type CodemodeMode = "on" | "only";
+
+export interface CodemodeSettings {
+	/** Default: `on`. */
+	mode?: CodemodeMode;
+	/** Estimated tokens (characters / 4) the codemode description may spend on tool declarations. Default: 3000. */
+	inlineBudget?: number;
 }
 
 export type DefaultProjectTrust = "ask" | "always" | "never";
@@ -135,14 +172,17 @@ export interface Settings {
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	markdown?: MarkdownSettings;
 	warnings?: WarningSettings;
+	codemode?: CodemodeSettings;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
+	cacheWarming?: CacheWarmingMode; // default: "streaming"; global only because each refresh costs money
 	websocketConnectTimeoutMs?: number; // WebSocket connect/open handshake timeout in milliseconds; 0 disables it
 	tuiMode?: TuiMode; // default: "regular"
 	fullscreenExitOutput?: FullscreenExitOutput; // default: "transcript"; no effect in regular TUI mode
 	fullscreenScrollbar?: ScrollViewScrollbar; // default: "auto"; no effect in regular TUI mode
 	fullscreenCopyOnSelect?: boolean; // default: true; no effect in regular TUI mode
+	fullscreenWheelScrollLines?: WheelScrollLines; // default: "auto"; lines per wheel event, 1-100
 }
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {
@@ -480,6 +520,11 @@ export class SettingsManager {
 		}
 
 		return settings as Settings;
+	}
+
+	/** A copy of the effective settings: global and project settings merged, with overrides. */
+	getSettings(): Settings {
+		return structuredClone(this.settings);
 	}
 
 	getGlobalSettings(): Settings {
@@ -839,19 +884,52 @@ export class SettingsManager {
 		this.save();
 	}
 
-	getCompactionReserveTokens(): number {
-		return this.settings.compaction?.reserveTokens ?? 16384;
+	private getCompactionTokenSetting(
+		field: keyof CompactionModelOverride,
+		model?: Pick<Model<string>, "provider" | "id">,
+	): number {
+		const compaction = this.settings.compaction;
+		const ordinary = compaction?.[field];
+		if (ordinary !== undefined && (typeof ordinary !== "number" || !Number.isSafeInteger(ordinary) || ordinary < 0)) {
+			throw new Error(
+				`Invalid compaction.${field} setting: ${String(ordinary)}. Expected a non-negative safe integer.`,
+			);
+		}
+
+		const modelKey = model ? `${model.provider}/${model.id}` : undefined;
+		const entry = modelKey !== undefined ? compaction?.modelOverrides?.[modelKey] : undefined;
+		if (entry !== undefined && !isMergeableObject(entry)) {
+			throw new Error(
+				`Invalid compaction.modelOverrides["${modelKey}"] setting: ${String(entry)}. Expected an object.`,
+			);
+		}
+		const override = entry?.[field];
+		if (override !== undefined && (typeof override !== "number" || !Number.isSafeInteger(override) || override < 0)) {
+			throw new Error(
+				`Invalid compaction.modelOverrides["${modelKey}"].${field} setting: ${String(override)}. Expected a non-negative safe integer.`,
+			);
+		}
+		return override ?? ordinary ?? DEFAULT_COMPACTION_TOKEN_SETTINGS[field];
 	}
 
-	getCompactionKeepRecentTokens(): number {
-		return this.settings.compaction?.keepRecentTokens ?? 20000;
+	getCompactionReserveTokens(model?: Pick<Model<string>, "provider" | "id">): number {
+		return this.getCompactionTokenSetting("reserveTokens", model);
 	}
 
-	getCompactionSettings(): { enabled: boolean; reserveTokens: number; keepRecentTokens: number } {
+	getCompactionKeepRecentTokens(model?: Pick<Model<string>, "provider" | "id">): number {
+		return this.getCompactionTokenSetting("keepRecentTokens", model);
+	}
+
+	/** Resolve each token setting through model override, ordinary setting, then built-in default. */
+	getCompactionSettings(model?: Pick<Model<string>, "provider" | "id">): {
+		enabled: boolean;
+		reserveTokens: number;
+		keepRecentTokens: number;
+	} {
 		return {
 			enabled: this.getCompactionEnabled(),
-			reserveTokens: this.getCompactionReserveTokens(),
-			keepRecentTokens: this.getCompactionKeepRecentTokens(),
+			reserveTokens: this.getCompactionReserveTokens(model),
+			keepRecentTokens: this.getCompactionKeepRecentTokens(model),
 		};
 	}
 
@@ -879,11 +957,12 @@ export class SettingsManager {
 		this.save();
 	}
 
-	getRetrySettings(): { enabled: boolean; maxRetries: number; baseDelayMs: number } {
+	getRetrySettings(): { enabled: boolean; maxRetries: number; baseDelayMs: number; maxAgentDelayMs: number } {
 		return {
 			enabled: this.getRetryEnabled(),
 			maxRetries: this.settings.retry?.maxRetries ?? 3,
 			baseDelayMs: this.settings.retry?.baseDelayMs ?? 2000,
+			maxAgentDelayMs: this.settings.retry?.maxAgentDelayMs ?? DEFAULT_MAX_AGENT_RETRY_DELAY_MS,
 		};
 	}
 
@@ -897,6 +976,18 @@ export class SettingsManager {
 		}
 		this.globalSettings.httpIdleTimeoutMs = Math.floor(timeoutMs);
 		this.markModified("httpIdleTimeoutMs");
+		this.save();
+	}
+
+	/** Read from global settings only because warming costs money. */
+	getCacheWarmingMode(): CacheWarmingMode {
+		const mode = this.globalSettings.cacheWarming;
+		return mode !== undefined && CACHE_WARMING_MODES.includes(mode) ? mode : "streaming";
+	}
+
+	setCacheWarmingMode(mode: CacheWarmingMode): void {
+		this.globalSettings.cacheWarming = mode;
+		this.markModified("cacheWarming");
 		this.save();
 	}
 
@@ -1237,6 +1328,20 @@ export class SettingsManager {
 	setFullscreenCopyOnSelect(enabled: boolean): void {
 		this.globalSettings.fullscreenCopyOnSelect = enabled;
 		this.markModified("fullscreenCopyOnSelect");
+		this.save();
+	}
+
+	getFullscreenWheelScrollLines(): WheelScrollLines {
+		const lines = this.settings.fullscreenWheelScrollLines;
+		return typeof lines === "number" && Number.isFinite(lines)
+			? Math.max(1, Math.min(100, Math.floor(lines)))
+			: "auto";
+	}
+
+	setFullscreenWheelScrollLines(lines: WheelScrollLines): void {
+		this.globalSettings.fullscreenWheelScrollLines =
+			lines === "auto" ? lines : Math.max(1, Math.min(100, Math.floor(lines)));
+		this.markModified("fullscreenWheelScrollLines");
 		this.save();
 	}
 

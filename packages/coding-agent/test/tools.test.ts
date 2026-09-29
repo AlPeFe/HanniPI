@@ -4,7 +4,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeBashWithOperations } from "../src/core/bash-executor.ts";
-import type { ExtensionContext } from "../src/core/extensions/types.ts";
+import type { ExtensionToolContext } from "../src/core/extensions/types.ts";
 import {
 	type BashOperations,
 	createBashTool,
@@ -490,9 +490,65 @@ describe("Coding Agent Tools", () => {
 			expect(result.details).toBeUndefined();
 		});
 
-		it("should handle command errors", async () => {
-			await expect(bashTool.execute("test-call-9", { command: "exit 1" })).rejects.toThrow(
-				/(Command failed|code 1)/,
+		it("should report non-zero exit codes as error results with structured content", async () => {
+			const result = await bashTool.execute("test-call-9", { command: "echo out; exit 3" });
+			expect(result.isError).toBe(true);
+			expect(getTextOutput(result)).toBe("out\n\n\nCommand exited with code 3");
+			expect(result.structuredContent).toEqual({
+				output: "out\n",
+				exit_code: 3,
+				wall_time_seconds: expect.any(Number),
+			});
+
+			const ok = await bashTool.execute("test-call-9b", { command: "echo fine" });
+			expect(ok.isError).toBeUndefined();
+			expect(ok.structuredContent).toMatchObject({ output: "fine\n", exit_code: 0 });
+		});
+
+		// Regression tests for https://github.com/earendil-works/pi/issues/9577
+		it.skipIf(process.platform === "win32")(
+			"should map signal-killed commands to 128 plus the signal number",
+			async () => {
+				const operations = createLocalBashOperations();
+				for (const { signal, exitCode } of [
+					{ signal: "KILL", exitCode: 137 },
+					{ signal: "TERM", exitCode: 143 },
+				]) {
+					const result = await operations.exec(`kill -${signal} $$`, testDir, { onData: () => {} });
+					expect(result.exitCode).toBe(exitCode);
+				}
+			},
+		);
+
+		it.skipIf(process.platform === "win32")(
+			"should report signal-killed commands as errors while preserving partial output",
+			async () => {
+				for (const { signal, exitCode } of [
+					{ signal: "KILL", exitCode: 137 },
+					{ signal: "TERM", exitCode: 143 },
+				]) {
+					const result = await bashTool.execute(`test-call-signal-${signal}`, {
+						command: `printf 'before-kill\\n'; kill -${signal} $$`,
+					});
+					expect(result.isError).toBe(true);
+					expect(getTextOutput(result)).toMatch(
+						new RegExp(`before-kill\\s+Command exited with code ${exitCode}$`),
+					);
+				}
+			},
+		);
+
+		it("should reject a null exit code from custom operations", async () => {
+			const operations: BashOperations = {
+				exec: async (_command, _cwd, { onData }) => {
+					onData(Buffer.from("partial\n", "utf-8"));
+					return { exitCode: null };
+				},
+			};
+			const bash = createBashTool(testDir, { operations });
+
+			await expect(bash.execute("test-call-null-exit", { command: "remote" })).rejects.toThrow(
+				/partial\s+Command terminated without an exit code$/,
 			);
 		});
 
@@ -901,8 +957,8 @@ describe("Coding Agent Tools", () => {
 	});
 });
 
-function fakeCtx(cwd: string): ExtensionContext {
-	return { cwd } as ExtensionContext;
+function fakeCtx(cwd: string): ExtensionToolContext {
+	return { cwd } as ExtensionToolContext;
 }
 
 describe("tool cwd resolution", () => {
