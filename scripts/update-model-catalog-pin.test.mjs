@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, mock, test } from "node:test";
 import { updateModelCatalogPin } from "./update-model-catalog-pin.mjs";
 
-const body = '{"test-provider":{}}\n';
+const body = '{"test-provider":[]}\n';
 const revision = `sha256-${createHash("sha256").update(body).digest("hex")}`;
 const originalPin = `${JSON.stringify({ revision: `sha256-${"a".repeat(64)}` })}\n`;
 let root;
@@ -30,8 +30,8 @@ test("discovers a compatible revision and verifies its immutable URL before pinn
 	});
 	assert.equal(await updateModelCatalogPin(root), revision);
 	assert.deepEqual(requests, [
-		"https://pi.dev/api/models?pi-version=0.85.1",
-		`https://pi.dev/api/models/revisions/${revision}`,
+		"https://pi.dev/api/models?pi-version=0.85.1&types=chat,image,classifier",
+		`https://pi.dev/api/models/revisions/${revision}?types=chat,image,classifier`,
 	]);
 	assert.deepEqual(JSON.parse(readFileSync(join(root, "nix/model-catalog.json"), "utf8")), { revision });
 });
@@ -57,7 +57,7 @@ test("pins the verified release revision, never the live catalog, and can be rer
 		if (url === "https://pi.dev/api/installer/releases/0.85.1") {
 			return Response.json({ schemaVersion: 1, version: "0.85.1", modelCatalogRevision: revision });
 		}
-		assert.equal(url, `https://pi.dev/api/models/revisions/${revision}`);
+		assert.equal(url, `https://pi.dev/api/models/revisions/${revision}?types=chat,image,classifier`);
 		return new Response(body);
 	});
 	for (let attempt = 0; attempt < 2; attempt++) {

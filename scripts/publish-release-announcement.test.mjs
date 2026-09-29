@@ -10,9 +10,11 @@ import { advanceLatestRelease, compareReleaseVersions, createVerifiedRelease, ve
 test("records the exact catalog only after npm metadata and tarballs are available", async (t) => {
 	const root = mkdtempSync(join(tmpdir(), "pi-release-catalog-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
-	const modelCatalog = join(root, "models.json");
-	const body = '{"provider":{}}\n';
-	writeFileSync(modelCatalog, body);
+	const modelCatalog = join(root, "model-catalog");
+	mkdirSync(modelCatalog);
+	const body = '{"provider":[]}\n';
+	writeFileSync(join(modelCatalog, "models.all.json"), body);
+	writeFileSync(join(modelCatalog, "models.json"), '{"provider":{}}\n');
 	const packages = [{ name: "@test/pi", version: "0.85.2" }];
 	const requests = [];
 	let finishTarball;
@@ -53,14 +55,16 @@ for (const scenario of ["match", "different-models", "integrity", "unavailable"]
 		t.after(() => rmSync(root, { recursive: true, force: true }));
 		const dataDir = join(root, "package/dist/providers/data");
 		mkdirSync(dataDir, { recursive: true });
-		const models = { "model-a": { id: "model-a", api: "test", provider: "test-provider" } };
-		writeFileSync(join(dataDir, "test-provider.json"), JSON.stringify({ test: models }));
+		const model = { type: "chat", id: "model-a", api: "test", provider: "test-provider" };
+		writeFileSync(join(dataDir, "test-provider.json"), JSON.stringify({ test: { "chat:model-a": model } }));
 		writeFileSync(join(dataDir, ".manifest.json"), "{}");
 		const archive = join(root, "pi-ai.tgz");
 		execFileSync("tar", ["-czf", archive, "-C", root, "package"]);
 		const bytes = readFileSync(archive);
-		const modelCatalog = join(root, "models.json");
-		writeFileSync(modelCatalog, JSON.stringify({ "test-provider": scenario === "different-models" ? {} : models }));
+		const modelCatalog = join(root, "model-catalog");
+		mkdirSync(modelCatalog);
+		const models = scenario === "different-models" ? [{ ...model, id: "model-b" }] : [model];
+		writeFileSync(join(modelCatalog, "models.all.json"), `${JSON.stringify({ "test-provider": models })}\n`);
 		t.mock.method(globalThis, "fetch", async () => scenario === "unavailable"
 			? new Response(null, { status: 404 }) : new Response(bytes));
 		const packages = [{

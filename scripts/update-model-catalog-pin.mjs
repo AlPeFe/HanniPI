@@ -6,6 +6,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { compareReleaseVersions } from "./publish-release-announcement.mjs";
 
+// Request the typed catalog; its bytes are what a revision hashes.
+const MODEL_TYPES = "types=chat,image,classifier";
+
 export async function updateModelCatalogPin(root, releaseVersion) {
 	const { version } = JSON.parse(readFileSync(join(root, "packages/coding-agent/package.json"), "utf8"));
 	const pinPath = join(root, "nix/model-catalog.json");
@@ -26,7 +29,7 @@ export async function updateModelCatalogPin(root, releaseVersion) {
 		}
 		revision = release.modelCatalogRevision;
 	} else {
-		const response = await fetch(`https://pi.dev/api/models?pi-version=${encodeURIComponent(version)}`);
+		const response = await fetch(`https://pi.dev/api/models?pi-version=${encodeURIComponent(version)}&${MODEL_TYPES}`);
 		if (!response.ok) throw new Error(`Catalog discovery failed: HTTP ${response.status}`);
 		revision = response.headers.get("x-pi-model-catalog-revision");
 		const bytes = Buffer.from(await response.arrayBuffer());
@@ -39,7 +42,7 @@ export async function updateModelCatalogPin(root, releaseVersion) {
 	}
 
 	// Do not record a pin until its immutable URL is available and verified.
-	const pinned = await fetch(`https://pi.dev/api/models/revisions/${revision}`);
+	const pinned = await fetch(`https://pi.dev/api/models/revisions/${revision}?${MODEL_TYPES}`);
 	if (!pinned.ok) throw new Error(`Pinned catalog fetch failed: HTTP ${pinned.status}`);
 	const pinnedBytes = Buffer.from(await pinned.arrayBuffer());
 	if (`sha256-${createHash("sha256").update(pinnedBytes).digest("hex")}` !== revision) {

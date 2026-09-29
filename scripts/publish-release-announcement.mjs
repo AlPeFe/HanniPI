@@ -2,11 +2,13 @@
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { isDeepStrictEqual } from "node:util";
+import { serializeModelCatalog } from "../packages/ai/scripts/export-model-catalog.ts";
+import { readModelCatalog } from "../packages/ai/scripts/model-data.ts";
+import { getModelCatalogArtifactKey } from "./model-catalog-protocol.ts";
 import { getPublicWorkspacePackages } from "./release-packages.mjs";
 
 const RELEASES_PREFIX = "releases/v1";
@@ -286,10 +288,12 @@ export async function createVerifiedRelease(options, packages) {
 		sourceCommit: options.sourceCommit ?? gitSourceCommit(),
 		publishedAt: new Date().toISOString(),
 		packages: publishedPackages,
-		modelCatalogRevision: `sha256-${createHash("sha256").update(readFileSync(options.modelCatalog)).digest("hex")}`,
+		// Catalog revisions hash the typed catalog, as for scheduled catalog publications.
+		modelCatalogRevision: `sha256-${createHash("sha256").update(readFileSync(join(options.modelCatalog, "models.all.json"))).digest("hex")}`,
 	};
 }
 
+/** Check that the exported catalog is exactly the model data shipped in the published pi-ai package. */
 export async function verifyPublishedModelCatalog(packages, modelCatalog) {
 	const ai = packages.find((pkg) => pkg.name === "@earendil-works/pi-ai");
 	if (!ai) throw new Error("Verified release has no pi-ai package");
@@ -304,13 +308,8 @@ export async function verifyPublishedModelCatalog(packages, modelCatalog) {
 		const archive = join(temporaryDirectory, "pi-ai.tgz");
 		writeFileSync(archive, bytes);
 		execFileSync("tar", ["-xzf", archive, "-C", temporaryDirectory, "package/dist/providers/data"]);
-		const dataDir = join(temporaryDirectory, "package/dist/providers/data");
-		const providers = readdirSync(dataDir).filter((name) => name.endsWith(".json") && name !== ".manifest.json");
-		const actual = Object.fromEntries(providers.map((name) => {
-			const groups = JSON.parse(readFileSync(join(dataDir, name), "utf8"));
-			return [name.slice(0, -5), Object.fromEntries(Object.values(groups).flatMap((group) => Object.entries(group)))];
-		}));
-		if (!isDeepStrictEqual(actual, JSON.parse(readFileSync(modelCatalog, "utf8")))) {
+		const actual = serializeModelCatalog(readModelCatalog(join(temporaryDirectory, "package/dist/providers/data")));
+		if (actual !== readFileSync(join(modelCatalog, "models.all.json"), "utf8")) {
 			throw new Error("Release model snapshot differs from the published pi-ai package; reuse the original release snapshot");
 		}
 	} finally {
@@ -326,15 +325,20 @@ async function main() {
 
 	// Only publish the immutable snapshot after npm availability is verified.
 	// Do not move the live model index: scheduled catalog updates are independent.
-	putObject(
-		options.bucket,
-		options.endpoint,
-		options.modelCatalog,
-		`models/v1/revisions/${release.modelCatalogRevision}/models.json`,
-		"public, max-age=31536000, immutable",
-		{ missing: true },
+	// A matching scheduled publication may already own these keys; its bytes are identical.
+	for (const artifact of ["models.all.json", "models.json"]) {
+		putObject(
+			options.bucket,
+			options.endpoint,
+			join(options.modelCatalog, artifact),
+			getModelCatalogArtifactKey(release.modelCatalogRevision, artifact),
+			"public, max-age=31536000, immutable",
+			{ missing: true },
+		);
+	}
+	const catalogResponse = await fetch(
+		`https://pi.dev/api/models/revisions/${release.modelCatalogRevision}?types=chat,image,classifier`,
 	);
-	const catalogResponse = await fetch(`https://pi.dev/api/models/revisions/${release.modelCatalogRevision}`);
 	if (!catalogResponse.ok) throw new Error(`Released model catalog is unavailable: HTTP ${catalogResponse.status}`);
 	const catalogHash = createHash("sha256").update(Buffer.from(await catalogResponse.arrayBuffer())).digest("hex");
 	if (`sha256-${catalogHash}` !== release.modelCatalogRevision) {

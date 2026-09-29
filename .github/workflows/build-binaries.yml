@@ -407,7 +407,7 @@ jobs:
           (cd release-assets && sha256sum -c SHA256SUMS)
           tar -xzf "release-assets/pi-${VERSION}-source.tar.gz" --strip-components=1 \
             "pi-${VERSION}/packages/ai/src/providers/data"
-          node packages/ai/scripts/export-model-catalog.ts release-assets/models.json
+          node packages/ai/scripts/export-model-catalog.ts release-assets/model-catalog
 
       - name: Verify AWS CLI
         run: aws --version
@@ -416,7 +416,7 @@ jobs:
         run: |
           node scripts/publish-release-announcement.mjs \
             --version "${RELEASE_TAG#v}" \
-            --model-catalog release-assets/models.json \
+            --model-catalog release-assets/model-catalog \
             --bucket pi-artifacts \
             --endpoint "$R2_ENDPOINT" \
             --installer-package-json packages/coding-agent/install-lock/package.json \

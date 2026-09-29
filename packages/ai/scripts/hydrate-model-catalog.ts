@@ -5,17 +5,34 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
 	createModelDataManifest,
+	groupProviderModelData,
 	MODEL_DATA_MANIFEST_FILE,
+	type ModelCatalogEntry,
 	type ModelDataStructure,
 	readModelDataProviderIds,
 	validateModelDataDirectory,
 } from "./model-data.ts";
 
+type CatalogEntry = ModelCatalogEntry & Record<string, unknown>;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Hydrate the checkout's provider shards from a published catalog without network access. */
+function isCatalogEntry(value: unknown): value is CatalogEntry {
+	return (
+		isRecord(value) &&
+		typeof value.type === "string" &&
+		typeof value.id === "string" &&
+		typeof value.api === "string" &&
+		value.api.length > 0
+	);
+}
+
+/**
+ * Hydrate the checkout's provider data files from a published typed catalog
+ * (`models.all.json`) without network access.
+ */
 export function hydrateModelCatalog(packageRoot: string, catalogPath: string): void {
 	const catalog: unknown = JSON.parse(readFileSync(catalogPath, "utf8"));
 	if (!isRecord(catalog)) throw new Error("Model catalog must be an object");
@@ -24,29 +41,17 @@ export function hydrateModelCatalog(packageRoot: string, catalogPath: string): v
 	const structure: ModelDataStructure = {};
 	for (const provider of readModelDataProviderIds(packageRoot)) {
 		const models = catalog[provider];
-		if (!isRecord(models) || Object.keys(models).length === 0) {
+		if (!Array.isArray(models) || models.length === 0) {
 			throw new Error(`Model catalog is missing provider: ${provider}`);
 		}
-		const groups = new Map<string, Map<string, unknown>>();
-		const modelApis = new Map<string, string>();
-		for (const id of Object.keys(models).sort()) {
-			const model = models[id];
-			if (!isRecord(model) || typeof model.api !== "string" || !model.api) {
-				throw new Error(`Model catalog has an invalid API for ${provider}/${id}`);
-			}
-			let group = groups.get(model.api);
-			if (!group) {
-				group = new Map();
-				groups.set(model.api, group);
-			}
-			group.set(id, model);
-			modelApis.set(id, model.api);
+		const entries: CatalogEntry[] = [];
+		for (const model of models) {
+			if (!isCatalogEntry(model)) throw new Error(`Model catalog has an invalid entry for provider ${provider}`);
+			entries.push(model);
 		}
-		structure[provider] = Object.fromEntries(modelApis);
-		const grouped = Object.fromEntries(
-			[...groups.keys()].sort().map((api) => [api, Object.fromEntries(groups.get(api)!)]),
-		);
-		files[`${provider}.json`] = `${JSON.stringify(grouped)}\n`;
+		const grouped = groupProviderModelData(provider, entries);
+		structure[provider] = grouped.structure;
+		files[`${provider}.json`] = `${JSON.stringify(grouped.groups)}\n`;
 	}
 
 	// Public catalogs have no generation timestamp. Use a fixed stamp so hydration
@@ -69,6 +74,6 @@ export function hydrateModelCatalog(packageRoot: string, catalogPath: string): v
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-	if (process.argv.length !== 3) throw new Error("Usage: node hydrate-model-catalog.ts <models.json>");
+	if (process.argv.length !== 3) throw new Error("Usage: node hydrate-model-catalog.ts <models.all.json>");
 	hydrateModelCatalog(join(dirname(fileURLToPath(import.meta.url)), ".."), resolve(process.argv[2]));
 }

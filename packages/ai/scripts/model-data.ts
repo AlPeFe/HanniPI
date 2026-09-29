@@ -304,3 +304,72 @@ export function validateGeneratedModelData(packageRoot: string): void {
 	const structure = readModelDataStructure(packageRoot);
 	validateModelDataDirectory(structure, join(packageRoot, "src", "providers", "data"));
 }
+
+/** Model types in the order the typed catalog lists them within a provider. */
+export const MODEL_CATALOG_TYPES = ["chat", "image", "classifier"] as const;
+
+export interface ModelCatalogEntry {
+	type: string;
+	id: string;
+	api: string;
+}
+
+/** Typed catalog (`models.all.json`): model entries of every type by provider. */
+export type ModelCatalog = Record<string, Record<string, unknown>[]>;
+
+/**
+ * Group one provider's typed catalog entries by API and key them by `type:id`,
+ * the layout of `src/providers/data/<provider>.json`.
+ */
+export function groupProviderModelData<T extends ModelCatalogEntry>(
+	providerId: string,
+	models: readonly T[],
+): { groups: Record<string, Record<string, T>>; structure: Record<string, string> } {
+	const groups: Record<string, Record<string, T>> = {};
+	const structure: Record<string, string> = {};
+	for (const api of Array.from(new Set(models.map((model) => model.api))).sort()) {
+		const group: Record<string, T> = {};
+		for (const model of models) {
+			if (model.api !== api) continue;
+			const identity = `${model.type}:${model.id}`;
+			if (group[identity]) throw new Error(`${providerId}/${identity} has duplicate ${api} catalog entries`);
+			group[identity] = model;
+			structure[identity] = api;
+		}
+		groups[api] = group;
+	}
+	return { groups, structure };
+}
+
+/**
+ * Rebuild the typed catalog from provider data files. Within each provider,
+ * entries are ordered by type, then by model id, matching the generator.
+ */
+export function readModelCatalog(dataDir: string): ModelCatalog {
+	const catalog: ModelCatalog = {};
+	const providerIds = readdirSync(dataDir)
+		.filter((name) => name.endsWith(".json") && name !== MODEL_DATA_MANIFEST_FILE)
+		.map((name) => name.slice(0, -".json".length))
+		.sort();
+	for (const providerId of providerIds) {
+		const filename = `${providerId}.json`;
+		const groups: unknown = JSON.parse(readFileSync(join(dataDir, filename), "utf8"));
+		if (!isRecord(groups)) throw new Error(`${filename} must contain an object`);
+		const byType = new Map<string, [string, Record<string, unknown>][]>(MODEL_CATALOG_TYPES.map((type) => [type, []]));
+		for (const [api, group] of Object.entries(groups)) {
+			if (!isRecord(group)) throw new Error(`${filename} API group ${JSON.stringify(api)} must be an object`);
+			for (const [identity, model] of Object.entries(group)) {
+				if (!isRecord(model) || typeof model.id !== "string" || identity !== `${String(model.type)}:${model.id}`) {
+					throw new Error(`${providerId}/${identity} is not a valid model entry`);
+				}
+				const entries = byType.get(String(model.type));
+				if (!entries) throw new Error(`${providerId}/${identity} has an unknown model type`);
+				entries.push([model.id, model]);
+			}
+		}
+		catalog[providerId] = MODEL_CATALOG_TYPES.flatMap((type) =>
+			(byType.get(type) ?? []).sort(([left], [right]) => left.localeCompare(right)).map(([, model]) => model),
+		);
+	}
+	return catalog;
+}

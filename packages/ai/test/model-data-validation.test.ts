@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -81,12 +81,17 @@ function writeFixtureData(
 }
 
 describe("published model catalog hydration", () => {
+	function chatModel(values: Record<string, unknown>): Record<string, unknown> {
+		return values["chat:model-a"] as Record<string, unknown>;
+	}
+
 	it("hydrates a clean checkout deterministically without changing generated TypeScript", () => {
 		const { dataDir, packageRoot, structure, values } = createFixture();
 		const aggregatorPath = join(packageRoot, "src", "models.generated.ts");
 		const aggregator = readFileSync(aggregatorPath, "utf8");
 		const catalogPath = join(packageRoot, "catalog.json");
-		writeFileSync(catalogPath, JSON.stringify({ "test-provider": values, "extra-provider": values }));
+		const models = [chatModel(values)];
+		writeFileSync(catalogPath, JSON.stringify({ "test-provider": models, "extra-provider": models }));
 		rmSync(dataDir, { recursive: true });
 
 		hydrateModelCatalog(packageRoot, catalogPath);
@@ -100,23 +105,23 @@ describe("published model catalog hydration", () => {
 		expect(readFileSync(join(dataDir, "test-provider.json"), "utf8")).toBe(provider);
 	});
 
-	it("groups models by API", () => {
+	it("groups models by API and keys them by type and id", () => {
 		const { packageRoot, values } = createFixture();
 		const catalogPath = join(packageRoot, "catalog.json");
-		const model = values["model-a"] as Record<string, unknown>;
+		const model = chatModel(values);
 		writeFileSync(
 			catalogPath,
 			JSON.stringify({
-				"test-provider": { ...values, "model-b": { ...model, id: "model-b", api: "anthropic-messages" } },
+				"test-provider": [model, { ...model, id: "model-b", api: "anthropic-messages" }],
 			}),
 		);
 		hydrateModelCatalog(packageRoot, catalogPath);
 		expect(readModelDataStructure(packageRoot)).toEqual({
-			"test-provider": { "model-a": "openai-completions", "model-b": "anthropic-messages" },
+			"test-provider": { "chat:model-a": "openai-completions", "chat:model-b": "anthropic-messages" },
 		});
 	});
 
-	it.each([null, [], {}, { "test-provider": {} }])(
+	it.each([null, [], {}, { "test-provider": [] }, { "test-provider": {} }, { "test-provider": [{ id: "x" }] }])(
 		"rejects incomplete catalogs without replacing existing data: %j",
 		(catalog) => {
 			const { dataDir, packageRoot } = createFixture();
@@ -131,10 +136,10 @@ describe("published model catalog hydration", () => {
 	it.each(["api", "provider", "cost"])("validates model %s before replacing existing data", (field) => {
 		const { dataDir, packageRoot, values } = createFixture();
 		const original = readFileSync(join(dataDir, "test-provider.json"), "utf8");
-		const model = values["model-a"] as Record<string, unknown>;
+		const model = chatModel(values);
 		model[field] = null;
 		const catalogPath = join(packageRoot, "catalog.json");
-		writeFileSync(catalogPath, JSON.stringify({ "test-provider": values }));
+		writeFileSync(catalogPath, JSON.stringify({ "test-provider": [model] }));
 		expect(() => hydrateModelCatalog(packageRoot, catalogPath)).toThrow();
 		expect(readFileSync(join(dataDir, "test-provider.json"), "utf8")).toBe(original);
 	});
@@ -143,22 +148,54 @@ describe("published model catalog hydration", () => {
 describe("release model catalog export", () => {
 	it("exports the existing model snapshot and round-trips through offline hydration", () => {
 		const { packageRoot, values } = createFixture();
-		const path = join(packageRoot, "models.json");
-		exportModelCatalog(packageRoot, path);
-		const bytes = readFileSync(path, "utf8");
-		expect(JSON.parse(bytes)).toEqual({ "test-provider": values });
-		hydrateModelCatalog(packageRoot, path);
-		exportModelCatalog(packageRoot, path);
-		expect(readFileSync(path, "utf8")).toBe(bytes);
+		const outputDir = join(packageRoot, "catalog");
+		exportModelCatalog(packageRoot, outputDir);
+		const allPath = join(outputDir, "models.all.json");
+		const bytes = readFileSync(allPath, "utf8");
+		expect(JSON.parse(bytes)).toEqual({ "test-provider": [values["chat:model-a"]] });
+		expect(JSON.parse(readFileSync(join(outputDir, "models.json"), "utf8"))).toEqual({
+			"test-provider": { "model-a": values["chat:model-a"] },
+		});
+		hydrateModelCatalog(packageRoot, allPath);
+		exportModelCatalog(packageRoot, outputDir);
+		expect(readFileSync(allPath, "utf8")).toBe(bytes);
 	});
 
-	it("rejects stale snapshot hashes without overwriting the export", () => {
+	it("restores published catalog order across API groups and model types", () => {
+		const { packageRoot, values } = createFixture();
+		const chat = values["chat:model-a"] as Record<string, unknown>;
+		const image = {
+			type: "image",
+			id: "model-a",
+			name: "Model A Image",
+			api: "openrouter-images",
+			provider: "test-provider",
+			baseUrl: "https://example.test/v1",
+			input: ["text"],
+			output: ["image"],
+			cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+		};
+		// Published order: chat models by id, then image models, then classifiers.
+		const models = [chat, { ...chat, id: "model-b", api: "anthropic-messages" }, image];
+		const catalogPath = join(packageRoot, "catalog.json");
+		const bytes = `${JSON.stringify({ "test-provider": models })}\n`;
+		writeFileSync(catalogPath, bytes);
+		hydrateModelCatalog(packageRoot, catalogPath);
+		const outputDir = join(packageRoot, "catalog");
+		exportModelCatalog(packageRoot, outputDir);
+		expect(readFileSync(join(outputDir, "models.all.json"), "utf8")).toBe(bytes);
+		expect(Object.keys(JSON.parse(readFileSync(join(outputDir, "models.json"), "utf8"))["test-provider"])).toEqual([
+			"model-a",
+			"model-b",
+		]);
+	});
+
+	it("rejects stale snapshot hashes without writing an export", () => {
 		const { packageRoot, dataDir } = createFixture();
-		const path = join(packageRoot, "models.json");
-		writeFileSync(path, "existing export");
+		const outputDir = join(packageRoot, "catalog");
 		writeFileSync(join(dataDir, "test-provider.json"), "{}");
-		expect(() => exportModelCatalog(packageRoot, path)).toThrow();
-		expect(readFileSync(path, "utf8")).toBe("existing export");
+		expect(() => exportModelCatalog(packageRoot, outputDir)).toThrow();
+		expect(existsSync(outputDir)).toBe(false);
 	});
 });
 

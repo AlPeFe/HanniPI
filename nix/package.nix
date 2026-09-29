@@ -22,7 +22,8 @@ let
   modelCatalogPin = lib.importJSON ./model-catalog.json;
   modelCatalog = fetchurl {
     name = "pi-model-catalog.json";
-    url = "https://pi.dev/api/models/revisions/${modelCatalogPin.revision}";
+    # The typed catalog is the representation whose bytes the revision hashes.
+    url = "https://pi.dev/api/models/revisions/${modelCatalogPin.revision}?types=chat,image,classifier";
     sha256 = lib.removePrefix "sha256-" modelCatalogPin.revision;
   };
 
@@ -64,8 +65,8 @@ let
       pack_package packages/ai ai
       pack_package packages/tui tui
       pack_package packages/agent agent
-      pack_package packages/protocol protocol
-      pack_package packages/client client
+      pack_package packages/codemode codemode
+      pack_package packages/mcp mcp
       pack_package packages/coding-agent coding-agent
 
       mkdir "$out/coding-agent"
@@ -88,8 +89,8 @@ let
       "node_modules/@earendil-works/chord" = workspacePackages + "/chord.tgz";
       "node_modules/@earendil-works/pi-agent-core" = workspacePackages + "/agent.tgz";
       "node_modules/@earendil-works/pi-ai" = workspacePackages + "/ai.tgz";
-      "node_modules/@earendil-works/pi-client" = workspacePackages + "/client.tgz";
-      "node_modules/@earendil-works/pi-protocol" = workspacePackages + "/protocol.tgz";
+      "node_modules/@earendil-works/pi-codemode" = workspacePackages + "/codemode.tgz";
+      "node_modules/@earendil-works/pi-mcp" = workspacePackages + "/mcp.tgz";
       "node_modules/@earendil-works/pi-telemetry" = workspacePackages + "/telemetry.tgz";
       "node_modules/@earendil-works/pi-tui" = workspacePackages + "/tui.tgz";
     };
