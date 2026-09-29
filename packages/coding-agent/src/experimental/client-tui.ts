@@ -739,57 +739,62 @@ export async function runClientTui(command: ClientCommand, options: RunClientTui
 	});
 	await resourceLoader.reload();
 	setRegisteredThemes(resourceLoader.getThemes().themes);
+	const mouseWheel = settingsManager.getMouseWheelSettings();
 	const runtime = await openClientRuntime(command, options);
-	const tui = createInteractiveTui({
-		tuiMode: "fullscreen",
-		showHardwareCursor: settingsManager.getShowHardwareCursor(),
-		logDirectory: agentDir,
-	});
-	tui.setClearOnShrink(settingsManager.getClearOnShrink());
-	let component: ExperimentalClientTui | undefined;
-	let tuiStarted = false;
-	const themeController = new InteractiveThemeController(tui, {
-		getSettingsManager: () => settingsManager,
-		showError: (error) => component?.showError(error),
-		onChanged: () => component?.refreshTheme(),
-	});
 	try {
-		let finish!: () => void;
-		const finished = new Promise<void>((resolve) => {
-			finish = () => {
-				themeController.disableAutoSync();
-				if (tuiStarted) {
-					tui.stop();
-					tuiStarted = false;
-				}
-				resolve();
-			};
+		const tui = createInteractiveTui({
+			tuiMode: "fullscreen",
+			mouseWheel,
+			showHardwareCursor: settingsManager.getShowHardwareCursor(),
+			logDirectory: agentDir,
 		});
-		component = await ExperimentalClientTui.create({
-			command,
-			ui: tui,
-			servers: runtime.servers.map((server) => ({
-				serverId: server.route.serverId,
-				radius: server.route.transport === "radius",
-				server: server.server,
-				session: server.session,
-			})),
-			facetLoader: options.facetLoader,
-			requestRender: () => tui.requestRender(),
-			finish,
+		tui.setClearOnShrink(settingsManager.getClearOnShrink());
+		let component: ExperimentalClientTui | undefined;
+		let tuiStarted = false;
+		const themeController = new InteractiveThemeController(tui, {
+			getSettingsManager: () => settingsManager,
+			showError: (error) => component?.showError(error),
+			onChanged: () => component?.refreshTheme(),
 		});
-		tui.addChild(component);
-		tui.setLayoutRoot(component.layoutRoot);
-		tui.setFocus(component);
-		tuiStarted = true;
-		tui.start();
-		await themeController.applyFromSettings();
-		await finished;
+		try {
+			let finish!: () => void;
+			const finished = new Promise<void>((resolve) => {
+				finish = () => {
+					themeController.disableAutoSync();
+					if (tuiStarted) {
+						tui.stop();
+						tuiStarted = false;
+					}
+					resolve();
+				};
+			});
+			component = await ExperimentalClientTui.create({
+				command,
+				ui: tui,
+				servers: runtime.servers.map((server) => ({
+					serverId: server.route.serverId,
+					radius: server.route.transport === "radius",
+					server: server.server,
+					session: server.session,
+				})),
+				facetLoader: options.facetLoader,
+				requestRender: () => tui.requestRender(),
+				finish,
+			});
+			tui.addChild(component);
+			tui.setLayoutRoot(component.layoutRoot);
+			tui.setFocus(component);
+			tuiStarted = true;
+			tui.start();
+			await themeController.applyFromSettings();
+			await finished;
+		} finally {
+			themeController.dispose();
+			stopThemeWatcher();
+			if (tuiStarted) tui.stop();
+			await component?.close();
+		}
 	} finally {
-		themeController.dispose();
-		stopThemeWatcher();
-		if (tuiStarted) tui.stop();
-		await component?.close();
 		await runtime.dispose();
 	}
 }

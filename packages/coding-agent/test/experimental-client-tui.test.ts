@@ -21,8 +21,11 @@ import {
 	reduceLaneSnapshot,
 } from "@earendil-works/pi-agent-core";
 import { ProcessTerminal, TuiMainScreen } from "@earendil-works/pi-tui";
-import { beforeAll, describe, expect, test, vi } from "vitest";
-import { type ClientTuiServer, ExperimentalClientTui } from "../src/experimental/client-tui.ts";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
+import { SettingsManager } from "../src/core/settings-manager.ts";
+import * as clientRuntime from "../src/experimental/client-runtime.ts";
+import { type ClientTuiServer, ExperimentalClientTui, runClientTui } from "../src/experimental/client-tui.ts";
 import { createPresentationFacetData } from "../src/experimental/plugins/bundled.ts";
 import { AgentController } from "../src/experimental/services/agent-controller.ts";
 import { createAgentController } from "../src/experimental/services/agent-controller-provider.ts";
@@ -42,6 +45,7 @@ import {
 } from "../src/experimental/services/sessions.ts";
 import { Transcript, type TranscriptState } from "../src/experimental/services/transcript.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import * as tuiRenderer from "../src/modes/interactive/tui-renderer.ts";
 
 const serverId = "00000000-0000-4000-8000-000000000001";
 
@@ -93,6 +97,37 @@ function laneSnapshot(): LaneSnapshot {
 		faulted: false,
 	};
 }
+
+// #9758: validation and startup failures must not leak client connections.
+describe("runClientTui startup", () => {
+	beforeEach(() => {
+		vi.spyOn(DefaultResourceLoader.prototype, "reload").mockResolvedValue(undefined);
+	});
+	afterEach(() => vi.restoreAllMocks());
+
+	test("rejects invalid mouse wheel settings before acquiring a runtime", async () => {
+		vi.spyOn(SettingsManager, "create").mockReturnValue(
+			SettingsManager.inMemory({ mouseWheel: { normalLines: Number.MAX_VALUE } }),
+		);
+		const open = vi.spyOn(clientRuntime, "openClientRuntime").mockRejectedValue(new Error("unexpected acquisition"));
+
+		await expect(runClientTui({ command: "client" })).rejects.toThrow("Invalid mouseWheel.normalLines setting");
+		expect(open).not.toHaveBeenCalled();
+	});
+
+	test("disposes the runtime when TUI construction throws", async () => {
+		vi.spyOn(SettingsManager, "create").mockReturnValue(SettingsManager.inMemory());
+		const dispose = vi.fn(async () => {});
+		vi.spyOn(clientRuntime, "openClientRuntime").mockResolvedValue({ servers: [], dispose });
+		const error = new Error("TUI startup failed");
+		vi.spyOn(tuiRenderer, "createInteractiveTui").mockImplementation(() => {
+			throw error;
+		});
+
+		await expect(runClientTui({ command: "client" })).rejects.toBe(error);
+		expect(dispose).toHaveBeenCalledOnce();
+	});
+});
 
 describe("experimental client TUI", () => {
 	beforeAll(() => initTheme("dark"));
