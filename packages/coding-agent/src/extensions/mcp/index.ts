@@ -6,10 +6,12 @@
  * in `mcp.json` takes precedence over a registered server of the same name. Tools are registered as
  * `mcp__<server>__<tool>`. By default (`"exposure": "codemode"`) the tools are only callable from
  * codemode scripts, which keeps large MCP tool lists out of the model's tool declarations; the
- * codemode tool is activated for that unless `autoEnableCodemode` is false. `"exposure": "direct"`
- * declares them to the model as well, `"deferred"` leaves them out of the codemode description, and
- * `"hidden"` makes them unreachable. `toolExposure` overrides the exposure of single tools. Servers
- * with resources are reached through Codex's `list_mcp_resources`, `list_mcp_resource_templates`, and
+ * codemode tool is activated for that unless `autoEnableCodemode` is false. `"codemode-deferred"`
+ * leaves them out of the codemode description as well. `"deferred"` declares them to the model once
+ * the `tool_search` tool loads them, and activates `tool_search` instead of codemode.
+ * `"exposure": "direct"` declares them to the model right away, and `"hidden"` makes them
+ * unreachable. `toolExposure` overrides the exposure of single tools. Servers with resources are
+ * reached through Codex's `list_mcp_resources`, `list_mcp_resource_templates`, and
  * `read_mcp_resource` tools (resources.ts).
  *
  * Every call runs through pi's tool pipeline, so `tool_call`/`tool_result` hooks and permission
@@ -34,6 +36,7 @@ import type {
 } from "../../core/extensions/types.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
 import { CODEMODE_TOOL_NAME, isCodemodeTool } from "../codemode/tool.ts";
+import { isToolSearchTool, TOOL_SEARCH_TOOL_NAME } from "../tool-search/tool.ts";
 import {
 	getMcpToolExposure,
 	type LoadedMcpConfig,
@@ -86,8 +89,9 @@ interface McpServer {
 }
 
 const EXPOSURE_DESCRIPTIONS: Record<Exclude<McpExposure, "hidden">, string> = {
-	codemode: "callable from codemode scripts and listed in the codemode description",
-	deferred: "callable from codemode scripts, found with searchTools() or tool_search",
+	codemode: "called from codemode scripts, listed in the codemode description",
+	"codemode-deferred": "called from codemode scripts, not listed; scripts find them with searchTools()",
+	deferred: "not declared until tool_search loads them, then called directly; no codemode needed",
 	direct: "declared to the model like built-in tools",
 };
 
@@ -300,7 +304,9 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		 */
 		const syncResourceTools = () => {
 			const exposures = new Set(serversWithResources().map((server) => exposureOf(server.entry)));
-			const exposure = (["direct", "codemode", "deferred"] as const).find((candidate) => exposures.has(candidate));
+			const exposure = (["direct", "codemode", "codemode-deferred", "deferred"] as const).find((candidate) =>
+				exposures.has(candidate),
+			);
 			const next = exposure ?? "hidden";
 			if (next === resourceToolsExposure || (resourceToolsExposure === undefined && next === "hidden")) return;
 			const wasDirect = resourceToolsExposure === "direct";
@@ -313,30 +319,44 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			}
 		};
 
-		/** Codemode-exposed tools are unreachable without the codemode tool, so turn it on. */
-		const ensureCodemodeActive = (ctx: ExtensionContext) => {
-			const needsCodemode = servers.some((server) => {
-				const { connection, entry } = server;
-				if (connection?.state !== "connected") return false;
-				const indirect = (exposure: McpExposure) => exposure === "codemode" || exposure === "deferred";
+		/**
+		 * Tools that are not declared to the model are reached through the codemode tool (scripts call
+		 * them) or the tool_search tool (it declares them). Either reaches every such tool. Activate the
+		 * one the tools' exposure asks for: codemode for `codemode` and `codemode-deferred` unless
+		 * `autoEnableCodemode` is false, tool_search for `deferred`.
+		 */
+		const ensureDiscoveryActive = (ctx: ExtensionContext) => {
+			const exposures = new Set<McpExposure>();
+			for (const { connection, entry } of servers) {
+				if (connection?.state !== "connected") continue;
 				// Resource tools share the server's exposure.
-				if (connection.hasResources && indirect(exposureOf(entry))) return true;
-				return connection.tools.some((tool) => indirect(getMcpToolExposure(entry.config, tool.name)));
-			});
-			if (!needsCodemode) return;
-			// Another extension's tool named `codemode` cannot call MCP tools, so never activate it.
-			const available = pi.getAllTools().some(isCodemodeTool);
-			if (available && pi.getActiveTools().includes(CODEMODE_TOOL_NAME)) return;
-			if (available && autoEnableCodemode) {
-				pi.setActiveTools([...pi.getActiveTools(), CODEMODE_TOOL_NAME]);
-				return;
+				if (connection.hasResources) exposures.add(exposureOf(entry));
+				for (const tool of connection.tools) exposures.add(getMcpToolExposure(entry.config, tool.name));
 			}
+			const needsCodemode = exposures.has("codemode") || exposures.has("codemode-deferred");
+			const needsToolSearch = exposures.has("deferred");
+			if (!needsCodemode && !needsToolSearch) return;
+			// Other extensions' tools of the same names cannot reach MCP tools, so never activate them.
+			const tools = pi.getAllTools();
+			const hasCodemode = tools.some(isCodemodeTool);
+			const hasToolSearch = tools.some(isToolSearchTool);
+			const active = pi.getActiveTools();
+			const activate: string[] = [];
+			if (needsCodemode && hasCodemode && autoEnableCodemode && !active.includes(CODEMODE_TOOL_NAME)) {
+				activate.push(CODEMODE_TOOL_NAME);
+			}
+			if (needsToolSearch && hasToolSearch && !active.includes(TOOL_SEARCH_TOOL_NAME)) {
+				activate.push(TOOL_SEARCH_TOOL_NAME);
+			}
+			if (activate.length > 0) pi.setActiveTools([...active, ...activate]);
+			const reachable = [...active, ...activate];
+			if (hasCodemode && reachable.includes(CODEMODE_TOOL_NAME)) return;
+			if (hasToolSearch && reachable.includes(TOOL_SEARCH_TOOL_NAME)) return;
 			if (warnedUnreachable) return;
 			warnedUnreachable = true;
+			const reason = needsCodemode && hasCodemode && !autoEnableCodemode ? " (autoEnableCodemode is false)" : "";
 			ctx.ui.notify(
-				available
-					? "MCP tools are only reachable from the codemode tool, but it is inactive and autoEnableCodemode is false; they cannot be called."
-					: "MCP tools are only reachable from the codemode tool, but it is not available; they cannot be called.",
+				`MCP tools are only reachable from the codemode or tool_search tool, but neither is active${reason}; they cannot be called.`,
 				"warning",
 			);
 		};
@@ -361,7 +381,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			if (signedIn.length === 0) return;
 			for (const [connection] of signedIn) tokensAtSignIn.delete(connection);
 			await Promise.allSettled(signedIn.map(([connection]) => connection.reconnect()));
-			ensureCodemodeActive(ctx);
+			ensureDiscoveryActive(ctx);
 		};
 
 		/** Create the server's connection, loading the MCP runtime on first use. */
@@ -661,7 +681,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 					break;
 			}
 			server.message = message;
-			ensureCodemodeActive(ctx);
+			ensureDiscoveryActive(ctx);
 			emitChange();
 		};
 		const manage = async (ui: McpUi, ctx: ExtensionContext) => {
@@ -764,7 +784,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				ctx.ui.notify(failure, failure === "Sign-in cancelled." ? "info" : "error");
 				return;
 			}
-			ensureCodemodeActive(ctx);
+			ensureDiscoveryActive(ctx);
 			ctx.ui.notify(`Signed in to MCP server "${name}" (${server.connection?.tools.length ?? 0} tools).`, "info");
 		};
 
@@ -797,7 +817,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 					if (current !== generation) return;
 					await Promise.allSettled(started.map((connection) => connection.getClient()));
 					if (current !== generation) return;
-					ensureCodemodeActive(ctx);
+					ensureDiscoveryActive(ctx);
 					reportProblems(ctx);
 				})
 				.catch((error: unknown) => {
@@ -865,7 +885,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 				return;
 			}
 			if (current !== generation) return;
-			ensureCodemodeActive(ctx);
+			ensureDiscoveryActive(ctx);
 			reportProblems(ctx, connecting);
 		});
 
@@ -942,7 +962,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 						const failure = await reconnect(server);
 						if (failure) ctx.ui.notify(failure, "error");
 						else {
-							ensureCodemodeActive(ctx);
+							ensureDiscoveryActive(ctx);
 							ctx.ui.notify(
 								`Reconnected to MCP server "${server.entry.name}" (${describeState(server)}).`,
 								"info",

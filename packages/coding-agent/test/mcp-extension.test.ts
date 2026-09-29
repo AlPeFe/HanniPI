@@ -83,6 +83,7 @@ describe("MCP config", () => {
 				autoEnableCodemode: false,
 				mcpServers: {
 					later: { command: "x", exposure: "deferred" },
+					scripts: { command: "x", exposure: "codemode-deferred" },
 					off: { command: "x", exposure: "hidden" },
 					wrong: { command: "x", exposure: "model-only" },
 				},
@@ -94,6 +95,7 @@ describe("MCP config", () => {
 		expect(untrusted.autoEnableCodemode).toBe(false);
 		expect(untrusted.servers.map((server) => [server.name, server.config.exposure])).toEqual([
 			["later", "deferred"],
+			["scripts", "codemode-deferred"],
 			["off", "hidden"],
 		]);
 		expect(untrusted.errors).toEqual([expect.stringContaining('server "wrong": exposure must be one of')]);

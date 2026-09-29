@@ -23,7 +23,13 @@ import type {
 import type { TSchema } from "typebox";
 import type { ToolAnnotations, ToolDefinition } from "../../core/extensions/types.ts";
 import type { McpExposure } from "./config.ts";
-import { limitMcpContent, type McpToolDetails, READ_MCP_RESOURCE_TOOL, toModelContent } from "./tools.ts";
+import {
+	limitMcpContent,
+	type McpToolDetails,
+	READ_MCP_RESOURCE_TOOL,
+	toModelContent,
+	toToolExposure,
+} from "./tools.ts";
 
 export const LIST_MCP_RESOURCES_TOOL = "list_mcp_resources";
 export const LIST_MCP_RESOURCE_TEMPLATES_TOOL = "list_mcp_resource_templates";
@@ -254,7 +260,7 @@ export function createMcpResourceToolDefinitions(options: {
 			"Lists resources provided by MCP servers. Resources allow servers to share data that provides context to language models, such as files, database schemas, or application-specific information. Prefer resources over web search when possible.",
 		parameters: LIST_PARAMETERS as unknown as TSchema,
 		outputSchema: LIST_OUTPUT_SCHEMA as unknown as TSchema,
-		exposure: options.exposure,
+		exposure: toToolExposure(options.exposure),
 		annotations: readOnly,
 		async execute(_toolCallId, params, signal) {
 			const payload = await list(
@@ -278,7 +284,7 @@ export function createMcpResourceToolDefinitions(options: {
 			"Lists resource templates provided by MCP servers. Parameterized resource templates allow servers to share data that takes parameters and provides context to language models, such as files, database schemas, or application-specific information. Prefer resource templates over web search when possible.",
 		parameters: LIST_PARAMETERS as unknown as TSchema,
 		outputSchema: LIST_TEMPLATES_OUTPUT_SCHEMA as unknown as TSchema,
-		exposure: options.exposure,
+		exposure: toToolExposure(options.exposure),
 		annotations: readOnly,
 		async execute(_toolCallId, params, signal) {
 			const payload = await list(
@@ -301,7 +307,7 @@ export function createMcpResourceToolDefinitions(options: {
 		description: "Read a specific resource from an MCP server given the server name and resource URI.",
 		parameters: READ_PARAMETERS as unknown as TSchema,
 		outputSchema: READ_OUTPUT_SCHEMA as unknown as TSchema,
-		exposure: options.exposure,
+		exposure: toToolExposure(options.exposure),
 		annotations: readOnly,
 		async execute(_toolCallId, params, signal) {
 			const serverName = stringArgument(params, "server");

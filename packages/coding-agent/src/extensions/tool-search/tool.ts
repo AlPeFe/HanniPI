@@ -164,6 +164,11 @@ export const toolSearchSchema = Type.Object({
 
 export type ToolSearchInput = Static<typeof toolSearchSchema>;
 
+/** Whether the tool is this `tool_search`, not another extension's tool of the same name. */
+export function isToolSearchTool(tool: Pick<ToolInfo, "name" | "parameters">): boolean {
+	return tool.name === TOOL_SEARCH_TOOL_NAME && tool.parameters === toolSearchSchema;
+}
+
 export interface ToolSearchResultTool {
 	name: string;
 	description: string;

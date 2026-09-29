@@ -124,7 +124,8 @@ The redirect URI must match the one registered for the client. `callbackPort` fi
 Each server's tools are registered as `mcp__<server>__<tool>`. The `exposure` setting controls how the model reaches them:
 
 - `codemode` (default): the tools are callable from [`codemode`](cli.md#tools) scripts and listed in the `codemode` tool's description, but are not declared to the model. Large MCP tool lists stay out of the model's tool declarations, and scripts can call several MCP tools, in parallel if needed, while returning only the part of the result the model needs. Pi activates the `codemode` tool when such a server connects. Large servers do not fill the description: declarations share a token budget, and scripts find the remaining tools with `searchTools()` (see [`codemode`](cli.md#tools)).
-- `deferred`: like `codemode`, but the tools are not listed in the `codemode` tool's description either. Scripts can still call them by name and find them with `searchTools()` or in `ALL_TOOLS`. With the `tool_search` tool enabled, the model can also load them as declared tools.
+- `codemode-deferred`: like `codemode`, but the tools are not listed in the `codemode` tool's description either; it only names the server and its tool count. Scripts call them by name and find them with `searchTools()` or in `ALL_TOOLS`. Use it for large servers that codemode scripts use rarely.
+- `deferred`: the tools are not declared to the model until the [`tool_search`](cli.md#tools) tool loads them. The model searches, and the matches are declared from its next call on and called directly, without codemode. Pi activates the `tool_search` tool when such a server connects. Use it for large servers without codemode.
 - `direct`: the tools are declared to the model like built-in tools, and are also callable from codemode.
 - `hidden`: the tools are registered but cannot be called.
 
@@ -148,7 +149,9 @@ Each server's tools are registered as `mcp__<server>__<tool>`. The `exposure` se
 
 `pi mcp list` marks tools whose exposure differs from the server's, and the Tools view in `/mcp` shows it too.
 
-Codemode-only tools do not depend on the active tool set, so they stay callable after `/tree`, resume, and fork. To keep pi from activating the `codemode` tool, set `"autoEnableCodemode": false` at the top level of `mcp.json`, next to `mcpServers`. A project `mcp.json` value overrides the global one. Pi then warns once that codemode-only tools cannot be called until `codemode` is activated.
+Tools that are not declared (`codemode`, `codemode-deferred`, and `deferred` exposure) are reachable through either tool: codemode scripts can call all of them, and `tool_search` can load any of them. For example, with `codemode` active, scripts can call the tools of a `deferred` server, and with `tool_search` active, the model can load the tools of a `codemode` server.
+
+Tools called from codemode scripts do not depend on the active tool set, so they stay callable after `/tree`, resume, and fork. Tools loaded by `tool_search` are recorded in the transcript like any other tool change and stay declared on that branch. To keep pi from activating the `codemode` tool, set `"autoEnableCodemode": false` at the top level of `mcp.json`, next to `mcpServers`. A project `mcp.json` value overrides the global one. Pi warns once when neither `codemode` nor `tool_search` is active, since the tools then cannot be called.
 
 Text results over 20KB reach the model with the middle cut out, in the format Codex uses: the start and end of the text around a `…N chars truncated…` marker. The full text is saved to a temp file whose path the result names. Codemode scripts always receive the whole result, so a script can filter a large result down to what the model needs.
 
@@ -162,7 +165,7 @@ When a connected server offers [resources](https://modelcontextprotocol.io/speci
 - `list_mcp_resource_templates` lists URI templates for resources the servers do not list, in the same way.
 - `read_mcp_resource` reads a resource given `server` and `uri`. Text resources reach the model as text and images as images; other binary resources are saved to temp files, and the model sees the file path. Scripts receive `{ server, uri, contents }`.
 
-The tools reach every enabled server with resources whose exposure is not `hidden`, and take the widest exposure among them: `direct` if one of the servers is direct, else `codemode`, else `deferred`. Resource links in tool results name `read_mcp_resource` and the server.
+The tools reach every enabled server with resources whose exposure is not `hidden`, and take the widest exposure among them: `direct` if one of the servers is direct, else `codemode`, else `codemode-deferred`, else `deferred`. Resource links in tool results name `read_mcp_resource` and the server.
 
 Resources for MCP Apps (`ui://` URIs or `text/html;profile=mcp-app`) are left out of the listings, since pi does not render them, and so are resource icons.
 
@@ -182,4 +185,4 @@ An installed extension that registers the `/mcp` command, such as `pi-mcp-adapte
 
 ## SDK
 
-SDK sessions do not load the built-in extensions. Add the MCP extension, and the codemode extension for `codemode` and `deferred` servers, to the resource loader. See [SDK](sdk.md#codemode-mcp).
+SDK sessions do not load the built-in extensions. Add the MCP extension, the codemode extension for `codemode` and `codemode-deferred` servers, and the tool search extension for `deferred` servers to the resource loader. See [SDK](sdk.md#codemode-mcp).

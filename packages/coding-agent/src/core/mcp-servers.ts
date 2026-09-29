@@ -8,13 +8,22 @@
 /**
  * - `codemode`: tools are callable from codemode scripts and listed in its description, but not
  *   declared to the model.
- * - `deferred`: like `codemode`, but not listed in the codemode description.
+ * - `codemode-deferred`: like `codemode`, but not listed in the codemode description. Scripts find
+ *   them with `searchTools()`.
+ * - `deferred`: not declared to the model until the `tool_search` tool loads them; the model then
+ *   calls them directly. Does not need codemode.
  * - `direct`: tools are declared to the model like any other tool (and callable from codemode).
  * - `hidden`: tools are registered but unreachable.
  */
-export type McpExposure = "codemode" | "deferred" | "direct" | "hidden";
+export type McpExposure = "codemode" | "codemode-deferred" | "deferred" | "direct" | "hidden";
 
-const MCP_EXPOSURES: readonly string[] = ["codemode", "deferred", "direct", "hidden"] satisfies McpExposure[];
+const MCP_EXPOSURES: readonly string[] = [
+	"codemode",
+	"codemode-deferred",
+	"deferred",
+	"direct",
+	"hidden",
+] satisfies McpExposure[];
 
 interface McpServerConfigBase {
 	/** Default: `codemode`. */
