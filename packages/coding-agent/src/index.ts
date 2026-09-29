@@ -299,6 +299,7 @@ export {
 	type DefaultProjectTrust,
 	type FullscreenExitOutput,
 	type ImageSettings,
+	type MouseWheelSettings,
 	type PackageSource,
 	type RetrySettings,
 	SettingsManager,

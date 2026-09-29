@@ -1,5 +1,6 @@
 import type { Terminal } from "@earendil-works/pi-tui";
 import { ProcessTerminal, type TUI, TuiAltScreen, TuiMainScreen } from "@earendil-works/pi-tui";
+import type { MouseWheelSettings } from "../../core/settings-manager.ts";
 import { copyToClipboard } from "../../utils/clipboard.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
 import { keyDisplayText } from "./components/keybinding-hints.ts";
@@ -12,6 +13,7 @@ export interface InteractiveTuiOptions {
 	readonly terminal?: Terminal;
 	readonly onRightClickPaste?: () => void;
 	readonly fullscreenCopyOnSelect?: boolean;
+	readonly mouseWheel?: MouseWheelSettings;
 }
 
 /** Composition root shared by coding-agent presentations. */
@@ -34,6 +36,8 @@ export function createInteractiveTui(options: InteractiveTuiOptions): TuiMainScr
 			openUrl: openBrowser,
 			onRightClickPaste: options.onRightClickPaste,
 			copyOnSelect: options.fullscreenCopyOnSelect,
+			wheelScrollLines: options.mouseWheel?.normalLines ?? 1,
+			altWheelScrollLines: options.mouseWheel?.altLines ?? 5,
 			copySelection: async (text) => {
 				try {
 					await copyToClipboard(text);

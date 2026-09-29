@@ -516,6 +516,36 @@ describe("SettingsManager", () => {
 		expect(reloadedManager.getFullscreenCopyOnSelect()).toBe(true);
 	});
 
+	// #9758: independent defaults and validation at the settings boundary.
+	it("defaults omitted wheel counts and rejects invalid settings", () => {
+		expect(SettingsManager.inMemory().getMouseWheelSettings()).toEqual({ normalLines: 1, altLines: 5 });
+		const settingsPath = join(agentDir, "settings.json");
+		writeFileSync(settingsPath, JSON.stringify({ mouseWheel: { normalLines: "12" } }));
+		expect(() => SettingsManager.create(projectDir, agentDir).getMouseWheelSettings()).toThrow(
+			"Invalid mouseWheel.normalLines setting: 12",
+		);
+		writeFileSync(settingsPath, JSON.stringify({ mouseWheel: 12 }));
+		expect(() => SettingsManager.create(projectDir, agentDir).getMouseWheelSettings()).toThrow(
+			"Invalid mouseWheel setting: 12. Expected an object.",
+		);
+	});
+
+	// #9758: setters save independent counts and reject invalid writes.
+	it("persists wheel counts and rejects invalid writes", async () => {
+		const manager = SettingsManager.create(projectDir, agentDir);
+		manager.setMouseWheelNormalLines(120);
+		manager.setMouseWheelAltLines(2);
+		expect(() => manager.setMouseWheelNormalLines(NaN)).toThrow("Invalid mouseWheel.normalLines setting: NaN");
+		expect(() => manager.setMouseWheelAltLines(Number.MAX_SAFE_INTEGER + 1)).toThrow(
+			"Invalid mouseWheel.altLines setting",
+		);
+		await manager.flush();
+		expect(SettingsManager.create(projectDir, agentDir).getMouseWheelSettings()).toEqual({
+			normalLines: 120,
+			altLines: 2,
+		});
+	});
+
 	describe("outputPad", () => {
 		it("should default to 1 and persist binary values", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);

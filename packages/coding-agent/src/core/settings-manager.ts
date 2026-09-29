@@ -1,6 +1,11 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { DEFAULT_MAX_AGENT_RETRY_DELAY_MS, type Model, type Transport } from "@earendil-works/pi-ai";
-import type { TuiMode as RendererTuiMode, ScrollViewScrollbar, TerminalCapabilities } from "@earendil-works/pi-tui";
+import {
+	normalizeWheelScrollLines,
+	type TuiMode as RendererTuiMode,
+	type ScrollViewScrollbar,
+	type TerminalCapabilities,
+} from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
@@ -48,6 +53,11 @@ export interface RetrySettings {
 
 export type TuiMode = RendererTuiMode;
 export type FullscreenExitOutput = "transcript" | "resume-hint";
+
+export interface MouseWheelSettings {
+	normalLines?: number; // default: 1
+	altLines?: number; // default: 5
+}
 
 export interface TerminalSettings {
 	showImages?: boolean; // default: true (only relevant if terminal supports images)
@@ -160,6 +170,7 @@ export interface Settings {
 	fullscreenExitOutput?: FullscreenExitOutput; // default: "transcript"; no effect in regular TUI mode
 	fullscreenScrollbar?: ScrollViewScrollbar; // default: "auto"; no effect in regular TUI mode
 	fullscreenCopyOnSelect?: boolean; // default: true; no effect in regular TUI mode
+	mouseWheel?: MouseWheelSettings; // no effect in regular TUI mode
 }
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {
@@ -188,6 +199,14 @@ function deepMergeObjects(base: Record<string, unknown>, overrides: Record<strin
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
 function deepMergeSettings(base: Settings, overrides: Settings): Settings {
 	return deepMergeObjects(base as Record<string, unknown>, overrides as Record<string, unknown>) as Settings;
+}
+
+function parseMouseWheelSetting(value: unknown, settingName: string): number {
+	const lines = normalizeWheelScrollLines(value);
+	if (lines === undefined) {
+		throw new Error(`Invalid ${settingName} setting: ${String(value)}`);
+	}
+	return lines;
 }
 
 function parseTimeoutSetting(value: unknown, settingName: string): number | undefined {
@@ -1300,6 +1319,36 @@ export class SettingsManager {
 	setFullscreenCopyOnSelect(enabled: boolean): void {
 		this.globalSettings.fullscreenCopyOnSelect = enabled;
 		this.markModified("fullscreenCopyOnSelect");
+		this.save();
+	}
+
+	getMouseWheelSettings(): Required<MouseWheelSettings> {
+		const mouseWheel = this.settings.mouseWheel;
+		if (mouseWheel !== undefined && !isMergeableObject(mouseWheel)) {
+			throw new Error(`Invalid mouseWheel setting: ${String(mouseWheel)}. Expected an object.`);
+		}
+		const { normalLines = 1, altLines = 5 } = mouseWheel ?? {};
+		return {
+			normalLines: parseMouseWheelSetting(normalLines, "mouseWheel.normalLines"),
+			altLines: parseMouseWheelSetting(altLines, "mouseWheel.altLines"),
+		};
+	}
+
+	setMouseWheelNormalLines(value: number): void {
+		this.globalSettings.mouseWheel = {
+			...this.globalSettings.mouseWheel,
+			normalLines: parseMouseWheelSetting(value, "mouseWheel.normalLines"),
+		};
+		this.markModified("mouseWheel", "normalLines");
+		this.save();
+	}
+
+	setMouseWheelAltLines(value: number): void {
+		this.globalSettings.mouseWheel = {
+			...this.globalSettings.mouseWheel,
+			altLines: parseMouseWheelSetting(value, "mouseWheel.altLines"),
+		};
+		this.markModified("mouseWheel", "altLines");
 		this.save();
 	}
 

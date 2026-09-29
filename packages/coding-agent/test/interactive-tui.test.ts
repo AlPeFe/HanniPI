@@ -3,7 +3,7 @@ import { Container, getKeybindings, isViewportTUI, ScrollView, setKeybindings, T
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
-import type { FullscreenExitOutput, TuiMode } from "../src/core/settings-manager.ts";
+import { type FullscreenExitOutput, SettingsManager, type TuiMode } from "../src/core/settings-manager.ts";
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
@@ -107,7 +107,8 @@ describe("createInteractiveTui", () => {
 		}
 	});
 
-	it("replaces the renderer and restores the previous screen for resume-hint exits", async () => {
+	// #9758: invalid settings must not tear down the renderer or block transcript output.
+	it.each<FullscreenExitOutput>(["resume-hint", "transcript"])("switches and exits (%s)", async (exitOutput) => {
 		const terminal = new RecordingTerminal(40, 8);
 		const renderer = createInteractiveTui({
 			tuiMode: "regular",
@@ -116,17 +117,19 @@ describe("createInteractiveTui", () => {
 			terminal,
 		});
 		let stableUi: TUI;
+		let content = "content";
 		const invalidatedModes: TuiMode[] = [];
 		const component: Component & { focused: boolean } = {
 			focused: false,
-			render: () => ["content"],
+			render: () => [content],
 			invalidate: () => invalidatedModes.push(stableUi.mode),
 		};
 		renderer.addChild(component);
 		renderer.setFocus(component);
+		const settingsManager = SettingsManager.inMemory();
 
 		type SwitchContext = {
-			runtimeHost: { session: { settingsManager: { getFullscreenCopyOnSelect: () => boolean } } };
+			runtimeHost: { session: { settingsManager: SettingsManager } };
 			renderer: ReturnType<typeof createInteractiveTui>;
 			ui: TUI;
 			fullscreenLayoutRoot: Component;
@@ -135,7 +138,7 @@ describe("createInteractiveTui", () => {
 			extensionTerminalInputSubscriptions: Set<never>;
 		};
 		const context = Object.assign(Object.create(InteractiveMode.prototype), {
-			runtimeHost: { session: { settingsManager: { getFullscreenCopyOnSelect: () => true } } },
+			runtimeHost: { session: { settingsManager } },
 			renderer,
 			ui: undefined as unknown as TUI,
 			fullscreenLayoutRoot: component,
@@ -152,6 +155,10 @@ describe("createInteractiveTui", () => {
 
 		renderer.start();
 		await terminal.waitForRender();
+		settingsManager.applyOverrides({ mouseWheel: { normalLines: NaN } });
+		expect(() => switchTuiMode.call(context, "fullscreen", false)).toThrow("Invalid mouseWheel.normalLines");
+		expect(terminal.stopCount).toBe(0);
+		settingsManager.applyOverrides({ mouseWheel: { normalLines: 3 } });
 		expect(switchTuiMode.call(context, "fullscreen", false)).toBe(true);
 		await terminal.waitForRender();
 
@@ -162,10 +169,14 @@ describe("createInteractiveTui", () => {
 		expect(invalidatedModes).toEqual(["fullscreen"]);
 		expect([terminal.startCount, terminal.stopCount]).toEqual([2, 1]);
 
-		stopInteractiveTui.call(context, "resume-hint");
+		settingsManager.applyOverrides({ mouseWheel: { normalLines: NaN } });
+		expect(() => settingsManager.getMouseWheelSettings()).toThrow("Invalid mouseWheel.normalLines");
+		content = "transcript after failed validation";
+		stopInteractiveTui.call(context, exitOutput);
 
-		expect(stableUi.mode).toBe("fullscreen");
-		expect([terminal.startCount, terminal.stopCount]).toEqual([2, 2]);
+		expect(stableUi.mode).toBe(exitOutput === "transcript" ? "regular" : "fullscreen");
+		expect([terminal.startCount, terminal.stopCount]).toEqual([2, exitOutput === "transcript" ? 3 : 2]);
+		if (exitOutput === "transcript") expect(terminal.writes.join("")).toContain(content);
 	});
 });
 

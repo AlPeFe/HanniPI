@@ -577,6 +577,7 @@ export class InteractiveMode {
 		this.version = VERSION;
 		this.renderer = createInteractiveTui({
 			tuiMode,
+			mouseWheel: tuiMode === "fullscreen" ? this.settingsManager.getMouseWheelSettings() : undefined,
 			showHardwareCursor: this.settingsManager.getShowHardwareCursor(),
 			logDirectory: getAgentDir(),
 			terminal: options.terminal,
@@ -845,6 +846,7 @@ export class InteractiveMode {
 		const previousUi = this.renderer;
 		if (mode === previousUi.mode) return true;
 		if (previousUi.hasOverlayEntries) return false;
+		const mouseWheel = mode === "fullscreen" ? this.settingsManager.getMouseWheelSettings() : undefined;
 
 		const components = [...previousUi.children];
 		const focus = previousUi.getFocusedComponent();
@@ -863,6 +865,7 @@ export class InteractiveMode {
 
 		const nextUi = createInteractiveTui({
 			tuiMode: mode,
+			mouseWheel,
 			showHardwareCursor,
 			logDirectory: getAgentDir(),
 			terminal,
@@ -1990,10 +1993,18 @@ export class InteractiveMode {
 		this.transcriptScrollView?.setScrollbar(this.settingsManager.getFullscreenScrollbar());
 	}
 
+	private applyMouseWheelSettings(): void {
+		const { normalLines, altLines } = this.settingsManager.getMouseWheelSettings();
+		if (this.renderer instanceof TuiAltScreen) {
+			this.renderer.setWheelScrollLines(normalLines, altLines);
+		}
+	}
+
 	private applyRuntimeSettings(): void {
 		setCapabilityOverrides(this.settingsManager.getTerminalCapabilityOverrides());
 		configureHttpDispatcher(this.settingsManager.getHttpIdleTimeoutMs());
 		this.applyFullscreenScrollbarSetting();
+		this.applyMouseWheelSettings();
 		if (this.renderer instanceof TuiAltScreen) {
 			this.renderer.setCopyOnSelect(this.settingsManager.getFullscreenCopyOnSelect());
 		}
@@ -4789,6 +4800,7 @@ export class InteractiveMode {
 					fullscreenExitOutput: this.settingsManager.getFullscreenExitOutput(),
 					fullscreenScrollbar: this.settingsManager.getFullscreenScrollbar(),
 					fullscreenCopyOnSelect: this.settingsManager.getFullscreenCopyOnSelect(),
+					mouseWheel: this.settingsManager.getMouseWheelSettings(),
 					warnings: this.settingsManager.getWarnings(),
 				},
 				{
@@ -4968,6 +4980,14 @@ export class InteractiveMode {
 					onFullscreenCopyOnSelectChange: (enabled) => {
 						this.settingsManager.setFullscreenCopyOnSelect(enabled);
 						if (this.renderer instanceof TuiAltScreen) this.renderer.setCopyOnSelect(enabled);
+					},
+					onMouseWheelNormalLinesChange: (value) => {
+						this.settingsManager.setMouseWheelNormalLines(value);
+						this.applyMouseWheelSettings();
+					},
+					onMouseWheelAltLinesChange: (value) => {
+						this.settingsManager.setMouseWheelAltLines(value);
+						this.applyMouseWheelSettings();
 					},
 					onWarningsChange: (warnings) => {
 						this.settingsManager.setWarnings(warnings);

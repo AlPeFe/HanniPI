@@ -18,6 +18,7 @@ import {
 	type DefaultProjectTrust,
 	type FullscreenExitOutput,
 	type MermaidRenderingMode,
+	type MouseWheelSettings,
 	type TuiMode,
 	type WarningSettings,
 } from "../../../core/settings-manager.ts";
@@ -27,6 +28,7 @@ import { keyDisplayText } from "./keybinding-hints.ts";
 import { SelectSubmenu, SteppedSubmenu, type SteppedSubmenuStep } from "./settings-submenu.ts";
 
 const MODEL_PICKER_LAYOUT = { minPrimaryColumnWidth: 12, maxPrimaryColumnWidth: 46 };
+const MOUSE_WHEEL_PRESETS = [1, 2, 3, 5, 10, 20, 50];
 
 const THINKING_DESCRIPTIONS: Record<ThinkingLevel, string> = {
 	off: "No reasoning",
@@ -88,6 +90,7 @@ export interface SettingsConfig {
 	fullscreenExitOutput: FullscreenExitOutput;
 	fullscreenScrollbar: ScrollViewScrollbar;
 	fullscreenCopyOnSelect: boolean;
+	mouseWheel?: MouseWheelSettings;
 	warnings: WarningSettings;
 }
 
@@ -126,6 +129,8 @@ export interface SettingsCallbacks {
 	onFullscreenExitOutputChange: (output: FullscreenExitOutput) => void;
 	onFullscreenScrollbarChange: (mode: ScrollViewScrollbar) => void;
 	onFullscreenCopyOnSelectChange: (enabled: boolean) => void;
+	onMouseWheelNormalLinesChange?: (value: number) => void;
+	onMouseWheelAltLinesChange?: (value: number) => void;
 	onWarningsChange: (warnings: WarningSettings) => void;
 	onCancel: () => void;
 }
@@ -454,6 +459,10 @@ export class SettingsSelectorComponent extends Container {
 		const followUpKey = keyDisplayText("app.message.followUp");
 		const cycleThinkingKey = keyDisplayText("app.thinking.cycle");
 		let currentWarnings = { ...config.warnings };
+		const currentMouseWheel = {
+			normalLines: config.mouseWheel?.normalLines ?? 1,
+			altLines: config.mouseWheel?.altLines ?? 5,
+		};
 		const currentModelThinkingLevels = { ...config.modelThinkingLevels };
 		const defaultModelByValue = new Map(
 			config.availableDefaultModels.map((model) => [modelSettingKey(model), model]),
@@ -713,6 +722,51 @@ export class SettingsSelectorComponent extends Container {
 				description: "Automatically copy selected text in fullscreen mode; disable to copy selections with Ctrl+X",
 				currentValue: config.fullscreenCopyOnSelect ? "true" : "false",
 				values: ["true", "false"],
+			},
+			{
+				id: "mouse-wheel",
+				label: "Mouse wheel scrolling",
+				description: "Lines scrolled per wheel event. Fullscreen mode only.",
+				currentValue: "configure",
+				submenu: (_currentValue, done) =>
+					new SettingsList(
+						(
+							[
+								{ id: "normalLines", label: "Normal" },
+								{ id: "altLines", label: "Alt" },
+							] as const
+						).map(({ id, label }) => ({
+							id,
+							label,
+							description: "Lines scrolled per wheel event. Fullscreen mode only.",
+							currentValue: String(currentMouseWheel[id]),
+							submenu: (_currentValue, onDone) => {
+								const current = currentMouseWheel[id];
+								const choices = [...new Set([...MOUSE_WHEEL_PRESETS, current])].sort((a, b) => a - b);
+								return new SelectSubmenu(
+									`Mouse wheel scrolling: ${label}`,
+									"Lines per wheel event. Set custom values in settings.json.",
+									choices.map((value) => ({
+										value: String(value),
+										label: `${value === current ? "✓ " : "  "}${value}`,
+									})),
+									String(current),
+									(selected) => {
+										const value = Number(selected);
+										currentMouseWheel[id] = value;
+										if (id === "normalLines") callbacks.onMouseWheelNormalLinesChange?.(value);
+										else callbacks.onMouseWheelAltLinesChange?.(value);
+										onDone(selected);
+									},
+									() => onDone(),
+								);
+							},
+						})),
+						2,
+						getSettingsListTheme(),
+						() => {},
+						() => done(),
+					),
 			},
 			{
 				id: "theme",

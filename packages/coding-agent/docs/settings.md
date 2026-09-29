@@ -79,6 +79,8 @@ See [Compaction Reference](compaction.md) for trigger, summarization, and valida
 | `fullscreenExitOutput` | `"transcript" \| "resume-hint"` | `"transcript"` | Output printed when fullscreen mode exits. |
 | `fullscreenScrollbar` | `"auto" \| "always" \| "hidden"` | `"auto"` | Fullscreen transcript scrollbar behavior. |
 | `fullscreenCopyOnSelect` | boolean | `true` | Copy selected text automatically in fullscreen mode. |
+| `mouseWheel.normalLines` | number | `1` | Lines per mouse-wheel event in fullscreen mode without Alt. |
+| `mouseWheel.altLines` | number | `5` | Lines per Alt+wheel event in fullscreen mode, independent of `normalLines`. |
 | `editorPaddingX` | number | `0` | Horizontal editor padding from 0 to 3 cells. |
 | `outputPad` | `0 \| 1` | `1` | Horizontal transcript padding. |
 | `autocompleteMaxVisible` | number | `5` | Visible autocomplete entries, from 3 to 20. |
@@ -94,6 +96,8 @@ See [Compaction Reference](compaction.md) for trigger, summarization, and valida
 | `images.blockImages` | boolean | `false` | Prevent images from being sent to models. |
 | `markdown.codeBlockIndent` | string | `"  "` | Prefix used to indent rendered code blocks. |
 | `markdown.mermaid` | `"off" \| "final" \| "streaming"` | `"streaming"` | Mermaid rendering mode. |
+
+Configure **Mouse wheel scrolling** in `/settings`, or edit `settings.json` and run `/reload`. Custom values appear in the picker. Counts are rounded down with a minimum of 1; nonnumbers, nonfinite numbers, and values outside the safe-integer range are rejected.
 
 See [Themes](themes.md) and [Terminal Setup](terminal-setup.md) for format and platform details.
 

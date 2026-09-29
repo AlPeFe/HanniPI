@@ -10,6 +10,93 @@ import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 import { createHarness, type Harness } from "./suite/harness.ts";
 
+function createSettingsConfig(overrides: Partial<SettingsConfig> = {}): SettingsConfig {
+	return {
+		autoCompact: true,
+		defaultModel: "not set",
+		availableDefaultModels: [],
+		showImages: true,
+		imageWidthCells: 60,
+		autoResizeImages: true,
+		blockImages: false,
+		enableSkillCommands: true,
+		steeringMode: "one-at-a-time",
+		followUpMode: "one-at-a-time",
+		transport: "sse",
+		httpIdleTimeoutMs: 60000,
+		cacheWarmingMode: "off",
+		thinkingLevel: "off",
+		availableThinkingLevels: [],
+		modelThinkingLevels: {},
+		currentTheme: "dark",
+		terminalTheme: "dark",
+		availableThemes: [],
+		hideThinkingBlock: false,
+		mermaidRenderingMode: "streaming",
+		showCacheMissNotices: true,
+		collapseChangelog: false,
+		enableInstallTelemetry: false,
+		doubleEscapeAction: "tree",
+		treeFilterMode: "default",
+		showHardwareCursor: false,
+		editorPaddingX: 0,
+		outputPad: 0,
+		autocompleteMaxVisible: 5,
+		quietStartup: false,
+		defaultProjectTrust: "ask",
+		clearOnShrink: false,
+		showTerminalProgress: false,
+		tuiMode: "fullscreen",
+		fullscreenExitOutput: "transcript",
+		fullscreenScrollbar: "auto",
+		fullscreenCopyOnSelect: true,
+		warnings: {},
+		...overrides,
+	};
+}
+
+function createSettingsCallbacks(overrides: Partial<SettingsCallbacks> = {}): SettingsCallbacks {
+	const noop = () => {};
+	return {
+		onAutoCompactChange: noop,
+		onShowImagesChange: noop,
+		onImageWidthCellsChange: noop,
+		onAutoResizeImagesChange: noop,
+		onBlockImagesChange: noop,
+		onEnableSkillCommandsChange: noop,
+		onSteeringModeChange: noop,
+		onFollowUpModeChange: noop,
+		onTransportChange: noop,
+		onHttpIdleTimeoutMsChange: noop,
+		onCacheWarmingModeChange: noop,
+		onModelThinkingLevelChange: noop,
+		onModelThinkingLevelRemove: noop,
+		onThemeChange: noop,
+		onHideThinkingBlockChange: noop,
+		onMermaidRenderingModeChange: noop,
+		onShowCacheMissNoticesChange: noop,
+		onCollapseChangelogChange: noop,
+		onEnableInstallTelemetryChange: noop,
+		onDoubleEscapeActionChange: noop,
+		onTreeFilterModeChange: noop,
+		onShowHardwareCursorChange: noop,
+		onEditorPaddingXChange: noop,
+		onOutputPadChange: noop,
+		onAutocompleteMaxVisibleChange: noop,
+		onQuietStartupChange: noop,
+		onDefaultProjectTrustChange: noop,
+		onClearOnShrinkChange: noop,
+		onShowTerminalProgressChange: noop,
+		onTuiModeChange: noop,
+		onFullscreenExitOutputChange: noop,
+		onFullscreenScrollbarChange: noop,
+		onFullscreenCopyOnSelectChange: noop,
+		onWarningsChange: noop,
+		onCancel: noop,
+		...overrides,
+	};
+}
+
 describe("SettingsSelectorComponent", () => {
 	let harness: Harness | undefined;
 	beforeAll(() => {
@@ -23,25 +110,15 @@ describe("SettingsSelectorComponent", () => {
 	});
 
 	it("cycles through fullscreen settings", () => {
-		const onExitOutputChange = vi.fn();
-		const onScrollbarChange = vi.fn();
-		const onCopyOnSelectChange = vi.fn();
-		const config = {
-			fullscreenExitOutput: "transcript",
-			fullscreenScrollbar: "auto",
-			fullscreenCopyOnSelect: true,
-			warnings: {},
-			defaultModel: "not set",
-			availableDefaultModels: [],
-			availableThinkingLevels: [],
-			modelThinkingLevels: {},
-			availableThemes: [],
-		} as unknown as SettingsConfig;
-		const callbacks = {
+		const onExitOutputChange = vi.fn<SettingsCallbacks["onFullscreenExitOutputChange"]>();
+		const onScrollbarChange = vi.fn<SettingsCallbacks["onFullscreenScrollbarChange"]>();
+		const onCopyOnSelectChange = vi.fn<SettingsCallbacks["onFullscreenCopyOnSelectChange"]>();
+		const config = createSettingsConfig();
+		const callbacks = createSettingsCallbacks({
 			onFullscreenExitOutputChange: onExitOutputChange,
 			onFullscreenScrollbarChange: onScrollbarChange,
 			onFullscreenCopyOnSelectChange: onCopyOnSelectChange,
-		} as unknown as SettingsCallbacks;
+		});
 
 		const cycle = (label: string, count: number) => {
 			const list = new SettingsSelectorComponent(config, callbacks).getSettingsList();
@@ -57,17 +134,37 @@ describe("SettingsSelectorComponent", () => {
 		expect(onCopyOnSelectChange.mock.calls.flat()).toEqual([false, true]);
 	});
 
+	// #9758: custom settings remain selected until the user chooses a preset.
+	it("includes custom wheel values and saves a selected preset", () => {
+		const config = createSettingsConfig({ mouseWheel: { normalLines: 12, altLines: 2 } });
+		const onNormalChange = vi.fn<NonNullable<SettingsCallbacks["onMouseWheelNormalLinesChange"]>>();
+		const onAltChange = vi.fn<NonNullable<SettingsCallbacks["onMouseWheelAltLinesChange"]>>();
+		const callbacks = createSettingsCallbacks({
+			onMouseWheelNormalLinesChange: onNormalChange,
+			onMouseWheelAltLinesChange: onAltChange,
+		});
+		const list = new SettingsSelectorComponent(config, callbacks).getSettingsList();
+		list.selectItem("mouse-wheel");
+		list.handleInput("\r");
+		list.handleInput("\r");
+		expect(stripAnsi(list.render(120).join("\n"))).toMatch(/→ ✓ 12\s*$/m);
+		list.handleInput("\x1b[B");
+		list.handleInput("\r");
+		expect(onNormalChange).toHaveBeenCalledExactlyOnceWith(20);
+		list.handleInput("\x1b[B");
+		list.handleInput("\r");
+		list.handleInput("\x1b[B");
+		list.handleInput("\r");
+		expect(onAltChange).toHaveBeenCalledExactlyOnceWith(3);
+	});
+
 	it("keeps the configured fixed theme marked while browsing", () => {
-		const config = {
-			defaultModel: "not set",
-			availableDefaultModels: [],
-			modelThinkingLevels: {},
+		const config = createSettingsConfig({
 			currentTheme: "dark",
 			terminalTheme: "dark",
 			availableThemes: ["dark", "light"],
-			warnings: {},
-		} as unknown as SettingsConfig;
-		const callbacks = { onThemePreview: vi.fn(), onCancel: () => {} } as unknown as SettingsCallbacks;
+		});
+		const callbacks = createSettingsCallbacks();
 		const list = new SettingsSelectorComponent(config, callbacks).getSettingsList();
 
 		list.selectItem("theme");
@@ -83,16 +180,12 @@ describe("SettingsSelectorComponent", () => {
 	});
 
 	it("keeps a configured automatic theme marked while browsing", () => {
-		const config = {
-			defaultModel: "not set",
-			availableDefaultModels: [],
-			modelThinkingLevels: {},
+		const config = createSettingsConfig({
 			currentTheme: "light/dark",
 			terminalTheme: "dark",
 			availableThemes: ["dark", "light", "other"],
-			warnings: {},
-		} as unknown as SettingsConfig;
-		const callbacks = { onThemePreview: vi.fn(), onCancel: () => {} } as unknown as SettingsCallbacks;
+		});
+		const callbacks = createSettingsCallbacks();
 		const list = new SettingsSelectorComponent(config, callbacks).getSettingsList();
 
 		list.selectItem("theme");
@@ -111,15 +204,16 @@ describe("SettingsSelectorComponent", () => {
 		harness = await createHarness({
 			models: [{ id: "thinking-model", reasoning: true }],
 		});
-		const model = harness.getModel("thinking-model")!;
+		const model = harness.getModel("thinking-model");
+		if (!model) throw new Error("Expected thinking-model in the harness");
 		const modelKey = `${model.provider}/${model.id}`;
-		const config = {
+		const config = createSettingsConfig({
 			defaultModel: modelKey,
 			availableDefaultModels: [model],
 			thinkingLevel: "high",
 			modelThinkingLevels: { [modelKey]: "medium" },
-		} as unknown as SettingsConfig;
-		const callbacks = { onCancel: () => {} } as unknown as SettingsCallbacks;
+		});
+		const callbacks = createSettingsCallbacks();
 		const list = new SettingsSelectorComponent(config, callbacks).getSettingsList();
 
 		list.selectItem("model-thinking");
