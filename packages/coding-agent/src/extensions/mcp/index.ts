@@ -628,7 +628,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 						: `Saved to ${server.entry.source}.`,
 				items: (Object.keys(EXPOSURE_DESCRIPTIONS) as (keyof typeof EXPOSURE_DESCRIPTIONS)[]).map((exposure) => ({
 					value: exposure,
-					label: exposure === current ? `${exposure} (current)` : exposure,
+					label: `${exposure === current ? "✓ " : "  "}${exposure}`,
 					description: EXPOSURE_DESCRIPTIONS[exposure],
 				})),
 				selected: current,
