@@ -1,5 +1,10 @@
+import type { ConversationRecord, Tx } from "../types.ts";
+import { ConversationConfig } from "./config.ts";
+import { GenerationTask } from "./generation.ts";
+import { LiveDoc } from "./live.ts";
 import type {
 	AnyTask,
+	ConversationSetup,
 	HookRegistration,
 	HookScope,
 	HooksOf,
@@ -15,11 +20,24 @@ import type {
 
 const SECTION_KEY = /^[a-z][a-z0-9_-]*$/;
 
+/** Built-in task definitions every registry starts with; they cannot be disposed or replaced. */
+export const BUILTIN_TASKS: readonly AnyTask[] = [GenerationTask];
+
+export const BUILTIN_SETUP_KEY = "pi";
+
+/** Built-in documents: an empty `pi.live`, and for a new conversation the default configuration with every registered tool active. */
+async function builtinSetup(tx: Tx, conversation: ConversationRecord, registry: RegistrySnapshot): Promise<void> {
+	await tx.doc(LiveDoc, conversation.id);
+	if (conversation.parent !== undefined) return;
+	(await tx.doc(ConversationConfig, conversation.id)).activeTools = [...registry.toolNames()];
+}
+
 type Slot<Tool extends ToolRegistration> =
 	| { readonly kind: "tool"; readonly tool: Tool }
 	| { readonly kind: "toolWrap"; readonly name: string; readonly wrapper: ToolWrapper<Tool> }
 	| { readonly kind: "hook"; readonly taskName: string; readonly hook: StoredHook }
 	| { readonly kind: "task"; readonly task: AnyTask }
+	| { readonly kind: "setup"; readonly key: string; readonly setup: ConversationSetup }
 	| { readonly kind: "section"; readonly section: PromptSection<Tool> }
 	| { readonly kind: "sectionWrap"; readonly key: string; readonly wrapper: PromptSectionWrapper<Tool> };
 
@@ -81,6 +99,12 @@ class RegistryState<Tool extends ToolRegistration> implements RegistrySnapshot<T
 			if (record.slot.kind === "task" && record.slot.task.definition.name === name) return record.slot.task;
 		}
 		return undefined;
+	}
+
+	conversationSetups(): readonly { readonly key: string; readonly setup: ConversationSetup }[] {
+		const setups: { key: string; setup: ConversationSetup }[] = [];
+		for (const record of this.records) if (record.slot.kind === "setup") setups.push(record.slot);
+		return setups;
 	}
 
 	tasks(): AnyTask[] {
@@ -158,11 +182,13 @@ class RegistryImpl<Tool extends ToolRegistration> implements Registry<Tool> {
 	#batch: Batch<Tool> | undefined;
 	/** First position of every key ever published; re-registered keys keep it. */
 	readonly #positions = new Map<string, number>();
+	readonly #listeners = new Set<() => void>();
 	#nextPosition = 0;
 
 	readonly tools: Registry<Tool>["tools"];
 	readonly hooks: Registry<Tool>["hooks"];
 	readonly tasks: Registry<Tool>["tasks"];
+	readonly conversations: Registry<Tool>["conversations"];
 	readonly systemPrompt: Registry<Tool>["systemPrompt"];
 
 	constructor() {
@@ -199,6 +225,9 @@ class RegistryImpl<Tool extends ToolRegistration> implements Registry<Tool> {
 			},
 			list: () => this.#current.tasks(),
 		};
+		this.conversations = {
+			setup: (key, setup) => this.#register({ kind: "setup", key, setup }, `setup\0${key}`, `Setup ${key}`),
+		};
 		this.systemPrompt = {
 			section: (key, render, options) => {
 				requireSectionKey(key);
@@ -220,6 +249,11 @@ class RegistryImpl<Tool extends ToolRegistration> implements Registry<Tool> {
 
 	snapshot(): RegistrySnapshot<Tool> {
 		return this.#current;
+	}
+
+	subscribe(listener: () => void): () => void {
+		this.#listeners.add(listener);
+		return () => this.#listeners.delete(listener);
 	}
 
 	batch(register: () => void): Registration {
@@ -305,12 +339,17 @@ class RegistryImpl<Tool extends ToolRegistration> implements Registry<Tool> {
 		this.#current = new RegistryState(records);
 		for (const record of batch.added) record.status = "published";
 		for (const record of batch.disposed) record.status = "disposed";
+		for (const listener of [...this.#listeners]) listener();
 	}
 }
 
-/** Create an empty application-owned registry. */
+/** Create an application-owned registry holding only the built-ins. */
 export function createRegistry<Tool extends ToolRegistration = ToolRegistration>(): Registry<Tool> {
-	return new RegistryImpl<Tool>();
+	const registry = new RegistryImpl<Tool>();
+	// Their registrations are dropped, so nothing can dispose them.
+	for (const task of BUILTIN_TASKS) registry.tasks.add(task);
+	registry.conversations.setup(BUILTIN_SETUP_KEY, builtinSetup);
+	return registry;
 }
 
 function appendTo<T>(map: Map<string, T[]>, key: string, value: T): void {

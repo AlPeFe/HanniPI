@@ -1,8 +1,15 @@
 export { defineDoc, defineDocFamily } from "./documents.ts";
-export { defineEntry } from "./entries.ts";
-export { ReadAfterWrite, StorageRejected } from "./errors.ts";
+export { AssistantEntry, defineEntry, SystemEntry, ToolResultEntry, UserEntry } from "./entries.ts";
+export { ConversationBusy, ReadAfterWrite, StorageRejected } from "./errors.ts";
 export { ConversationConfig, type ConversationConfigState } from "./harness/config.ts";
+export {
+	type GenerationCheckpoint,
+	type GenerationInput,
+	type GenerationResult,
+	GenerationTask,
+} from "./harness/generation.ts";
 export { Harness } from "./harness/harness.ts";
+export { LiveDoc, type LiveState } from "./harness/live.ts";
 export { createRegistry } from "./harness/registry.ts";
 export type {
 	AnyTask,
@@ -11,8 +18,10 @@ export type {
 	ConversationCreateOptions,
 	ConversationHandle,
 	ConversationInit,
-	DocumentReader,
-	Entry,
+	ConversationRetryPolicy,
+	ConversationSetup,
+	ConversationStreamOptions,
+	HarnessInspection,
 	HarnessOptions,
 	HookRegistration,
 	HookScope,
@@ -31,6 +40,7 @@ export type {
 	SettledTask,
 	Submission,
 	SubmissionDraft,
+	TaskInspection,
 	ToolControl,
 	ToolExecutionApi,
 	ToolExecutionResult,
@@ -40,6 +50,7 @@ export type {
 } from "./harness/types.ts";
 export { createSession } from "./session/session.ts";
 export { MemoryStorage } from "./storage/memory.ts";
+export { defineTask } from "./tasks.ts";
 export type {
 	CheckpointInfo,
 	CommitChange,
@@ -66,10 +77,12 @@ export type {
 	DocumentObserver,
 	DocumentPoint,
 	DocumentQuery,
+	DocumentReader,
 	DocumentRecord,
 	DocumentSemantics,
 	DocumentState,
 	DocumentWatch,
+	Entry,
 	EntryDraft,
 	EntryId,
 	EntryQuery,
@@ -77,10 +90,13 @@ export type {
 	Id,
 	JsonObject,
 	LatestConversationSemantics,
+	NextTaskState,
 	Page,
+	PhaseHandler,
 	RewindableConversationDocFamilyToken,
 	RewindableConversationDocToken,
 	RewindableConversationSemantics,
+	RunningTask,
 	Seq,
 	Session,
 	SessionDocFamilyToken,
@@ -90,7 +106,9 @@ export type {
 	StoredDocument,
 	SubmissionCreate,
 	SubmissionId,
+	SubmissionQuery,
 	SubmissionRecord,
+	SubmissionSettlement,
 	TableCommitChange,
 	Task,
 	TaskDefinition,
@@ -102,8 +120,11 @@ export type {
 	TaskOutcomeError,
 	TaskQuery,
 	TaskRecord,
+	TaskRuntime,
 	TaskState,
 	Tx,
+	TypedEntry,
+	TypedEntryDraft,
 	WatchEnd,
 	WatchHandle,
 } from "./types.ts";
