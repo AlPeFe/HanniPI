@@ -363,7 +363,10 @@ export function createLlamaProvider(managed: ManagedLlama = createManagedLlama()
 				streamSimple(requestModel, context, requestOptions),
 			),
 		classify: async (model, context, options) => {
-			if (model.baseUrl !== MANAGED_LLAMA_SERVER_URL) return classifier.classify(model, context, options);
+			// Auth resolution replaces the catalog URL with the inference URL (`/v1`), so accept both placeholder forms.
+			if (model.baseUrl !== MANAGED_LLAMA_SERVER_URL && model.baseUrl !== MANAGED_INFERENCE_URL) {
+				return classifier.classify(model, context, options);
+			}
 			let server: ManagedLlamaServerInfo;
 			try {
 				server = await managed.acquire(options?.signal);

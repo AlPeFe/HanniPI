@@ -345,6 +345,23 @@ describe("managed llama.cpp provider", () => {
 		expect(calls).toEqual(["probe", "acquire", "acquire"]);
 		expect(requests.at(-1)?.authorization).toBe("Bearer secret");
 		expect(requests.at(-1)?.url.startsWith("/v1")).toBe(false);
+
+		// The model runtime applies the auth baseUrl (the `/v1` inference placeholder) before classifying.
+		const resolvedClassification = await provider.classify!(
+			{
+				...(classifierModel as ClassifierModel<"llama-cpp-classify">),
+				baseUrl: `${MANAGED_LLAMA_SERVER_URL}/v1`,
+			},
+			{
+				state: {},
+				questions: { ok: { type: "bool", instructions: "ok?", criteria: { true: "yes", false: "no" } } },
+			},
+			{ apiKey: "managed" },
+		);
+		expect(resolvedClassification.stopReason).toBe("error");
+		expect(calls).toEqual(["probe", "acquire", "acquire", "acquire"]);
+		expect(requests.at(-1)?.authorization).toBe("Bearer secret");
+		expect(requests.at(-1)?.url.startsWith("/v1")).toBe(false);
 	});
 
 	it("reports a managed server that cannot start as a classifier error", async () => {
