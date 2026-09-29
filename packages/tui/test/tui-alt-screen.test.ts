@@ -334,6 +334,49 @@ describe("TuiAltScreen", () => {
 		tui.stop();
 	});
 
+	// #9758: only omitted constructor options receive defaults.
+	it("rejects invalid supplied wheel options", () => {
+		const terminal = new VirtualTerminal();
+		assert.throws(
+			() => new TuiAltScreen(terminal, undefined, undefined, { wheelScrollLines: NaN }),
+			/Invalid wheelScrollLines/,
+		);
+		assert.throws(
+			() => new TuiAltScreen(terminal, undefined, undefined, { altWheelScrollLines: Infinity }),
+			/Invalid altWheelScrollLines/,
+		);
+	});
+
+	it("uses independent constructor and runtime wheel counts, including a smaller Alt count", async () => {
+		// #9758: explicit Alt is a count, not a multiplier.
+		const terminal = new VirtualTerminal(20, 4);
+		const tui = new TuiAltScreen(terminal, undefined, undefined, { wheelScrollLines: 3, altWheelScrollLines: 7 });
+		const deltas: Array<number | undefined> = [];
+		tui.addChild(
+			new MouseRegion(new Text("wheel target", 0, 0), (event) => {
+				if (event.type !== "wheel") return undefined;
+				deltas.push(event.wheelDelta);
+				return { handled: true };
+			}),
+		);
+		tui.start();
+		try {
+			await terminal.waitForRender();
+			assert.throws(() => tui.setWheelScrollLines(NaN, Infinity), /Invalid wheelScrollLines/);
+			assert.throws(() => tui.setWheelScrollLines(9, Infinity), /Invalid altWheelScrollLines/);
+			terminal.sendInput("\x1b[<64;1;1M");
+			terminal.sendInput("\x1b[<72;1;1M");
+			assert.deepStrictEqual(deltas, [-3, -7]);
+
+			tui.setWheelScrollLines(107, 2);
+			terminal.sendInput("\x1b[<64;1;1M");
+			terminal.sendInput("\x1b[<72;1;1M");
+			assert.deepStrictEqual(deltas.slice(2), [-107, -2]);
+		} finally {
+			tui.stop();
+		}
+	});
+
 	it("does not vertically redispatch misses through horizontal layout containers", async () => {
 		const terminal = new VirtualTerminal(20, 2);
 		const tui = new TuiAltScreen(terminal);

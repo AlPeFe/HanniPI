@@ -97,6 +97,13 @@ export function dispatchMouseEvent(component: Component, event: TuiMouseEvent): 
 	};
 }
 
+/** Floor wheel counts to safe integers with a minimum of 1; return undefined for invalid input. */
+export function normalizeWheelScrollLines(value: unknown): number | undefined {
+	if (typeof value !== "number") return undefined;
+	const lines = Math.floor(value);
+	return Number.isSafeInteger(lines) ? Math.max(1, lines) : undefined;
+}
+
 /** Recreate local coordinates for a previously dispatched mouse target. */
 export function retargetMouseEvent(event: TuiMouseEvent, target: TuiMouseDispatchTarget): TuiMouseEvent {
 	return {

@@ -36,6 +36,7 @@ import {
 	CURSOR_MARKER,
 	compositeTuiLine,
 	dispatchMouseEvent,
+	normalizeWheelScrollLines,
 	type OverlayHandle,
 	retargetMouseEvent,
 	TuiBase,
@@ -164,8 +165,13 @@ interface SearchHighlightRange {
 }
 
 export interface TuiAltScreenOptions {
-	/** Number of logical lines moved for each mouse-wheel event. */
+	/** Normal wheel count: floored to a safe integer, minimum 1. Defaults to 1; invalid values throw. */
 	wheelScrollLines?: number;
+	/**
+	 * Independent Alt+mouse-wheel count: floor to a safe integer with a minimum of 1.
+	 * Defaults to normalized normal times 5, capped at Number.MAX_SAFE_INTEGER. Invalid values throw.
+	 */
+	altWheelScrollLines?: number;
 	/** Capture mouse events for viewport scrolling and application-owned text selection. */
 	mouse?: boolean;
 	/** Style a non-current transcript search match. */
@@ -236,7 +242,9 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		x: number;
 		y: number;
 	};
-	private readonly wheelScrollLines: number;
+	// Initialized together by the constructor's setWheelScrollLines call.
+	private wheelScrollLines!: number;
+	private altWheelScrollLines!: number;
 	private readonly mouseEnabled: boolean;
 	private readonly searchMatchStyle: (text: string) => string;
 	private readonly searchCurrentMatchStyle: (text: string) => string;
@@ -263,7 +271,16 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		};
 		this.implicitScrollView = new ScrollView(this.implicitDocument, { follow: "end", primary: true });
 		this.flashes = new AltScreenFlashContainer(() => this.requestRender());
-		this.wheelScrollLines = Math.max(1, Math.floor(options.wheelScrollLines ?? 1));
+		const { wheelScrollLines = 1 } = options;
+		this.setWheelScrollLines(
+			wheelScrollLines,
+			options.altWheelScrollLines === undefined
+				? Math.min(
+						Number.MAX_SAFE_INTEGER,
+						(normalizeWheelScrollLines(wheelScrollLines) ?? 1) * ALT_WHEEL_SCROLL_MULTIPLIER,
+					)
+				: options.altWheelScrollLines,
+		);
 		this.mouseEnabled = options.mouse ?? true;
 		this.searchMatchStyle = options.searchMatchStyle ?? ((text) => `\x1b[4m${text}\x1b[24m`);
 		this.searchCurrentMatchStyle = options.searchCurrentMatchStyle ?? ((text) => `\x1b[1;7m${text}\x1b[22;27m`);
@@ -282,6 +299,19 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 	get isFollowingOutput(): boolean {
 		return this.getPrimaryScrollView().isFollowingEnd;
+	}
+
+	/**
+	 * Set independent normal and Alt wheel counts, floored to safe integers with a minimum of 1.
+	 * Invalid values throw without changing either count.
+	 */
+	setWheelScrollLines(normalLines: number, altLines: number): void {
+		const normal = normalizeWheelScrollLines(normalLines);
+		const alt = normalizeWheelScrollLines(altLines);
+		if (normal === undefined) throw new Error(`Invalid wheelScrollLines: ${String(normalLines)}`);
+		if (alt === undefined) throw new Error(`Invalid altWheelScrollLines: ${String(altLines)}`);
+		this.wheelScrollLines = normal;
+		this.altWheelScrollLines = alt;
 	}
 
 	getCopyOnSelect(): boolean {
@@ -969,7 +999,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 	private getWheelScrollLines(button: number): number {
 		// SGR mouse button codes use bit 3 (value 8) for the Alt modifier.
-		return (button & 8) !== 0 ? this.wheelScrollLines * ALT_WHEEL_SCROLL_MULTIPLIER : this.wheelScrollLines;
+		return (button & 8) !== 0 ? this.altWheelScrollLines : this.wheelScrollLines;
 	}
 
 	private routeWheel(event: WheelEvent): void {

@@ -150,6 +150,7 @@ export {
 	type Focusable,
 	isFocusable,
 	isViewportTUI,
+	normalizeWheelScrollLines,
 	type OverlayAnchor,
 	type OverlayBounds,
 	type OverlayHandle,

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `TuiAltScreenOptions.altWheelScrollLines` for independent Alt+wheel counts and `TuiAltScreen.setWheelScrollLines(normalLines, altLines)` for runtime updates ([#9758](https://github.com/earendil-works/pi/issues/9758)).
+
 ### Fixed
 
 - Fixed `/skill` autocomplete appearing empty when loaded skill names did not contain the letters in `skill` ([#9944](https://github.com/earendil-works/pi/issues/9944)).
