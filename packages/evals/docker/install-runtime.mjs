@@ -2,8 +2,8 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { installConsumer } from "../../../scripts/artifact-consumer.mjs";
-import { produceArtifactSet } from "../../../scripts/artifact-set.mjs";
+import { installConsumer } from "../../../scripts/local-package-install.mjs";
+import { produceArtifactSet } from "../../../scripts/package-artifacts.mjs";
 import { codingAgentName } from "../../../scripts/coding-agent-smoke.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");

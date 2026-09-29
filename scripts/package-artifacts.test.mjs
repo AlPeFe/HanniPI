@@ -4,7 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
 import test from "node:test";
-import { prepareOutputDirectory, produceArtifactSet, readArtifactSet } from "./artifact-set.mjs";
+import { prepareOutputDirectory, produceArtifactSet, readArtifactSet } from "./package-artifacts.mjs";
 
 function writePackage(directory, manifest, files) {
 	mkdirSync(directory, { recursive: true });
@@ -16,7 +16,7 @@ function writePackage(directory, manifest, files) {
 }
 
 test("produces a verified, content-addressed artifact set", (t) => {
-	const temporaryRoot = mkdtempSync(join(tmpdir(), "pi-artifact-set-test-"));
+	const temporaryRoot = mkdtempSync(join(tmpdir(), "pi-package-artifacts-test-"));
 	t.after(() => rmSync(temporaryRoot, { recursive: true, force: true }));
 	const repoRoot = join(temporaryRoot, "repo with spaces");
 	mkdirSync(repoRoot);

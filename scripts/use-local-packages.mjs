@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { resolve } from "node:path";
-import { wireConsumer } from "./artifact-consumer.mjs";
-import { readArtifactSet } from "./artifact-set.mjs";
+import { wireConsumer } from "./local-package-install.mjs";
+import { readArtifactSet } from "./package-artifacts.mjs";
 
 function printUsage() {
 	console.log(`Usage: node scripts/use-local-packages.mjs --manifest <path> --consumer <dir> --package <name> [--package <name> ...]

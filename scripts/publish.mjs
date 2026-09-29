@@ -2,7 +2,7 @@
 
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { produceArtifactSet } from "./artifact-set.mjs";
+import { produceArtifactSet } from "./package-artifacts.mjs";
 import { getPublicWorkspacePackages } from "./release-packages.mjs";
 import { execNpmSync } from "./npm-command.mjs";
 

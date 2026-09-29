@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { resolve } from "node:path";
-import { produceArtifactSet } from "./artifact-set.mjs";
+import { produceArtifactSet } from "./package-artifacts.mjs";
 
 function printUsage() {
 	console.log(`Usage: node scripts/pack-packages.mjs --out <dir> [options]

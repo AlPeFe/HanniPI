@@ -4,8 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { installConsumer, smokeTestNpmConsumer, wireConsumer } from "./artifact-consumer.mjs";
-import { produceArtifactSet } from "./artifact-set.mjs";
+import { installConsumer, smokeTestNpmConsumer, wireConsumer } from "./local-package-install.mjs";
+import { produceArtifactSet } from "./package-artifacts.mjs";
 
 function writePackage(directory, manifest, files) {
 	mkdirSync(directory, { recursive: true });
@@ -17,7 +17,7 @@ function writePackage(directory, manifest, files) {
 }
 
 function createArtifactSet(t) {
-	const temporaryRoot = mkdtempSync(join(tmpdir(), "pi-artifact-consumer-test-"));
+	const temporaryRoot = mkdtempSync(join(tmpdir(), "pi-local-package-install-test-"));
 	t.after(() => rmSync(temporaryRoot, { recursive: true, force: true }));
 	const root = join(temporaryRoot, "fixture with spaces");
 	const repoRoot = join(root, "repo");
