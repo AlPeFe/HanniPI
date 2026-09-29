@@ -6,13 +6,9 @@ import { execNpmSync } from "./npm-command.mjs";
 
 const dependencySections = ["dependencies", "devDependencies", "optionalDependencies"];
 
-function normalizePath(path) {
-	return path.replaceAll("\\", "/");
-}
-
 function createFileSpecifier(fromDirectory, path) {
 	const relativePath = relative(fromDirectory, path);
-	return isAbsolute(relativePath) ? pathToFileURL(path).href : `file:./${normalizePath(relativePath)}`;
+	return isAbsolute(relativePath) ? pathToFileURL(path).href : `file:./${relativePath.replaceAll("\\", "/")}`;
 }
 
 function detectIndentation(contents) {

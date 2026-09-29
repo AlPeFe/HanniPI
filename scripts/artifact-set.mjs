@@ -8,10 +8,6 @@ import { execNpmSync } from "./npm-command.mjs";
 
 const manifestSchemaVersion = 1;
 
-function normalizePath(path) {
-	return path.replaceAll("\\", "/");
-}
-
 function isInsidePath(child, parent) {
 	const relativePath = relative(parent, child);
 	return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
@@ -66,6 +62,9 @@ export function prepareOutputDirectory(outDir, options) {
 	if (dirname(outputDirectory) === outputDirectory || isInsidePath(repoRoot, outputDirectory)) {
 		throw new Error(`Output directory must not be the repository, its ancestor, or a filesystem root: ${outputDirectory}`);
 	}
+	if (isInsidePath(outputDirectory, repoRoot) && !isInsidePath(outputDirectory, join(repoRoot, ".artifacts"))) {
+		throw new Error(`Repository-local output directory must be inside ${join(repoRoot, ".artifacts")}: ${outputDirectory}`);
+	}
 	if (existsSync(outputDirectory)) {
 		if (!options.force) throw new Error(`Output directory already exists. Use --force to replace it: ${outputDirectory}`);
 		rmSync(outputDirectory, { force: true, recursive: true });
@@ -76,6 +75,7 @@ export function prepareOutputDirectory(outDir, options) {
 
 export function produceArtifactSet({ repoRoot, outDir, build = true, offlineModelData = false, force = false, source }) {
 	const root = resolve(repoRoot);
+	const artifactSource = source === undefined ? getGitSource(root) : source;
 	const artifactDirectory = prepareOutputDirectory(outDir, { force, repoRoot: root });
 	if (build) {
 		execNpmSync(["run", "clean"], { cwd: root, stdio: "inherit" });
@@ -85,12 +85,12 @@ export function produceArtifactSet({ repoRoot, outDir, build = true, offlineMode
 	const packedPackages = packPackages(packages, join(artifactDirectory, "tarballs"));
 	const manifest = {
 		schemaVersion: manifestSchemaVersion,
-		source: source === undefined ? getGitSource(root) : source,
+		source: artifactSource,
 		packages: packedPackages
 			.map(({ name, version, tarballPath, integrity }) => ({
 				name,
 				version,
-				tarball: normalizePath(relative(artifactDirectory, tarballPath)),
+				tarball: relative(artifactDirectory, tarballPath).replaceAll("\\", "/"),
 				integrity,
 			}))
 			.sort((left, right) => left.name.localeCompare(right.name)),

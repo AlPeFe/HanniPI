@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
 import test from "node:test";
@@ -21,7 +21,6 @@ test("produces a verified, content-addressed artifact set", (t) => {
 	const repoRoot = join(temporaryRoot, "repo with spaces");
 	mkdirSync(repoRoot);
 	writeFileSync(join(repoRoot, "package.json"), '{"name":"fixture","private":true}\n');
-	writeFileSync(join(repoRoot, ".gitignore"), ".artifacts/\n");
 	writePackage(
 		join(repoRoot, "packages", "shared"),
 		{ name: "@pi-package-test/shared", version: "1.0.0", files: ["dist"] },
@@ -56,6 +55,12 @@ test("produces a verified, content-addressed artifact set", (t) => {
 
 	appendFileSync(artifactSet.packages[0].tarballPath, "corrupt");
 	assert.throws(() => readArtifactSet(artifactSet.manifestPath), /integrity mismatch/);
+	const packageJsonPath = join(repoRoot, "packages", "shared", "package.json");
+	assert.throws(
+		() => prepareOutputDirectory(join(repoRoot, "packages", "shared"), { force: true, repoRoot }),
+		/Repository-local output directory must be inside.*\.artifacts/,
+	);
+	assert.equal(existsSync(packageJsonPath), true);
 	assert.throws(
 		() => prepareOutputDirectory(repoRoot, { force: true, repoRoot }),
 		/repository, its ancestor, or a filesystem root/,
