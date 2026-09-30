@@ -1,40 +1,41 @@
 #!/usr/bin/env node
 
 import { resolve } from "node:path";
+import { parseArgs } from "node:util";
 import { wireConsumer } from "./local-package-install.mjs";
 import { readArtifactSet } from "./package-artifacts.mjs";
 
 function printUsage() {
-	console.log(`Usage: node scripts/use-local-packages.mjs --manifest <path> --consumer <dir> --package <name> [--package <name> ...]
+	console.log(`Usage: node scripts/use-local-packages.mjs --manifest <path> --consumer <dir> --package <name> [--package <name> ...] [--package-manager npm|pnpm]
 
-Updates an external npm project's package.json to use direct packages and all
-transitive Pi packages from a local package artifact set.
+Updates an external project's package configuration to use direct packages and
+all transitive Pi packages from a local package artifact set. Defaults to npm.
 `);
 }
 
-const options = { packageNames: [] };
-const args = process.argv.slice(2);
-for (let i = 0; i < args.length; i++) {
-	const arg = args[i];
-	if (arg === "--help") {
-		printUsage();
-		process.exit(0);
-	}
-	if (arg !== "--manifest" && arg !== "--consumer" && arg !== "--package") throw new Error(`Unknown option: ${arg}`);
-	const value = args[i + 1];
-	if (!value || value.startsWith("--")) throw new Error(`${arg} requires a value`);
-	i++;
-	if (arg === "--manifest") options.manifest = value;
-	else if (arg === "--consumer") options.consumer = value;
-	else options.packageNames.push(value);
+const { values } = parseArgs({
+	options: {
+		consumer: { type: "string" },
+		help: { type: "boolean", default: false },
+		manifest: { type: "string" },
+		package: { type: "string", multiple: true, default: [] },
+		"package-manager": { type: "string", default: "npm" },
+	},
+});
+if (values.help) {
+	printUsage();
+	process.exit(0);
 }
-if (!options.manifest) throw new Error("--manifest is required");
-if (!options.consumer) throw new Error("--consumer is required");
-if (options.packageNames.length === 0) throw new Error("At least one --package is required");
+if (!values.manifest) throw new Error("--manifest is required");
+if (!values.consumer) throw new Error("--consumer is required");
+if (values.package.length === 0) throw new Error("At least one --package is required");
+if (values["package-manager"] !== "npm" && values["package-manager"] !== "pnpm") {
+	throw new Error(`Unsupported package manager: ${values["package-manager"]}`);
+}
 
-const artifactSet = readArtifactSet(resolve(options.manifest));
-const consumerDirectory = resolve(options.consumer);
-wireConsumer({ artifactSet, consumerDirectory, packageNames: options.packageNames });
+const artifactSet = readArtifactSet(resolve(values.manifest));
+const consumerDirectory = resolve(values.consumer);
+wireConsumer({ artifactSet, consumerDirectory, packageManager: values["package-manager"], packageNames: values.package });
 
 console.log(`Updated ${consumerDirectory}/package.json from ${artifactSet.manifestPath}`);
-console.log("Run npm install --ignore-scripts in the consumer project.");
+console.log(`Run ${values["package-manager"]} install --ignore-scripts in the consumer project.`);

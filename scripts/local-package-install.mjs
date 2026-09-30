@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { parseDocument } from "yaml";
 import { execNpmSync } from "./npm-command.mjs";
 
 const dependencySections = ["dependencies", "devDependencies", "optionalDependencies"];
@@ -92,7 +93,27 @@ function verifyLocalResolutions(directory, artifactSet, directPackageName) {
 	if (!resolvedNames.has(directPackageName)) throw new Error(`${directPackageName} is missing from the consumer lockfile`);
 }
 
-export function wireConsumer({ artifactSet, consumerDirectory, packageNames }) {
+function preparePnpmWorkspace(consumerDirectory, specifiers) {
+	const workspacePath = join(consumerDirectory, "pnpm-workspace.yaml");
+	const contents = existsSync(workspacePath) ? readFileSync(workspacePath, "utf8") : "";
+	const document = parseDocument(contents);
+	if (document.errors.length > 0) {
+		throw new Error(`Invalid pnpm workspace file ${workspacePath}: ${document.errors.map((error) => error.message).join("; ")}`);
+	}
+	const workspace = document.toJS();
+	if (workspace !== null && (typeof workspace !== "object" || Array.isArray(workspace))) {
+		throw new Error(`Invalid pnpm workspace file ${workspacePath}: root must be a mapping`);
+	}
+	if (workspace?.overrides !== undefined && (typeof workspace.overrides !== "object" || workspace.overrides === null || Array.isArray(workspace.overrides))) {
+		throw new Error(`Invalid pnpm workspace file ${workspacePath}: overrides must be a mapping`);
+	}
+	if (document.contents === null) document.contents = document.createNode({});
+	for (const [name, specifier] of Object.entries(specifiers)) document.setIn(["overrides", name], specifier);
+	return { contents: String(document), path: workspacePath };
+}
+
+export function wireConsumer({ artifactSet, consumerDirectory, packageNames, packageManager = "npm" }) {
+	if (packageManager !== "npm" && packageManager !== "pnpm") throw new Error(`Unsupported package manager: ${packageManager}`);
 	if (packageNames.length === 0) throw new Error("At least one package is required");
 	const packageJsonPath = join(consumerDirectory, "package.json");
 	if (!existsSync(packageJsonPath)) throw new Error(`Consumer package.json does not exist: ${packageJsonPath}`);
@@ -117,8 +138,10 @@ export function wireConsumer({ artifactSet, consumerDirectory, packageNames }) {
 		}
 		manifest[targetSection] = { ...manifest[targetSection], [name]: specifiers[name] };
 	}
-	manifest.overrides = { ...manifest.overrides, ...specifiers };
+	if (packageManager === "npm") manifest.overrides = { ...manifest.overrides, ...specifiers };
+	const pnpmWorkspace = packageManager === "pnpm" ? preparePnpmWorkspace(consumerDirectory, specifiers) : undefined;
 	writeFileSync(packageJsonPath, `${JSON.stringify(manifest, null, detectIndentation(contents))}\n`);
+	if (pnpmWorkspace) writeFileSync(pnpmWorkspace.path, pnpmWorkspace.contents);
 	return manifest;
 }
 

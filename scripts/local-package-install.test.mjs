@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { parse } from "yaml";
 import { installConsumer, smokeTestNpmConsumer, wireConsumer } from "./local-package-install.mjs";
 import { produceArtifactSet } from "./package-artifacts.mjs";
 
@@ -134,8 +136,8 @@ test("installs a package as the only direct dependency", (t) => {
 	const { artifactSet, root } = createArtifactSet(t);
 	const unsupportedDirectory = join(root, "unsupported-consumer");
 	assert.throws(
-		() => installConsumer({ artifactSet, directory: unsupportedDirectory, packageManager: "pnpm", packageNames: ["@pi-package-test/target"] }),
-		/Unsupported package manager: pnpm/,
+		() => installConsumer({ artifactSet, directory: unsupportedDirectory, packageManager: "yarn", packageNames: ["@pi-package-test/target"] }),
+		/Unsupported package manager: yarn/,
 	);
 	assert.equal(existsSync(unsupportedDirectory), false);
 	const consumerDirectory = join(root, "isolated-consumer");
@@ -168,4 +170,46 @@ test("installs a package as the only direct dependency", (t) => {
 		() => smokeTestNpmConsumer({ artifactSet, directory: consumerDirectory, packageName: "@pi-package-test/target" }),
 		/Invalid npm lockfile/,
 	);
+});
+
+test("wires and installs a pnpm consumer without registry fallbacks", (t) => {
+	const { artifactSet, root } = createArtifactSet(t);
+	const consumerDirectory = join(root, "pnpm-consumer");
+	mkdirSync(consumerDirectory);
+	writeFileSync(join(consumerDirectory, "package.json"), '{"private":true,"type":"module"}\n');
+	writeFileSync(join(consumerDirectory, "pnpm-workspace.yaml"), "# existing workspace comment\npackages: []\noverrides:\n  existing: 1.2.3\n");
+	wireConsumer({
+		artifactSet,
+		consumerDirectory,
+		packageManager: "pnpm",
+		packageNames: ["@pi-package-test/target"],
+	});
+
+	const manifest = JSON.parse(readFileSync(join(consumerDirectory, "package.json"), "utf8"));
+	assert.deepEqual(Object.keys(manifest.dependencies), ["@pi-package-test/target"]);
+	assert.equal(manifest.overrides, undefined);
+	const workspaceContents = readFileSync(join(consumerDirectory, "pnpm-workspace.yaml"), "utf8");
+	assert.match(workspaceContents, /^# existing workspace comment/m);
+	const workspace = parse(workspaceContents);
+	assert.equal(workspace.overrides.existing, "1.2.3");
+	for (const artifact of artifactSet.packages) {
+		assert.ok(workspace.overrides[artifact.name].endsWith(basename(artifact.tarballPath)), `${artifact.name} override must reference its artifact`);
+	}
+
+	const pnpmCli = fileURLToPath(new URL("../node_modules/pnpm/bin/pnpm.mjs", import.meta.url));
+	execFileSync(process.execPath, [pnpmCli, "install", "--prod", "--ignore-scripts", "--offline"], {
+		cwd: consumerDirectory,
+		stdio: "pipe",
+		timeout: 300_000,
+	});
+	const marker = execFileSync(process.execPath, ["--input-type=module", "--eval", 'import("@pi-package-test/target").then(({ marker }) => console.log(marker))'], {
+		cwd: consumerDirectory,
+		encoding: "utf8",
+	});
+	assert.equal(marker.trim(), "local artifact");
+	const lockContents = readFileSync(join(consumerDirectory, "pnpm-lock.yaml"), "utf8");
+	assert.doesNotMatch(lockContents, /https?:\/\//);
+	for (const packageName of ["@pi-package-test/target", "@pi-package-test/shared"]) {
+		assert.ok(lockContents.includes(basename(artifactSet.getPackage(packageName).tarballPath)), `${packageName} lock entry must reference its artifact`);
+	}
 });

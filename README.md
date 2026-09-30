@@ -73,8 +73,8 @@ npm run pack:packages -- --out .artifacts/pi-packages
 This refreshes model data before building `pi-ai`. To avoid network access when
 model data is already hydrated, pass `--offline-model-data`.
 
-Then configure an external npm project to consume one package and resolve all
-of its Pi dependencies from the same artifact set:
+Then configure an external project to consume one package and resolve all of
+its Pi dependencies from the same artifact set. npm is the default:
 
 ```bash
 node scripts/use-local-packages.mjs \
@@ -86,10 +86,23 @@ cd ../my-project
 npm install --ignore-scripts
 ```
 
+For a pnpm project, point `--consumer` at the workspace root:
+
+```bash
+node scripts/use-local-packages.mjs \
+  --manifest .artifacts/pi-packages/manifest.json \
+  --consumer ../my-project \
+  --package @earendil-works/pi-agent-core \
+  --package-manager pnpm
+cd ../my-project
+pnpm install --ignore-scripts
+```
+
 Repeat `--package` for each direct dependency. The command updates the
-consumer's `package.json` with content-addressed local `file:` references and
-npm overrides. Keep the artifact directory available while installing or
-updating the consumer. Re-run both commands after changing Pi source.
+consumer's `package.json` with content-addressed local `file:` references. It
+writes transitive overrides to `package.json` for npm or `pnpm-workspace.yaml`
+for pnpm. Keep the artifact directory available while installing or updating
+the consumer. Re-run both commands after changing Pi source.
 
 ## Building standalone binaries from release source
 

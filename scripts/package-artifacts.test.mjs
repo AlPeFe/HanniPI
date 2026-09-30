@@ -4,7 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
 import test from "node:test";
-import { prepareOutputDirectory, produceArtifactSet, readArtifactSet } from "./package-artifacts.mjs";
+import { produceArtifactSet, readArtifactSet } from "./package-artifacts.mjs";
 
 function writePackage(directory, manifest, files) {
 	mkdirSync(directory, { recursive: true });
@@ -57,20 +57,20 @@ test("produces a verified, content-addressed artifact set", (t) => {
 	assert.throws(() => readArtifactSet(artifactSet.manifestPath), /integrity mismatch/);
 	const packageJsonPath = join(repoRoot, "packages", "shared", "package.json");
 	assert.throws(
-		() => prepareOutputDirectory(join(repoRoot, "packages", "shared"), { force: true, repoRoot }),
+		() => produceArtifactSet({ build: false, force: true, outDir: join(repoRoot, "packages", "shared"), repoRoot }),
 		/Repository-local output directory must be inside.*\.artifacts/,
 	);
 	assert.equal(existsSync(packageJsonPath), true);
 	assert.throws(
-		() => prepareOutputDirectory(repoRoot, { force: true, repoRoot }),
+		() => produceArtifactSet({ build: false, force: true, outDir: repoRoot, repoRoot }),
 		/repository, its ancestor, or a filesystem root/,
 	);
 	assert.throws(
-		() => prepareOutputDirectory(temporaryRoot, { force: true, repoRoot }),
+		() => produceArtifactSet({ build: false, force: true, outDir: temporaryRoot, repoRoot }),
 		/repository, its ancestor, or a filesystem root/,
 	);
 	assert.throws(
-		() => prepareOutputDirectory(parse(repoRoot).root, { force: true, repoRoot }),
+		() => produceArtifactSet({ build: false, force: true, outDir: parse(repoRoot).root, repoRoot }),
 		/repository, its ancestor, or a filesystem root/,
 	);
 });

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { resolve } from "node:path";
+import { parseArgs } from "node:util";
 import { produceArtifactSet } from "./package-artifacts.mjs";
 
 function printUsage() {
@@ -17,28 +18,28 @@ Options:
 `);
 }
 
-const options = { build: true, force: false, offlineModelData: false, outDir: undefined };
-const args = process.argv.slice(2);
-for (let i = 0; i < args.length; i++) {
-	const arg = args[i];
-	if (arg === "--help") {
-		printUsage();
-		process.exit(0);
-	}
-	if (arg === "--force") options.force = true;
-	else if (arg === "--offline-model-data") options.offlineModelData = true;
-	else if (arg === "--skip-build") options.build = false;
-	else if (arg === "--out") {
-		const outDir = args[i + 1];
-		if (!outDir || outDir.startsWith("--")) throw new Error("--out requires a directory");
-		options.outDir = outDir;
-		i++;
-	}
-	else throw new Error(`Unknown option: ${arg}`);
+const { values } = parseArgs({
+	options: {
+		force: { type: "boolean", default: false },
+		help: { type: "boolean", default: false },
+		"offline-model-data": { type: "boolean", default: false },
+		out: { type: "string" },
+		"skip-build": { type: "boolean", default: false },
+	},
+});
+if (values.help) {
+	printUsage();
+	process.exit(0);
 }
-if (!options.outDir) throw new Error("--out is required");
+if (!values.out) throw new Error("--out is required");
 
-const artifactSet = produceArtifactSet({ ...options, repoRoot: process.cwd() });
+const artifactSet = produceArtifactSet({
+	build: !values["skip-build"],
+	force: values.force,
+	offlineModelData: values["offline-model-data"],
+	outDir: values.out,
+	repoRoot: process.cwd(),
+});
 console.log(`\nLocal package artifacts created: ${artifactSet.artifactDirectory}`);
 console.log(`Manifest: ${artifactSet.manifestPath}`);
 console.log("\nConnect an external npm project with:");

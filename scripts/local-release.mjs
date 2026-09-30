@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseArgs } from "node:util";
 import { installConsumer, packageConsumerDirectoryName, smokeTestNpmConsumer } from "./local-package-install.mjs";
 import { produceArtifactSet } from "./package-artifacts.mjs";
 import { codingAgentName, smokeTestCodingAgent } from "./coding-agent-smoke.mjs";
@@ -24,38 +25,6 @@ Options:
   --skip-bun-install   Do not create the isolated Bun install
   --help               Show this help
 `);
-}
-
-function parseArgs() {
-	const options = {
-		force: false,
-		outDir: undefined,
-		skipBunInstall: false,
-		skipCheck: false,
-		skipInstall: false,
-		skipTest: false,
-	};
-	const args = process.argv.slice(2);
-	for (let i = 0; i < args.length; i++) {
-		const arg = args[i];
-		if (arg === "--help") {
-			printUsage();
-			process.exit(0);
-		}
-		if (arg === "--force") options.force = true;
-		else if (arg === "--skip-check") options.skipCheck = true;
-		else if (arg === "--skip-test") options.skipTest = true;
-		else if (arg === "--skip-install") options.skipInstall = true;
-		else if (arg === "--skip-bun-install") options.skipBunInstall = true;
-		else if (arg === "--out") {
-			const outDir = args[i + 1];
-			if (!outDir || outDir.startsWith("--")) throw new Error("--out requires a directory");
-			options.outDir = outDir;
-			i++;
-		}
-		else throw new Error(`Unknown option: ${arg}`);
-	}
-	return options;
 }
 
 function currentBinaryPlatform() {
@@ -83,7 +52,29 @@ function buildBunBinaryRelease(targetDirectory, archiveDirectory) {
 	return platform;
 }
 
-const options = parseArgs();
+const { values } = parseArgs({
+	options: {
+		force: { type: "boolean", default: false },
+		help: { type: "boolean", default: false },
+		out: { type: "string" },
+		"skip-bun-install": { type: "boolean", default: false },
+		"skip-check": { type: "boolean", default: false },
+		"skip-install": { type: "boolean", default: false },
+		"skip-test": { type: "boolean", default: false },
+	},
+});
+if (values.help) {
+	printUsage();
+	process.exit(0);
+}
+const options = {
+	force: values.force,
+	outDir: values.out,
+	skipBunInstall: values["skip-bun-install"],
+	skipCheck: values["skip-check"],
+	skipInstall: values["skip-install"],
+	skipTest: values["skip-test"],
+};
 const repoRoot = process.cwd();
 const rootPackageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
 if (rootPackageJson.name !== "pi-monorepo") throw new Error("Run this script from the repository root");

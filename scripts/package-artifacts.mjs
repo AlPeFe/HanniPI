@@ -55,7 +55,7 @@ function packPackages(packages, tarballDirectory) {
 	return packedPackages;
 }
 
-export function prepareOutputDirectory(outDir, options) {
+function prepareOutputDirectory(outDir, options) {
 	const repoRoot = resolve(options.repoRoot);
 	if (!outDir) return mkdtempSync(join(tmpdir(), "pi-package-artifacts-"));
 	const outputDirectory = resolve(outDir);
