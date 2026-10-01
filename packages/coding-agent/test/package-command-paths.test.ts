@@ -112,6 +112,21 @@ if (process.platform !== "win32") fs.chmodSync(piPath, 0o755);
 		);
 	}
 
+	function expectInstallerRecommendation(errorSpy: { mock: { calls: unknown[][] } }): void {
+		const installerCommand =
+			process.platform === "win32"
+				? 'powershell -c "irm https://pi.dev/install.ps1 | iex"'
+				: "curl -fsSL https://pi.dev/install.sh | sh";
+		const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
+		expect(stderr).toBe(
+			[
+				"Warning: pi is installed with npm, which does not pin its dependencies.",
+				"Switch to the pi installer for pinned dependencies and managed updates:",
+				`  ${installerCommand}`,
+			].join("\n"),
+		);
+	}
+
 	async function runPackageCommandDirectly(args: string[]): Promise<void> {
 		expect(await handlePackageCommand(args)).toBe(true);
 	}
@@ -799,7 +814,7 @@ else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
 			await expect(runPackageCommandDirectly(["update", "--self", "--force"])).resolves.toBeUndefined();
 
 			expect(process.exitCode).toBeUndefined();
-			expect(errorSpy).not.toHaveBeenCalled();
+			expectInstallerRecommendation(errorSpy);
 			expect(fetchMock).toHaveBeenCalledOnce();
 			const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			const recordedArgs = JSON.parse(readFileSync(recordPath, "utf-8")) as string[];
@@ -847,7 +862,7 @@ else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
 			await expect(runPackageCommandDirectly(["update", "--self"])).resolves.toBeUndefined();
 
 			expect(process.exitCode).toBeUndefined();
-			expect(errorSpy).not.toHaveBeenCalled();
+			expectInstallerRecommendation(errorSpy);
 			expect(fetchMock).toHaveBeenCalledOnce();
 			const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			const recordedArgs = JSON.parse(readFileSync(recordPath, "utf-8")) as string[];
@@ -899,7 +914,7 @@ else {
 			await expect(runPackageCommandDirectly(["update", "--self"])).resolves.toBeUndefined();
 
 			expect(process.exitCode).toBeUndefined();
-			expect(errorSpy).not.toHaveBeenCalled();
+			expectInstallerRecommendation(errorSpy);
 			const recordedCalls = JSON.parse(readFileSync(recordPath, "utf-8")) as string[][];
 			expect(recordedCalls).toEqual([
 				expect.arrayContaining(["uninstall", "-g", PACKAGE_NAME]),

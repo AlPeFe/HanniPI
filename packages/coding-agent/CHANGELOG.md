@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `pi update --self` on npm, pnpm, yarn, and bun installs now warns that the installation does not pin its dependencies and shows the command for the pi installer (`curl -fsSL https://pi.dev/install.sh | sh`, or the PowerShell installer on Windows).
+
+### Removed
+
+- Removed the published `npm-shrinkwrap.json`. Library users now get normal npm deduplication, so `@earendil-works/pi-ai` is no longer installed twice, and consumers can apply `overrides` and security updates to transitive deps. The pi.dev installer still pins transitive deps through its generated install lock ([#5653](https://github.com/earendil-works/pi/issues/5653)).
+
 ## [1.0.0] - 2026-10-01
 
 ### New Features

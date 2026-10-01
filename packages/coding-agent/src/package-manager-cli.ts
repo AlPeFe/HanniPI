@@ -22,6 +22,7 @@ import {
 	getPackageDir,
 	getSelfUpdateCommand,
 	getSelfUpdateUnavailableInstruction,
+	type InstallMethod,
 	PACKAGE_NAME,
 	type SelfUpdateCommand,
 	type SelfUpdatePackageTarget,
@@ -626,6 +627,18 @@ function printSelfUpdateFallback(command: SelfUpdateCommand): void {
 	console.error(chalk.dim(`If this keeps failing, run this command yourself: ${command.display}`));
 }
 
+function printInstallerRecommendation(installMethod: InstallMethod): void {
+	const installerCommand =
+		process.platform === "win32"
+			? 'powershell -c "irm https://pi.dev/install.ps1 | iex"'
+			: "curl -fsSL https://pi.dev/install.sh | sh";
+	console.error(
+		chalk.yellow(`Warning: ${APP_NAME} is installed with ${installMethod}, which does not pin its dependencies.`),
+	);
+	console.error(chalk.yellow(`Switch to the ${APP_NAME} installer for pinned dependencies and managed updates:`));
+	console.error(chalk.yellow(`  ${installerCommand}`));
+}
+
 function printPnpmSelfUpdateMetadataHint(): void {
 	console.error(chalk.yellow("If pnpm reports missing package versions, its cached registry metadata may be stale."));
 	console.error(chalk.yellow(`Run \`pnpm store prune\` and retry \`${APP_NAME} update --self\`.`));
@@ -1077,6 +1090,7 @@ export async function handlePackageCommand(
 					if (selfUpdatePlan.note) {
 						printSelfUpdateNote(selfUpdatePlan.note);
 					}
+					printInstallerRecommendation(installMethod);
 					try {
 						if (installMethod === "npm") {
 							prepareWindowsNpmSelfUpdate();
