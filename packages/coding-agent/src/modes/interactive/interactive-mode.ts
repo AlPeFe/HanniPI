@@ -160,7 +160,7 @@ import {
 } from "./components/oauth-selector.ts";
 import { piLogoLines } from "./components/pi-logo.ts";
 import { playPiLogoAnimation } from "./components/pi-logo-animation.lazy.ts";
-import { RadiusLoginSelectorComponent } from "./components/radius-login-selector.ts";
+import { createLoginMenuSelector, createRadiusSignInSelector } from "./components/radius-login-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
@@ -363,8 +363,6 @@ type LoginProviderCompletionOption = {
 	authTypes: AuthSelectorProvider["authType"][];
 	subscription?: boolean;
 };
-
-const RADIUS_LOGIN_INTRO = "Radius is a service crafted for Pi by the builders of Pi, Earendil Works";
 
 const AUTH_TYPE_ORDER = { oauth: 0, api_key: 1 } satisfies Record<AuthSelectorProvider["authType"], number>;
 
@@ -5809,8 +5807,7 @@ export class InteractiveMode {
 			? undefined
 			: this.getLoginProviderOptions("oauth").find((provider) => provider.id === RADIUS_PROVIDER_ID);
 		const radiusText = radiusOption ? `Sign in with ${radiusOption.name}` : undefined;
-		const radiusStatus = radiusOption ? formatAuthSelectorProviderStatus(radiusOption) : "";
-		const radiusLabel = radiusText ? `${radiusText}${radiusStatus}` : undefined;
+		const radiusLabel = radiusOption ? `${radiusText}${formatAuthSelectorProviderStatus(radiusOption)}` : undefined;
 		const oauthProvider = providerOptions?.find((provider) => provider.authType === "oauth");
 		const oauthLoginLabel =
 			oauthProvider?.method && "loginLabel" in oauthProvider.method ? oauthProvider.method.loginLabel : undefined;
@@ -5867,9 +5864,13 @@ export class InteractiveMode {
 			};
 			const selector =
 				radiusLabel && radiusText
-					? new RadiusLoginSelectorComponent(this.ui, title, options, onSelect, onCancel, {
-							shimmer: { option: radiusLabel, text: radiusText, suffix: radiusStatus },
-						})
+					? createLoginMenuSelector(
+							this.ui,
+							title,
+							options,
+							{ label: radiusLabel, text: radiusText },
+							{ onSelect, onCancel },
+						)
 					: new ExtensionSelectorComponent(title, options, onSelect, onCancel);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
@@ -6183,9 +6184,7 @@ export class InteractiveMode {
 			};
 			const selector =
 				providerId === RADIUS_PROVIDER_ID
-					? new RadiusLoginSelectorComponent(this.ui, prompt.message, labels, onSelect, onCancel, {
-							intro: RADIUS_LOGIN_INTRO,
-						})
+					? createRadiusSignInSelector(this.ui, prompt.message, labels, { onSelect, onCancel })
 					: new ExtensionSelectorComponent(prompt.message, labels, onSelect, onCancel);
 			this.editorContainer.clear();
 			this.editorContainer.addChild(selector);
