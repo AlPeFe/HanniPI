@@ -31,7 +31,7 @@ export function formatAuthSelectorProviderType(
 
 /** Themed suffix describing whether and how a login option is configured, for example " ✓ configured". */
 export function formatAuthSelectorProviderStatus(provider: AuthSelectorProvider): string {
-	if (!provider.status) return theme.fg("muted", " • unconfigured");
+	if (!provider.status) return theme.fg("muted", " • not configured");
 	if (provider.status.type !== provider.authType) {
 		const label = `${formatAuthSelectorProviderType(provider.status.type, provider.subscription)} configured`;
 		return theme.fg("muted", " • ") + theme.fg("warning", label);
