@@ -1,7 +1,7 @@
 /** Immutable, credential-blind models.json snapshot. */
 
 import { readFile } from "node:fs/promises";
-import { ProviderCompatSchema } from "@earendil-works/pi-ai/providers/compat-schema";
+import { ModelCostSchema, ProviderCompatSchema } from "@earendil-works/pi-ai/providers/compat-schema";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
@@ -20,20 +20,6 @@ const ThinkingLevelMapSchema = Type.Object({
 	max: Type.Optional(ThinkingLevelMapValueSchema),
 });
 
-const ModelCostRatesSchema = {
-	input: Type.Number(),
-	output: Type.Number(),
-	cacheRead: Type.Number(),
-	cacheWrite: Type.Number(),
-};
-const ModelCostTierSchema = Type.Object({
-	inputTokensAbove: Type.Number(),
-	...ModelCostRatesSchema,
-});
-const ModelCostSchema = Type.Object({
-	...ModelCostRatesSchema,
-	tiers: Type.Optional(Type.Array(ModelCostTierSchema)),
-});
 const ModelPromptCacheSchema = Type.Object({
 	short: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
 	long: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
@@ -79,15 +65,7 @@ const ModelOverrideSchema = Type.Object({
 	thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
 	input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
 	inputLimits: Type.Optional(ModelInputLimitsSchema),
-	cost: Type.Optional(
-		Type.Object({
-			input: Type.Optional(Type.Number()),
-			output: Type.Optional(Type.Number()),
-			cacheRead: Type.Optional(Type.Number()),
-			cacheWrite: Type.Optional(Type.Number()),
-			tiers: Type.Optional(Type.Array(ModelCostTierSchema)),
-		}),
-	),
+	cost: Type.Optional(Type.Partial(ModelCostSchema)),
 	promptCache: Type.Optional(ModelPromptCacheSchema),
 	contextWindow: Type.Optional(Type.Number()),
 	maxTokens: Type.Optional(Type.Number()),
@@ -113,12 +91,12 @@ const ModelsConfigProperties = {
 	providers: Type.Record(Type.String(), ProviderConfigSchema),
 };
 
-const validateModelsConfig = Compile(Type.Object(ModelsConfigProperties));
-
 export const ModelsConfigSchema = Type.Object({
 	$schema: Type.Optional(Type.String()),
 	...ModelsConfigProperties,
 });
+
+const validateModelsConfig = Compile(ModelsConfigSchema);
 
 export type ModelsJsonModel = Static<typeof ModelDefinitionSchema>;
 export type ModelsJsonModelOverride = Static<typeof ModelOverrideSchema>;
