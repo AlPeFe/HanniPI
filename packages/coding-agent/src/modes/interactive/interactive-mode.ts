@@ -160,7 +160,7 @@ import {
 } from "./components/oauth-selector.ts";
 import { piLogoLines } from "./components/pi-logo.ts";
 import { playPiLogoAnimation } from "./components/pi-logo-animation.lazy.ts";
-import { createLoginMenuSelector, createRadiusSignInSelector } from "./components/radius-login-selector.ts";
+import { createLoginMenuSelector } from "./components/radius-login-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
@@ -363,6 +363,8 @@ type LoginProviderCompletionOption = {
 	authTypes: AuthSelectorProvider["authType"][];
 	subscription?: boolean;
 };
+
+const RADIUS_LOGIN_INTRO = "Radius is a service crafted for Pi by the builders of Pi, Earendil Works";
 
 const AUTH_TYPE_ORDER = { oauth: 0, api_key: 1 } satisfies Record<AuthSelectorProvider["authType"], number>;
 
@@ -5869,7 +5871,8 @@ export class InteractiveMode {
 							title,
 							options,
 							{ label: radiusLabel, text: radiusText },
-							{ onSelect, onCancel },
+							onSelect,
+							onCancel,
 						)
 					: new ExtensionSelectorComponent(title, options, onSelect, onCancel);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
@@ -6172,20 +6175,21 @@ export class InteractiveMode {
 				this.ui.requestRender();
 			};
 			const labels = prompt.options.map((option) => option.label);
-			const onSelect = (optionLabel: string) => {
-				restoreDialog();
-				const id = prompt.options.find((option) => option.label === optionLabel)?.id;
-				if (id) resolve(id);
-				else reject(new Error("Login cancelled"));
-			};
-			const onCancel = () => {
-				restoreDialog();
-				reject(new Error("Login cancelled"));
-			};
-			const selector =
-				providerId === RADIUS_PROVIDER_ID
-					? createRadiusSignInSelector(this.ui, prompt.message, labels, { onSelect, onCancel })
-					: new ExtensionSelectorComponent(prompt.message, labels, onSelect, onCancel);
+			const selector = new ExtensionSelectorComponent(
+				prompt.message,
+				labels,
+				(optionLabel) => {
+					restoreDialog();
+					const id = prompt.options.find((option) => option.label === optionLabel)?.id;
+					if (id) resolve(id);
+					else reject(new Error("Login cancelled"));
+				},
+				() => {
+					restoreDialog();
+					reject(new Error("Login cancelled"));
+				},
+				{ description: providerId === RADIUS_PROVIDER_ID ? RADIUS_LOGIN_INTRO : undefined },
+			);
 			this.editorContainer.clear();
 			this.editorContainer.addChild(selector);
 			this.ui.setFocus(selector);
