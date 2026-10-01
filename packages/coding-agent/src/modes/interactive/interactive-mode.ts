@@ -160,6 +160,7 @@ import {
 } from "./components/oauth-selector.ts";
 import { piLogoLines } from "./components/pi-logo.ts";
 import { playPiLogoAnimation } from "./components/pi-logo-animation.lazy.ts";
+import { RadiusLoginSelectorComponent } from "./components/radius-login-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
@@ -362,6 +363,8 @@ type LoginProviderCompletionOption = {
 	authTypes: AuthSelectorProvider["authType"][];
 	subscription?: boolean;
 };
+
+const RADIUS_LOGIN_INTRO = "Radius is a service crafted for Pi by the builders of Pi, Earendil Works";
 
 const AUTH_TYPE_ORDER = { oauth: 0, api_key: 1 } satisfies Record<AuthSelectorProvider["authType"], number>;
 
@@ -5791,9 +5794,9 @@ export class InteractiveMode {
 		const radiusOption = providerOptions
 			? undefined
 			: this.getLoginProviderOptions("oauth").find((provider) => provider.id === RADIUS_PROVIDER_ID);
-		const radiusLabel = radiusOption
-			? `Sign in with ${radiusOption.name}${formatAuthSelectorProviderStatus(radiusOption)}`
-			: undefined;
+		const radiusText = radiusOption ? `Sign in with ${radiusOption.name}` : undefined;
+		const radiusStatus = radiusOption ? formatAuthSelectorProviderStatus(radiusOption) : "";
+		const radiusLabel = radiusText ? `${radiusText}${radiusStatus}` : undefined;
 		const oauthProvider = providerOptions?.find((provider) => provider.authType === "oauth");
 		const oauthLoginLabel =
 			oauthProvider?.method && "loginLabel" in oauthProvider.method ? oauthProvider.method.loginLabel : undefined;
@@ -5828,33 +5831,33 @@ export class InteractiveMode {
 			? `Select authentication method for ${providerOptions[0].name}:`
 			: "Select authentication method:";
 		this.showSelector((done) => {
-			const selector = new ExtensionSelectorComponent(
-				title,
-				options,
-				(option) => {
-					done();
-					if (radiusOption && option === radiusLabel) {
-						void this.startProviderLogin(radiusOption, () => this.showLoginAuthTypeSelector());
-						return;
+			const onSelect = (option: string) => {
+				done();
+				if (radiusOption && option === radiusLabel) {
+					void this.startProviderLogin(radiusOption, () => this.showLoginAuthTypeSelector());
+					return;
+				}
+				const authType = option === subscriptionLabel ? "oauth" : "api_key";
+				if (providerOptions) {
+					const providerOption = providerOptions.find((provider) => provider.authType === authType);
+					if (providerOption) {
+						void this.startProviderLogin(providerOption, () => this.showLoginAuthTypeSelector(providerOptions));
 					}
-					const authType = option === subscriptionLabel ? "oauth" : "api_key";
-					if (providerOptions) {
-						const providerOption = providerOptions.find((provider) => provider.authType === authType);
-						if (providerOption) {
-							void this.startProviderLogin(providerOption, () =>
-								this.showLoginAuthTypeSelector(providerOptions),
-							);
-						}
-						return;
-					}
-					this.showLoginProviderSelector(authType);
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-			);
-			return { component: selector, focus: selector };
+					return;
+				}
+				this.showLoginProviderSelector(authType);
+			};
+			const onCancel = () => {
+				done();
+				this.ui.requestRender();
+			};
+			const selector =
+				radiusLabel && radiusText
+					? new RadiusLoginSelectorComponent(this.ui, title, options, onSelect, onCancel, {
+							shimmer: { option: radiusLabel, text: radiusText, suffix: radiusStatus },
+						})
+					: new ExtensionSelectorComponent(title, options, onSelect, onCancel);
+			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
 
@@ -6144,6 +6147,7 @@ export class InteractiveMode {
 	private showAuthSelect(
 		dialog: LoginDialogComponent,
 		prompt: Extract<AuthPrompt, { type: "select" }>,
+		providerId: string,
 	): Promise<string> {
 		return new Promise((resolve, reject) => {
 			const restoreDialog = () => {
@@ -6153,20 +6157,22 @@ export class InteractiveMode {
 				this.ui.requestRender();
 			};
 			const labels = prompt.options.map((option) => option.label);
-			const selector = new ExtensionSelectorComponent(
-				prompt.message,
-				labels,
-				(optionLabel) => {
-					restoreDialog();
-					const id = prompt.options.find((option) => option.label === optionLabel)?.id;
-					if (id) resolve(id);
-					else reject(new Error("Login cancelled"));
-				},
-				() => {
-					restoreDialog();
-					reject(new Error("Login cancelled"));
-				},
-			);
+			const onSelect = (optionLabel: string) => {
+				restoreDialog();
+				const id = prompt.options.find((option) => option.label === optionLabel)?.id;
+				if (id) resolve(id);
+				else reject(new Error("Login cancelled"));
+			};
+			const onCancel = () => {
+				restoreDialog();
+				reject(new Error("Login cancelled"));
+			};
+			const selector =
+				providerId === RADIUS_PROVIDER_ID
+					? new RadiusLoginSelectorComponent(this.ui, prompt.message, labels, onSelect, onCancel, {
+							intro: RADIUS_LOGIN_INTRO,
+						})
+					: new ExtensionSelectorComponent(prompt.message, labels, onSelect, onCancel);
 			this.editorContainer.clear();
 			this.editorContainer.addChild(selector);
 			this.ui.setFocus(selector);
@@ -6174,10 +6180,10 @@ export class InteractiveMode {
 		});
 	}
 
-	private async showAuthPrompt(dialog: LoginDialogComponent, prompt: AuthPrompt): Promise<string> {
+	private async showAuthPrompt(dialog: LoginDialogComponent, prompt: AuthPrompt, providerId: string): Promise<string> {
 		let response: Promise<string>;
 		if (prompt.type === "select") {
-			response = this.showAuthSelect(dialog, prompt);
+			response = this.showAuthSelect(dialog, prompt, providerId);
 		} else if (prompt.type === "manual_code") {
 			response = dialog.showManualInput(prompt.message);
 		} else {
@@ -6221,7 +6227,7 @@ export class InteractiveMode {
 			method,
 			{
 				signal: dialog.signal,
-				prompt: (prompt) => this.showAuthPrompt(dialog, prompt),
+				prompt: (prompt) => this.showAuthPrompt(dialog, prompt, providerId),
 				notify: (event) => this.notifyAuthDialog(dialog, event),
 			},
 			{ getDeviceId: () => this.settingsManager.getOrCreateDeviceId() },
