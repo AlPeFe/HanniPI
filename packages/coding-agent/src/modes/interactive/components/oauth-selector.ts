@@ -17,16 +17,19 @@ export type AuthSelectorProvider = {
 	authType: "oauth" | "api_key";
 	method?: ApiKeyAuth | OAuthAuth;
 	status?: AuthCheck;
-	/** Whether the provider's OAuth sign-in is backed by a subscription. Other OAuth sign-ins are accounts. */
+	/**
+	 * Whether the provider's OAuth sign-in is backed by a subscription. `false` labels it as an account;
+	 * unset keeps the "subscription" label.
+	 */
 	subscription?: boolean;
 };
 
 export function formatAuthSelectorProviderType(
 	authType: AuthSelectorProvider["authType"],
-	subscription: boolean | undefined,
+	subscription?: boolean,
 ): string {
 	if (authType === "api_key") return "API key";
-	return subscription ? "subscription" : "account";
+	return subscription === false ? "account" : "subscription";
 }
 
 /** Themed suffix describing whether and how a login option is configured, for example " ✓ configured". */

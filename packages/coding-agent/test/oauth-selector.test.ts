@@ -87,15 +87,7 @@ describe("OAuthSelectorComponent", () => {
 	it("shows OAuth auth distinctly in the API key selector", () => {
 		const selector = new OAuthSelectorComponent(
 			"login",
-			[
-				{
-					id: "anthropic",
-					name: "Anthropic",
-					authType: "api_key",
-					status: { type: "oauth", source: "OAuth" },
-					subscription: true,
-				},
-			],
+			[{ id: "anthropic", name: "Anthropic", authType: "api_key", status: { type: "oauth", source: "OAuth" } }],
 			() => {},
 			() => {},
 		);
