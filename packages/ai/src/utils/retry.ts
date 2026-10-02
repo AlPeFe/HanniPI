@@ -33,6 +33,7 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"server_busy",
 	"servers are currently busy",
 	"currently experiencing high demand",
+	"model is at capacity",
 	"rate.?limit",
 	"too many requests",
 	"429",
