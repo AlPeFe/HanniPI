@@ -161,6 +161,8 @@ import { piLogoLines, piWordmark, supportsPiLogo } from "./components/pi-logo.ts
 import { createLoginMenuSelector } from "./components/radius-login-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
+import { openMemoryExplorer } from "./components/memory-explorer.ts";
+import { PackageManagerSelector } from "./components/package-manager-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
 import {
@@ -3165,7 +3167,7 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/bug" || text.startsWith("/bug ")) {
+						if (text === "/bug" || text.startsWith("/bug ")) {
 				const hint = text.slice("/bug".length).trim();
 				this.editor.setText("");
 				await this.handleBugCommand(hint ? hint : undefined);
@@ -3183,6 +3185,16 @@ export class InteractiveMode {
 			}
 			if (text === "/session") {
 				this.handleSessionCommand();
+				this.editor.setText("");
+				return;
+			}
+			if (text === "/mem") {
+				this.showMemoryExplorer();
+				this.editor.setText("");
+				return;
+			}
+			if (text === "/packages") {
+				this.showPackageManager();
 				this.editor.setText("");
 				return;
 			}
@@ -5613,6 +5625,72 @@ export class InteractiveMode {
 			return { component: selector, focus: selector };
 		});
 	}
+
+	private showMemoryExplorer(): void {
+		this.showSelector((done) => {
+			const result = openMemoryExplorer(
+				() => {
+					done();
+					this.ui.requestRender();
+				},
+				() => this.ui.requestRender(),
+				(msg) => this.showError(msg),
+			);
+			if (!result) {
+				// BD no disponible: mostrar un panel mínimo que se cierra con esc.
+				const empty = new Text(theme.fg("dim", "Memoria no disponible. Pulsa esc para cerrar."));
+				return { component: empty, focus: empty };
+			}
+			return result;
+		});
+	}
+
+	private showPackageManager(): void {
+		this.showSelector((done) => {
+			const packageManager = new DefaultPackageManager({
+				cwd: this.sessionManager.getCwd(),
+				agentDir: getAgentDir(),
+				settingsManager: this.settingsManager,
+			});
+			const configured = packageManager.listConfiguredPackages();
+			const effective = this.settingsManager.getEffectivePackages();
+			const entries = effective.map((pkg) => {
+				const source = typeof pkg === "string" ? pkg : pkg.source;
+				const isDefault = (this.settingsManager.getConfiguredPackages() ?? []).every(
+					(c) => (typeof c === "string" ? c : c.source) !== source,
+				);
+				const conf = configured.find((c) => c.source === source);
+				return {
+					source,
+					scope: (isDefault ? "default" : conf?.scope ?? "user") as "user" | "project" | "default",
+					installed: Boolean(conf?.installedPath),
+					updateAvailable: false,
+				};
+			});
+			const selector = new PackageManagerSelector(
+				entries,
+				() => {
+					done();
+					this.ui.requestRender();
+				},
+				() => this.ui.requestRender(),
+				async (source) => {
+					await packageManager.installAndPersist(source);
+					this.showStatus(`Instalado ${source}. Recarga con /reload.`);
+				},
+				async (source) => {
+					await packageManager.update(source);
+					this.showStatus("Paquetes actualizados. Recarga con /reload.");
+				},
+				async (source) => {
+					await packageManager.removeAndPersist(source);
+					this.showStatus(`Eliminado ${source}. Recarga con /reload.`);
+				},
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
 
 	private showSessionSelector(): void {
 		this.showSelector((done) => {

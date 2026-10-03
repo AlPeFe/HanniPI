@@ -927,7 +927,7 @@ export class DefaultPackageManager implements PackageManager {
 		for (const pkg of projectSettings.packages ?? []) {
 			allPackages.push({ pkg, scope: "project" });
 		}
-		for (const pkg of globalSettings.packages ?? []) {
+		for (const pkg of this.settingsManager.getEffectivePackages()) {
 			allPackages.push({ pkg, scope: "user" });
 		}
 
