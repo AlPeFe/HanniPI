@@ -149,6 +149,7 @@ import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { FooterComponent, formatTokens } from "./components/footer.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
+import { openMemoryExplorer } from "./components/memory-explorer.ts";
 import { createMermaidMarkdownTransformer } from "./components/mermaid.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
 import {
@@ -157,12 +158,11 @@ import {
 	formatAuthSelectorProviderType,
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.ts";
+import { PackageManagerSelector } from "./components/package-manager-selector.ts";
 import { piLogoLines, piWordmark, supportsPiLogo } from "./components/pi-logo.ts";
 import { createLoginMenuSelector } from "./components/radius-login-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
-import { openMemoryExplorer } from "./components/memory-explorer.ts";
-import { PackageManagerSelector } from "./components/package-manager-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
 import {
@@ -3167,7 +3167,7 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-						if (text === "/bug" || text.startsWith("/bug ")) {
+			if (text === "/bug" || text.startsWith("/bug ")) {
 				const hint = text.slice("/bug".length).trim();
 				this.editor.setText("");
 				await this.handleBugCommand(hint ? hint : undefined);
@@ -5662,7 +5662,7 @@ export class InteractiveMode {
 				const conf = configured.find((c) => c.source === source);
 				return {
 					source,
-					scope: (isDefault ? "default" : conf?.scope ?? "user") as "user" | "project" | "default",
+					scope: (isDefault ? "default" : (conf?.scope ?? "user")) as "user" | "project" | "default",
 					installed: Boolean(conf?.installedPath),
 					updateAvailable: false,
 				};
@@ -5690,7 +5690,6 @@ export class InteractiveMode {
 			return { component: selector, focus: selector };
 		});
 	}
-
 
 	private showSessionSelector(): void {
 		this.showSelector((done) => {

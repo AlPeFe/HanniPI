@@ -32,7 +32,6 @@ export class PackageManagerSelector extends Container implements Focusable {
 	private onInstall: (source: string) => Promise<void>;
 	private onUpdate: (source?: string) => Promise<void>;
 	private onRemove: (source: string) => Promise<void>;
-	private installing = false;
 	private installInput = new Input();
 	private installingMode = false;
 	private _focused = false;
@@ -72,7 +71,14 @@ export class PackageManagerSelector extends Container implements Focusable {
 		this.addChild(new Spacer(1));
 		this.addChild(this.renderBody());
 		this.addChild(new Spacer(1));
-		this.addChild(new Text(theme.fg("dim", "↑↓ navegar · enter detalle · u actualizar · U todos · i instalar · d eliminar · esc cerrar")));
+		this.addChild(
+			new Text(
+				theme.fg(
+					"dim",
+					"↑↓ navegar · enter detalle · u actualizar · U todos · i instalar · d eliminar · esc cerrar",
+				),
+			),
+		);
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
 	}
@@ -83,7 +89,11 @@ export class PackageManagerSelector extends Container implements Focusable {
 			const e = this.entries[i];
 			const marker = i === this.selectedIndex ? "› " : "  ";
 			const scopeTag =
-				e.scope === "default" ? theme.fg("accent", "[default]") : e.scope === "project" ? theme.fg("dim", "[proyecto]") : theme.fg("dim", "[global]");
+				e.scope === "default"
+					? theme.fg("accent", "[default]")
+					: e.scope === "project"
+						? theme.fg("dim", "[proyecto]")
+						: theme.fg("dim", "[global]");
 			const status = e.updateAvailable
 				? theme.fg("error", "↑ update")
 				: e.installed
@@ -118,9 +128,7 @@ export class PackageManagerSelector extends Container implements Focusable {
 				this.installingMode = false;
 				this.installInput = new Input();
 				if (source) {
-					this.installing = true;
 					void this.onInstall(source).finally(() => {
-						this.installing = false;
 						this.requestRender();
 					});
 				}
@@ -149,18 +157,14 @@ export class PackageManagerSelector extends Container implements Focusable {
 		if (data === "u") {
 			const e = this.entries[this.selectedIndex];
 			if (e) {
-				this.installing = true;
 				void this.onUpdate(e.source).finally(() => {
-					this.installing = false;
 					this.requestRender();
 				});
 			}
 			return;
 		}
 		if (data === "U") {
-			this.installing = true;
 			void this.onUpdate().finally(() => {
-				this.installing = false;
 				this.requestRender();
 			});
 			return;
@@ -174,9 +178,7 @@ export class PackageManagerSelector extends Container implements Focusable {
 		if (data === "d") {
 			const e = this.entries[this.selectedIndex];
 			if (e && e.scope !== "default") {
-				this.installing = true;
 				void this.onRemove(e.source).finally(() => {
-					this.installing = false;
 					this.requestRender();
 				});
 			}

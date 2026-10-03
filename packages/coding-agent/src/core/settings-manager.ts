@@ -13,8 +13,8 @@ import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
-import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { DEFAULT_PACKAGES } from "./defaults.ts";
+import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 
 export interface CompactionModelOverride {
 	reserveTokens?: number;
@@ -1183,30 +1183,30 @@ export class SettingsManager {
 	}
 
 	getPackages(): PackageSource[] {
-			return [...(this.settings.packages ?? [])];
-		}
+		return [...(this.settings.packages ?? [])];
+	}
 
-		/** Solo los paquetes persistidos en settings.json (sin los defaults). */
-		getConfiguredPackages(): PackageSource[] {
-			return [...(this.settings.packages ?? [])];
-		}
+	/** Solo los paquetes persistidos en settings.json (sin los defaults). */
+	getConfiguredPackages(): PackageSource[] {
+		return [...(this.settings.packages ?? [])];
+	}
 
-		/** Paquetes efectivos: los configurados más los defaults, sin duplicados por fuente. */
-		getEffectivePackages(): PackageSource[] {
-			const configured = this.settings.packages ?? [];
-			const seen = new Set<string>();
-			const result: PackageSource[] = [];
-			const keyOf = (pkg: PackageSource): string => (typeof pkg === "string" ? pkg : pkg.source);
-			for (const pkg of [...DEFAULT_PACKAGES, ...configured]) {
-				const key = keyOf(pkg);
-				if (seen.has(key)) continue;
-				seen.add(key);
-				result.push(pkg);
-			}
-			return result;
+	/** Paquetes efectivos: los configurados más los defaults, sin duplicados por fuente. */
+	getEffectivePackages(): PackageSource[] {
+		const configured = this.settings.packages ?? [];
+		const seen = new Set<string>();
+		const result: PackageSource[] = [];
+		const keyOf = (pkg: PackageSource): string => (typeof pkg === "string" ? pkg : pkg.source);
+		for (const pkg of [...DEFAULT_PACKAGES, ...configured]) {
+			const key = keyOf(pkg);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			result.push(pkg);
 		}
+		return result;
+	}
 
-		setPackages(packages: PackageSource[]): void {
+	setPackages(packages: PackageSource[]): void {
 		this.globalSettings.packages = packages;
 		this.markModified("packages");
 		this.save();

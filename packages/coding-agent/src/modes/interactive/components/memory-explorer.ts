@@ -13,7 +13,6 @@ import {
 } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
-import { keyHint, keyText } from "./keybinding-hints.ts";
 
 /**
  * Explorador de la memoria HanniGram (~/.hannigram/hannigram.db).
@@ -189,12 +188,14 @@ export class MemoryExplorer extends Container implements Focusable {
 	}
 
 	private getObservationDetail(id: number): string {
-		const row = this.db.prepare("SELECT * FROM observations WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+		const row = this.db.prepare("SELECT * FROM observations WHERE id = ?").get(id) as
+			| Record<string, unknown>
+			| undefined;
 		if (!row) return "";
 		const parts: string[] = [];
 		for (const key of ["what", "why", "where_", "learned", "content"]) {
 			const v = row[key];
-			if (v) parts.push(`${theme.fg("dim", key + ":")} ${String(v)}`);
+			if (v) parts.push(`${theme.fg("dim", `${key}:`)} ${String(v)}`);
 		}
 		return parts.join("\n");
 	}

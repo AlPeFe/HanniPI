@@ -82,7 +82,11 @@ export function createSoddExtension(): ExtensionFactory {
 							return;
 						}
 						const tasksDir = join(oddDir, "tasks");
-						writeFileSync(join(tasksDir, `${slug}.md`), `---\ntopic_key: ${slug}\nstatus: active\nbase: \n---\n# ${slug}\nObjetivo: \nAlcance: \nVerify: \n\n## Pasos\n- [ ] S1 \n\n## Siguiente\nS1: \n`, { flag: "wx" });
+						writeFileSync(
+							join(tasksDir, `${slug}.md`),
+							`---\ntopic_key: ${slug}\nstatus: active\nbase: \n---\n# ${slug}\nObjetivo: \nAlcance: \nVerify: \n\n## Pasos\n- [ ] S1 \n\n## Siguiente\nS1: \n`,
+							{ flag: "wx" },
+						);
 						writeFileSync(join(oddDir, ".active"), slug);
 						ctx.ui.notify(`Ficha creada: odd/tasks/${slug}.md`);
 						return;
@@ -101,7 +105,13 @@ export function createSoddExtension(): ExtensionFactory {
 							return;
 						}
 						const content = readFileSync(taskPath, "utf-8");
-						const next = content.split("## Siguiente")[1]?.split("\n").filter((l) => l.trim()).slice(0, 3).join("\n") ?? "";
+						const next =
+							content
+								.split("## Siguiente")[1]
+								?.split("\n")
+								.filter((l) => l.trim())
+								.slice(0, 3)
+								.join("\n") ?? "";
 						ctx.ui.notify(`Siguiente:\n${next}`);
 						return;
 					}
@@ -143,7 +153,11 @@ export function createSoddExtension(): ExtensionFactory {
 							return;
 						}
 						const r = spawnSync(verifyCmd, { cwd, encoding: "utf-8", shell: true });
-						ctx.ui.notify(r.status === 0 ? `✓ verify OK: ${verifyCmd}` : `✗ verify falló (${r.status}): ${r.stderr || r.stdout}`);
+						ctx.ui.notify(
+							r.status === 0
+								? `✓ verify OK: ${verifyCmd}`
+								: `✗ verify falló (${r.status}): ${r.stderr || r.stdout}`,
+						);
 						return;
 					}
 					case "commit": {
@@ -189,9 +203,7 @@ export function createSoddExtension(): ExtensionFactory {
 			try {
 				const db = new DatabaseSync(dbPath, { readOnly: true });
 				const rows = db
-					.prepare(
-						"SELECT title, topic_key, learned FROM observations ORDER BY updated_at_utc DESC LIMIT 5",
-					)
+					.prepare("SELECT title, topic_key, learned FROM observations ORDER BY updated_at_utc DESC LIMIT 5")
 					.all() as Array<{ title: string; topic_key: string | null; learned: string | null }>;
 				db.close();
 				if (rows.length === 0) return;
