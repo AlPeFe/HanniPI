@@ -1,10 +1,13 @@
 # HanniPI installer for Windows
+# Installs the HanniPI binary as `hanni` so it never collides with a
+# pre-existing `pi` (the upstream earendil-works binary). Run `hanni` to start.
 # Usage: powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/AlPeFe/HanniPI/main/install.ps1 | iex"
 $ErrorActionPreference = "Stop"
 
 $Repo = "AlPeFe/HanniPI"
 $Asset = "pi-windows-x64.zip"
 $InstallDir = Join-Path $env:LOCALAPPDATA "HanniPI"
+$BinName = "hanni.exe"   # installed as `hanni`, not `pi`, to avoid clashing with upstream pi
 
 Write-Host "HanniPI installer" -ForegroundColor Magenta
 Write-Host "==================" -ForegroundColor Magenta
@@ -42,6 +45,11 @@ if (Test-Path $InstallDir) { Remove-Item $InstallDir -Recurse -Force }
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Expand-Archive -Path $ZipPath -DestinationPath $InstallDir -Force
 
+# Rename the binary to `hanni.exe` so it doesn't shadow a pre-installed `pi`.
+if (Test-Path (Join-Path $InstallDir "pi.exe")) {
+    Move-Item (Join-Path $InstallDir "pi.exe") (Join-Path $InstallDir $BinName) -Force
+}
+
 # If the zip had a single top-level folder, flatten it (only for the
 # asset dirs; pi.exe must stay next to them).
 $TopLevel = Get-ChildItem $InstallDir -Directory
@@ -64,7 +72,8 @@ $env:Path = "$env:Path;$InstallDir"
 Remove-Item $ZipPath -Force
 
 # Verify
-$Ver = & (Join-Path $InstallDir "pi.exe") --version 2>$null
+$Ver = & (Join-Path $InstallDir $BinName) --version 2>$null
 Write-Host ""
-Write-Host "HanniPI installed: pi --version = $Ver" -ForegroundColor Magenta
-Write-Host "Run 'pi' to start. Re-run this installer to update." -ForegroundColor Magenta
+Write-Host "HanniPI installed: hanni --version = $Ver" -ForegroundColor Magenta
+Write-Host "Run 'hanni' to start (not 'pi' — that stays as the upstream pi if you have it)." -ForegroundColor Magenta
+Write-Host "Re-run this installer to update." -ForegroundColor Magenta
