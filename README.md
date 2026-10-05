@@ -50,15 +50,23 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 
 ## Instalación
 
+**Windows** — un comando (descarga el binario standalone de la última release, verifica SHA256 y lo añade al PATH):
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/AlPeFe/HanniPI/main/install.ps1 | iex"
+```
+
+**Desde el repo (desarrollo):**
+
 ```bash
-# Desde el repo
+git clone https://github.com/AlPeFe/HanniPI.git
+cd HanniPI
 npm install --ignore-scripts
 npm run build
-npm link          # deja `pi` en tu PATH
-
-# O instala el paquete publicado
-npm install -g @earendil-works/pi-coding-agent
+npm link          # deja `pi` en tu PATH (punto de entrada a dist/bundle/cli.js)
 ```
+
+> El binario standalone no necesita Node; el paquete npm (`pi` = `dist/bundle/cli.js`) sí requiere Node 22.19+.
 
 ## Uso rápido
 
