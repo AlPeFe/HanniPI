@@ -8,8 +8,8 @@
     "name": "hanni"
   },
   "bin": {
-    "pi": "dist/bundle/cli.js"
-  },
+    "hanni": "dist/bundle/cli.js"
+    },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

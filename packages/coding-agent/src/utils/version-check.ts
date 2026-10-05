@@ -2,7 +2,7 @@ import { compare, valid } from "semver";
 import { fetchWithRetry } from "./management-http.ts";
 import { getPiUserAgent } from "./pi-user-agent.ts";
 
-const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
+const LATEST_VERSION_URL = "https://api.github.com/repos/AlPeFe/HanniPI/releases/latest";
 const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 10000;
 
 export interface LatestPiRelease {
@@ -73,15 +73,24 @@ export async function getLatestPiRelease(
 		packageName?: unknown;
 		version?: unknown;
 		note?: unknown;
+		tag_name?: unknown;
 	};
-	if (typeof data.version !== "string" || !data.version.trim()) {
+	// GitHub releases API returns the tag (e.g. "v0.1.0-hannipi"); strip the
+	// leading "v" and any "-hannipi" suffix so it compares as a plain semver.
+	const rawVersion =
+		typeof data.version === "string" && data.version.trim()
+			? data.version.trim()
+			: typeof data.tag_name === "string" && data.tag_name.trim()
+				? data.tag_name.trim().replace(/^v/, "").replace(/-hannipi$/, "")
+				: undefined;
+	if (!rawVersion) {
 		return undefined;
 	}
 	const packageName =
 		typeof data.packageName === "string" && data.packageName.trim() ? data.packageName.trim() : undefined;
 	const note = typeof data.note === "string" && data.note.trim() ? data.note.trim() : undefined;
 	return {
-		version: data.version.trim(),
+		version: rawVersion,
 		packageName,
 		...(note ? { note } : {}),
 	};
