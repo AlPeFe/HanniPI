@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="Hanni mascot" src="docs/images/hanni.jpg" width="128">
+  <img alt="Hanni mascot" src="docs/images/hanni-mascot.png" width="128">
 </p>
 <p align="center">
   <strong>HanniPI</strong> — tu harness de desarrollo de software, con memoria persistente y flujo de trabajo sODD.
@@ -99,7 +99,7 @@ MIT
 ---
 
 <p align="center">
-  <img alt="Hanni mascot" src="docs/images/hanni.jpg" width="48">
+  <img alt="Hanni mascot" src="docs/images/hanni-mascot.png" width="48">
   <br />
   Hecho con cariño por <a href="https://github.com/AlPeFe">AlPeFe</a> · basado en <a href="https://github.com/earendil-works/pi">pi</a> de earendil-works
 </p>
