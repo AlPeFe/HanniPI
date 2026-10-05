@@ -43,6 +43,29 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 - Comandos `/task new|status|next|done|promote|diff|commit|verify`.
 - Reinyección automática de la ficha activa al compactar.
 
+### 🎯 hanniorq — Orquestador sODD
+
+`hanniorq` es una capa de **coordinación** sobre `/task`. No duplica el almacenamiento: usa la misma ficha `odd/tasks/<slug>.md`. Su filosofía es la de **sODD**: orgánico pero pequeño.
+
+**La diferencia clave con ODD adulto: no todo es investigación, no todo requiere resumen, no todo requiere tests.**
+
+- Un cambio **pequeño y entendido** (1 paso, sin riesgo) se hace **inline**: sin ficha, sin subagentes, sin resumen.
+- Solo el trabajo **sustancial** (2+ pasos, varios archivos, riesgo) genera ficha y se trabaja por pasos.
+- **No todo se testea.** Solo se verifica lo que tiene un check aplicable y un resultado esperado; si no, se hace verificación funcional proporcionada o se declara "sin check".
+- El **resumen** (con la sección de memoria HanniGram) solo se genera en `/hanniorq close` y solo si hubo ficha.
+
+**Comandos:**
+
+```
+/hanniorq on | off | status        # activa/desactiva el modo orquestador
+/hanniorq plan "<petición>"        # clasifica: trivial → inline; sustancial → ficha
+/hanniorq run [Tn]                 # ejecuta la siguiente tarea (o Tn) con su check y commit
+/hanniorq close                    # genera el resumen final (plantilla fija + memoria HanniGram)
+/hanniorq resume [<slug>]          # recupera contexto: mem_context → mem_search → ficha
+```
+
+**El resumen de `/hanniorq close`** incluye una sección **Memoria (HanniGram)** que refleja cómo se ha trabajado la memoria en la sesión: observaciones leídas, espejo de la ficha (topic `odd/<slug>/tasks`) y resumen de sesión. Si el daemon de HanniGram no está disponible, se marca `PENDIENTE` en vez de inventar el guardado.
+
 ### 🔌 Gestión de extensiones
 
 - **Paquetes por defecto** (activos siempre): `pi-mcp-adapter`, `pi-subagents`, `pi-web-access`.
