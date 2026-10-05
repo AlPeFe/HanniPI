@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="Hanni mascot" src="docs/images/hanni-mascot.png" width="128">
+  <img alt="HanniPI banner — Hanni mascot with wordmark" src="docs/images/hannibanner.png" width="480">
 </p>
 <p align="center">
   <strong>HanniPI</strong> — tu harness de desarrollo de software, con memoria persistente y flujo de trabajo sODD.

@@ -159,7 +159,7 @@ import {
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.ts";
 import { PackageManagerSelector } from "./components/package-manager-selector.ts";
-import { piLogoLines, piWordmark, supportsPiLogo } from "./components/pi-logo.ts";
+import { hanniLogoLines, hanniWordmark, supportsHanniLogo } from "./components/hanni-logo.ts";
 import { createLoginMenuSelector } from "./components/radius-login-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
@@ -986,11 +986,11 @@ export class InteractiveMode {
 			const showDetails = this.shouldShowStartupDetails();
 			// Built on demand so the header follows theme changes. The logo's first line carries the version,
 			// its second line the first line of key hints. Terminals that cannot render the logo get a
-			// "Pi vX" line instead, with the key hints below it.
-			const showLogo = supportsPiLogo();
+			// "Hanni vX" line instead, with the key hints below it.
+			const showLogo = supportsHanniLogo();
 			const withLogo = (hints: string) => {
-				if (!showLogo) return `${piWordmark()} ${theme.fg("dim", `v${this.version}`)}\n${hints}`;
-				const [top, bottom] = piLogoLines();
+				if (!showLogo) return `${hanniWordmark()} ${theme.fg("dim", `v${this.version}`)}\n${hints}`;
+				const [top, bottom] = hanniLogoLines();
 				return `${top} ${theme.fg("dim", `v${this.version}`)}\n${bottom} ${hints}`;
 			};
 
