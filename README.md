@@ -47,19 +47,21 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 
 `hanniorq` es una capa de **coordinación** sobre `/task`. No duplica el almacenamiento: usa la misma ficha `odd/tasks/<slug>.md`. Su filosofía es la de **sODD**: orgánico pero pequeño.
 
-**La diferencia clave con ODD adulto: no todo es investigación, no todo requiere resumen, no todo requiere tests.**
+**La diferencia clave con ODD adulto: no todo es investigación, no todo requiere resumen, no todo requiere tests, y la delegación es condicional (no por defecto).**
 
 - Un cambio **pequeño y entendido** (1 paso, sin riesgo) se hace **inline**: sin ficha, sin subagentes, sin resumen.
 - Solo el trabajo **sustancial** (2+ pasos, varios archivos, riesgo) genera ficha y se trabaja por pasos.
 - **No todo se testea.** Solo se verifica lo que tiene un check aplicable y un resultado esperado; si no, se hace verificación funcional proporcionada o se declara "sin check".
 - El **resumen** (con la sección de memoria HanniGram) solo se genera en `/hanniorq close` y solo si hubo ficha.
+- **Delegación CONDICIONAL:** si la ficha activa es grande y **spliteable** (pasos independientes), cada parte se delega con la tool `subagent` (ficha recortada + paso como contexto). Un solo bloque se ejecuta inline. Todo lo que delegas sigue siendo visible y verificable.
 
 **Comandos:**
 
 ```
 /hanniorq on | off | status        # activa/desactiva el modo orquestador
 /hanniorq plan "<petición>"        # clasifica: trivial → inline; sustancial → ficha
-/hanniorq run [Tn]                 # ejecuta la siguiente tarea (o Tn) con su check y commit
+/hanniorq run [Tn]                 # ejecuta la siguiente tarea; si es grande y spliteable, delega partes con subagent
+/hanniorq watch                    # muestra en qué se trabaja: lista las fichas activas con su estado y progreso
 /hanniorq close                    # genera el resumen final (plantilla fija + memoria HanniGram)
 /hanniorq resume [<slug>]          # recupera contexto: mem_context → mem_search → ficha
 ```

@@ -20,6 +20,7 @@ Versión reducida de ODD (Organic Driven Development) para un agente único con 
 3. **Un `verify:` por paso.** Es el comando que debe pasar antes de commitear (sustituto barato del review).
 4. **Commit atómico por paso** con Conventional Commit; la evidencia es el sha.
 5. **Promoción:** si la tarea crece, se promueve a ODD adulto (feature document completo).
+6. **Delegación CONDICIONAL:** si la ficha activa es grande (2+ pasos, varios archivos/paquetes) y **spliteable** (pasos independientes que no chocan entre sí), delega cada parte con la tool `subagent`, pasándole la ficha recortada + el paso concreto como contexto. Un subagente no ve esta conversación, así que el contexto debe ser autocontenido (ficha + paso + verify). Los subagentes devuelven su respuesta y sobreviven (puedes cambiar a su conversación). Solo ejecuta inline lo que no sea spliteable.
 
 ## Flujo
 
@@ -27,7 +28,7 @@ Versión reducida de ODD (Organic Driven Development) para un agente único con 
 2. **Clasificar.** Trivial (1 paso, <20 líneas) → commit directo, sin ficha. Sustancial → ficha.
 3. **Crear la ficha** `odd/tasks/<slug>.md` (plantilla abajo), escribir `odd/.active` con el slug, y `mem_save(topic_key, What/Why)`.
 4. **Por cada paso:**
-   - Implementar.
+   - Implementar (o delegar: si la tarea tiene 2+ pasos independientes, lanza `subagent` por paso con la ficha recortada como contexto; vigila con `/hanniorq watch`).
    - Ejecutar el `verify` del paso.
    - Commit `type(scope): mensaje`.
    - Marcar `[x] S<n> <acción> — <sha7>`.

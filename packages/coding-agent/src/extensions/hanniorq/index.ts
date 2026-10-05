@@ -14,6 +14,7 @@
  *    solo se genera en `/hanniorq close` y solo si hubo ficha.
  *  - Orgánico pero pequeño: la ficha es la fuente de verdad; HanniGram es un
  *    índice/espejo, no un duplicado.
+ *  - Delegación CONDICIONAL: si la ficha activa es grande (2+ pasos, varios archivos/paquetes) y spliteable (partes independientes), delega cada parte con la tool subagent pasándole la ficha como contexto; si es un solo bloque, hazlo inline.
  */
 
 import { spawnSync } from "node:child_process";
@@ -159,7 +160,7 @@ function buildSummary(opts: {
 	export function createHanniorqExtension(): ExtensionFactory {
 		return (pi) => {
 			pi.registerCommand("hanniorq", {
-				description: "Orquestador sODD: on|off|status|plan|run|close|resume",
+				description: "Orquestador sODD: on|off|status|plan|run|watch|close|resume",
 				handler: async (args, ctx) => {
 					const [sub, ...rest] = args;
 					const cwd = ctx.cwd ?? process.cwd();
@@ -205,10 +206,42 @@ function buildSummary(opts: {
 								return;
 							}
 							const target = rest[0] ? ` (tarea ${rest[0]})` : "";
-							ctx.ui.notify(`Ejecuta la siguiente tarea${target} de la ficha, con su check si aplica, y haz commit por tarea.`, "info");
+							// sODD: delegación CONDICIONAL — si la ficha activa es grande y spliteable
+							// (pasos independientes), delega cada parte con la tool subagent pasándole
+							// la ficha como contexto; los callbacks de estado llegan al log. Si es un
+							// solo bloque, ejecútalo tú inline.
+							const text = readFileSync(taskPath, "utf-8");
+							const steps = (text.match(/^- \[ \]/gm) ?? []).length;
+							const splitable = steps >= 2;
+							const hint = splitable
+								? `La ficha tiene ${steps} pasos — si son independientes, delega cada parte con la tool \`subagent\` (pásale la ficha + el paso concreto como contexto) y vigila con /hanniorq watch. Solo ejecuta inline lo que no sea spliteable.`
+								: `Ejecuta la siguiente tarea${target} de la ficha, con su check si aplica, y haz commit por tarea.`;
+							ctx.ui.notify(hint, "info");
 							return;
 						}
-						case "close": {
+						case "watch": {
+						// Lista las fichas activas (no-done) con su paso actual, para ver en qué se trabaja.
+						const tasksDir = join(getOddDir(cwd), "tasks");
+						let rows = "sin tareas activas";
+						try {
+							const names = (await import("node:fs")).readdirSync(tasksDir).filter((n) => n.endsWith(".md"));
+							const active = names
+								.map((n) => {
+									const p = join(tasksDir, n);
+									const text = readFileSync(p, "utf-8");
+									const status = text.match(/^status: (.+)$/m)?.[1] ?? "?";
+									const seen = text.match(/\[x\]|\[X\]/) ? "progreso ✔" : "sin pasos hechos";
+									return `  ${n} · ${status} · ${seen}`;
+								})
+								.join("\n");
+							if (names.length) rows = `fichas:\n${active}`;
+						} catch {
+							/* odd/tasks no existe aún */
+						}
+						ctx.ui.notify(`hanniorq watch — en qué se trabaja:\n${rows}\n(Cada ficha vive en odd/tasks/<slug>.md; el agente la actualiza por paso.)`, "info");
+						return;
+					}
+					case "close": {
 							if (!taskPath) {
 								ctx.ui.notify("No hay ficha activa — nada que resumir. (sODD: los cambios triviales no generan resumen.)", "info");
 								return;
@@ -241,7 +274,7 @@ function buildSummary(opts: {
 							return;
 						}
 						default:
-							ctx.ui.notify("Uso: /hanniorq on|off|status|plan|run|close|resume", "warning");
+							ctx.ui.notify("Uso: /hanniorq on|off|status|plan|run|watch|close|resume", "warning");
 					}
 				},
 			});
