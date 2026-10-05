@@ -22,7 +22,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { ExtensionFactory } from "../../core/extensions/types.ts";
+import type { ExtensionFactory, ExtensionUIContext } from "../../core/extensions/types.ts";
 
 function getOddDir(cwd: string): string {
 	return join(cwd, "odd");
@@ -53,6 +53,16 @@ interface OrqState {
 }
 
 const state: OrqState = { on: false, memLog: [] };
+
+/** Subagentes en vuelo (flota). key = toolCallId de la tool subagent. */
+interface FleetAgent {
+	id: string;
+	task: string;
+	status: "running" | "done" | "error";
+	startedAt: number;
+}
+const fleet = new Map<string, FleetAgent>();
+let fleetWidgetTimer: ReturnType<typeof setInterval> | undefined;
 
 function git(cwd: string, args: string[]): { ok: boolean; out: string } {
 	const r = spawnSync("git", args, { cwd, encoding: "utf-8" });
@@ -154,11 +164,64 @@ function buildSummary(opts: {
 	}
 
 	// ---------------------------------------------------------------------------
+	// Widget de flota: representa los subagentes en paralelo (adaptación del
+	// fleet widget de pi-subagents a sODD — la ficha es la fuente de verdad y
+	// cada worker muestra la tarea que le toca).
+	// ---------------------------------------------------------------------------
+
+	const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+	function renderFleet(ui: ExtensionUIContext): void {
+		const running = [...fleet.values()].filter((a) => a.status === "running");
+		if (fleet.size === 0) {
+			ui.setWidget("hanniorq-fleet", undefined);
+			return;
+		}
+		const now = Date.now();
+		const lines = [...fleet.values()].map((a, i) => {
+			const icon = a.status === "running" ? `${SPIN[(now / 80) % SPIN.length | 0]}` : a.status === "error" ? "✗" : "✓";
+			const age = Math.round((now - a.startedAt) / 1000);
+			const task = a.task.length > 80 ? `${a.task.slice(0, 79)}…` : a.task;
+			return `${icon} ${a.id.slice(0, 8)} ${a.status === "running" ? `▶ ${task}` : `${task} (${age}s)`}`;
+		});
+		ui.setWidget("hanniorq-fleet", ["─ hanniorq flota de subagentes ─", ...lines]);
+		if (running.length === 0) {
+			if (fleetWidgetTimer !== undefined) {
+				clearInterval(fleetWidgetTimer);
+				fleetWidgetTimer = undefined;
+			}
+		}
+	}
+
+	function startFleetTimer(ui: ExtensionUIContext): void {
+		if (fleetWidgetTimer !== undefined) clearInterval(fleetWidgetTimer);
+		fleetWidgetTimer = setInterval(() => renderFleet(ui), 100);
+	}
+
+	// ---------------------------------------------------------------------------
 	// Extensión
 	// ---------------------------------------------------------------------------
 
 	export function createHanniorqExtension(): ExtensionFactory {
 		return (pi) => {
+			// Flota de subagentes: cada llamada a la tool `subagent` es un worker.
+			// sODD: sODD (el agente) decide cuándo delegar según la ficha; si el
+			// usuario escribe "delega", se fuerza. Aquí solo se observa y se pinta.
+			pi.on("tool_execution_start", (event, ctx) => {
+				if (event.toolName !== "subagent") return;
+				const task = typeof (event.args as { task?: unknown })?.task === "string" ? (event.args as { task: string }).task : "?";
+				fleet.set(event.toolCallId, { id: event.toolCallId, task, status: "running", startedAt: Date.now() });
+				startFleetTimer(ctx.ui);
+				renderFleet(ctx.ui);
+			});
+			pi.on("tool_execution_end", (event, ctx) => {
+				if (event.toolName !== "subagent") return;
+				const agent = fleet.get(event.toolCallId);
+				if (agent) {
+					agent.status = event.isError ? "error" : "done";
+					renderFleet(ctx.ui);
+				}
+			});
 			pi.registerCommand("hanniorq", {
 				description: "Orquestador sODD: on|off|status|plan|run|watch|close|resume",
 				handler: async (args, ctx) => {
@@ -220,7 +283,7 @@ function buildSummary(opts: {
 							return;
 						}
 						case "watch": {
-						// Lista las fichas activas (no-done) con su paso actual, para ver en qué se trabaja.
+						// Lista las fichas activas (no-done) + los subagentes en vuelo, para ver en qué se trabaja.
 						const tasksDir = join(getOddDir(cwd), "tasks");
 						let rows = "sin tareas activas";
 						try {
@@ -238,7 +301,11 @@ function buildSummary(opts: {
 						} catch {
 							/* odd/tasks no existe aún */
 						}
-						ctx.ui.notify(`hanniorq watch — en qué se trabaja:\n${rows}\n(Cada ficha vive en odd/tasks/<slug>.md; el agente la actualiza por paso.)`, "info");
+						const fleetLines = [...fleet.values()].map(
+							(a) => `  ${a.status === "running" ? "▶" : a.status === "error" ? "✗" : "✓"} ${a.id.slice(0, 8)}: ${a.task.slice(0, 90)}`,
+						);
+						const fleetRows = fleetLines.length ? `subagentes en vuelo:\n${fleetLines.join("\n")}` : "subagentes en vuelo: ninguno";
+						ctx.ui.notify(`hanniorq watch — en qué se trabaja:\n${rows}\n${fleetRows}\n(Cada ficha vive en odd/tasks/<slug>.md; el agente la actualiza por paso.)`, "info");
 						return;
 					}
 					case "close": {

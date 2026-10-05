@@ -20,7 +20,7 @@ Versión reducida de ODD (Organic Driven Development) para un agente único con 
 3. **Un `verify:` por paso.** Es el comando que debe pasar antes de commitear (sustituto barato del review).
 4. **Commit atómico por paso** con Conventional Commit; la evidencia es el sha.
 5. **Promoción:** si la tarea crece, se promueve a ODD adulto (feature document completo).
-6. **Delegación CONDICIONAL:** si la ficha activa es grande (2+ pasos, varios archivos/paquetes) y **spliteable** (pasos independientes que no chocan entre sí), delega cada parte con la tool `subagent`, pasándole la ficha recortada + el paso concreto como contexto. Un subagente no ve esta conversación, así que el contexto debe ser autocontenido (ficha + paso + verify). Los subagentes devuelven su respuesta y sobreviven (puedes cambiar a su conversación). Solo ejecuta inline lo que no sea spliteable.
+6. **Delegación CONDICIONAL (sODD decide, tú puedes forzar):** si la ficha activa es grande (2+ pasos, varios archivos/paquetes) y **spliteable** (pasos independientes que no chocan entre sí), delega cada parte con la tool `subagent`, pasándole la ficha recortada + el paso concreto como contexto. Un subagente no ve esta conversación, así que el contexto debe ser autocontenido (ficha + paso + verify). Los subagentes devuelven su respuesta y sobreviven (puedes cambiar a su conversación). Solo ejecuta inline lo que no sea spliteable. **El usuario puede forzar la delegación** escribiendo "delega" en su petición: entonces delega aunque la tarea parezca pequeña; y puede prohibirla con "no delegues". El widget `hanniorq-fleet` pinta cada subagente en vuelo (spinner + tarea) mientras trabaja; `/hanniorq watch` muestra fichas + flota.
 
 ## Flujo
 

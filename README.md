@@ -53,7 +53,8 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 - Solo el trabajo **sustancial** (2+ pasos, varios archivos, riesgo) genera ficha y se trabaja por pasos.
 - **No todo se testea.** Solo se verifica lo que tiene un check aplicable y un resultado esperado; si no, se hace verificación funcional proporcionada o se declara "sin check".
 - El **resumen** (con la sección de memoria HanniGram) solo se genera en `/hanniorq close` y solo si hubo ficha.
-- **Delegación CONDICIONAL:** si la ficha activa es grande y **spliteable** (pasos independientes), cada parte se delega con la tool `subagent` (ficha recortada + paso como contexto). Un solo bloque se ejecuta inline. Todo lo que delegas sigue siendo visible y verificable.
+- **Delegación CONDICIONAL:** sODD decide: si la ficha activa es grande y **spliteable** (pasos independientes), cada parte se delega con la tool `subagent` (ficha recortada + paso como contexto). Un solo bloque se ejecuta inline. **Opciones de forzado**: escribe "delega" en tu petición para forzar delegación, o "no delegues" para prohibirla.
+- **Widget de flota:** mientras hay subagentes trabajando, el widget `hanniorq-fleet` se muestra en la TUI con un spinner por worker y la tarea que está haciendo (adaptación del fleet widget de pi-subagents a sODD: la ficha `odd/tasks/` es la fuente de verdad).
 
 **Comandos:**
 
@@ -61,7 +62,7 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 /hanniorq on | off | status        # activa/desactiva el modo orquestador
 /hanniorq plan "<petición>"        # clasifica: trivial → inline; sustancial → ficha
 /hanniorq run [Tn]                 # ejecuta la siguiente tarea; si es grande y spliteable, delega partes con subagent
-/hanniorq watch                    # muestra en qué se trabaja: lista las fichas activas con su estado y progreso
+/hanniorq watch                    # muestra en qué se trabaja: fichas activas + subagentes en vuelo
 /hanniorq close                    # genera el resumen final (plantilla fija + memoria HanniGram)
 /hanniorq resume [<slug>]          # recupera contexto: mem_context → mem_search → ficha
 ```
