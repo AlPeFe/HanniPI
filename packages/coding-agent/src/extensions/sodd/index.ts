@@ -69,7 +69,7 @@ export function createSoddExtension(): ExtensionFactory {
 		pi.registerCommand("task", {
 			description: "Gestiona la ficha sODD activa (new|status|next|done|promote)",
 			handler: async (args, ctx) => {
-				const [sub, ...rest] = args;
+				const [sub, ...rest] = args.trim().split(/\s+/);
 				const cwd = ctx.cwd ?? process.cwd();
 				const taskPath = getActiveTaskPath(cwd);
 				const oddDir = getOddDir(cwd);

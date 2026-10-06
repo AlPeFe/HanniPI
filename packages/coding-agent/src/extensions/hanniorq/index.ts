@@ -199,6 +199,35 @@ function buildSummary(opts: {
 	}
 
 	// ---------------------------------------------------------------------------
+	// Indicador sODD: cuando hay ficha activa, se muestra que el procedimiento
+	// sODD está en uso (slug + progreso). Se oculta cuando no hay ficha.
+	// ---------------------------------------------------------------------------
+
+	function soddIndicator(cwd: string): { slug: string; done: number; total: number; status: string } | undefined {
+		const slug = getActiveSlug(cwd);
+		if (!slug) return undefined;
+		const p = join(getOddDir(cwd), "tasks", `${slug}.md`);
+		try {
+			const text = readFileSync(p, "utf-8");
+			const status = text.match(/^status: (.+)$/m)?.[1] ?? "?";
+			const steps = text.match(/^- \[ \]/gm) ?? [];
+			const doneSteps = text.match(/^- \[x\]/gim) ?? [];
+			return { slug, done: doneSteps.length, total: steps.length + doneSteps.length, status };
+		} catch {
+			return { slug, done: 0, total: 0, status: "?" };
+		}
+	}
+
+	function updateSoddIndicator(ui: ExtensionUIContext, cwd: string): void {
+		const ind = soddIndicator(cwd);
+		if (!ind) {
+			ui.setWidget("hanniorq-sodd", undefined);
+			return;
+		}
+		ui.setWidget("hanniorq-sodd", [`sODD activo ▸ ${ind.slug} · ${ind.status} · pasos ${ind.done}/${ind.total}`]);
+	}
+
+	// ---------------------------------------------------------------------------
 	// Extensión
 	// ---------------------------------------------------------------------------
 
@@ -222,10 +251,18 @@ function buildSummary(opts: {
 					renderFleet(ctx.ui);
 				}
 			});
+			// Indicador sODD: pinta si hay ficha activa (al iniciar y al terminar cada turno,
+			// que es cuando la ficha avanza).
+			pi.on("session_start", (_event, ctx) => {
+				updateSoddIndicator(ctx.ui, ctx.cwd ?? process.cwd());
+			});
+			pi.on("turn_end", (_event, ctx) => {
+				updateSoddIndicator(ctx.ui, ctx.cwd ?? process.cwd());
+			});
 			pi.registerCommand("hanniorq", {
-				description: "Orquestador sODD: on|off|status|plan|run|watch|close|resume",
+				description: "Orquestador sODD: on|off|status|plan|new|run|watch|close|resume",
 				handler: async (args, ctx) => {
-					const [sub, ...rest] = args;
+					const [sub, ...rest] = args.trim().split(/\s+/);
 					const cwd = ctx.cwd ?? process.cwd();
 					const taskPath = getActiveTaskPath(cwd);
 					const oddDir = getOddDir(cwd);
@@ -234,6 +271,19 @@ function buildSummary(opts: {
 						case "on": {
 							state.on = true;
 							ctx.ui.notify("hanniorq activado. Clasifico cada petición: trivial → inline (sin ficha/resumen); sustancial → ficha sODD.", "info");
+							return;
+						}
+						case "new": {
+							// Alias de plan: pide el slug de la ficha a crear.
+							const slug = rest[0];
+							if (!slug) {
+								ctx.ui.notify("Uso: /hanniorq new <slug> — crea la ficha sODD (o /hanniorq plan <petición> para clasificar).", "warning");
+								return;
+							}
+							ctx.ui.notify(
+								`Crea la ficha sODD: /task new ${slug} — con Objetivo, Alcance, Verify y Pasos. Trabaja por pasos con su check y commit atómico. Si mientras trabajas ves que es trivial, hazlo inline sin ficha.`,
+								"info",
+							);
 							return;
 						}
 						case "off": {
@@ -341,7 +391,7 @@ function buildSummary(opts: {
 							return;
 						}
 						default:
-							ctx.ui.notify("Uso: /hanniorq on|off|status|plan|run|watch|close|resume", "warning");
+							ctx.ui.notify("Uso: /hanniorq on|off|status|plan|new <slug>|run|watch|close|resume", "warning");
 					}
 				},
 			});
