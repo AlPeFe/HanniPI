@@ -4546,7 +4546,7 @@ export class InteractiveMode {
 		const updateInstruction = () =>
 			theme.fg("muted", `New version ${release.version} is available. Run `) +
 			theme.fg("accent", `${APP_NAME} update`);
-		const changelogUrl = "https://pi.dev/changelog";
+		const changelogUrl = "https://github.com/AlPeAlPeFe/HanniPI/releases";
 		const changelogLine = () => {
 			const changelogLink = getCapabilities().hyperlinks
 				? hyperlink(theme.fg("accent", changelogUrl), changelogUrl)
