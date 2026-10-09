@@ -1,9 +1,9 @@
 import type { InlineExtension } from "../core/extensions/types.ts";
 import codemodeExtension from "./codemode/index.ts";
+import hanniorqExtension from "./hanniorq/index.ts";
 import llamaExtension from "./llama/index.ts";
 import mcpExtension from "./mcp/index.ts";
 import soddExtension from "./sodd/index.ts";
-import hanniorqExtension from "./hanniorq/index.ts";
 import toolSearchExtension from "./tool-search/index.ts";
 
 export const builtInExtensions: InlineExtension[] = [
@@ -14,5 +14,5 @@ export const builtInExtensions: InlineExtension[] = [
 	{ name: "tool-search", factory: toolSearchExtension, replaceable: true, builtin: true },
 	{ name: "mcp", factory: mcpExtension, replaceable: true, builtin: true },
 	{ name: "sodd", factory: soddExtension, builtin: true },
-		{ name: "hanniorq", factory: hanniorqExtension, builtin: true },
-	];
+	{ name: "hanniorq", factory: hanniorqExtension, builtin: true },
+];

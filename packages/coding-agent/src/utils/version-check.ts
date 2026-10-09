@@ -81,7 +81,10 @@ export async function getLatestPiRelease(
 		typeof data.version === "string" && data.version.trim()
 			? data.version.trim()
 			: typeof data.tag_name === "string" && data.tag_name.trim()
-				? data.tag_name.trim().replace(/^v/, "").replace(/-hannipi$/, "")
+				? data.tag_name
+						.trim()
+						.replace(/^v/, "")
+						.replace(/-hannipi$/, "")
 				: undefined;
 	if (!rawVersion) {
 		return undefined;

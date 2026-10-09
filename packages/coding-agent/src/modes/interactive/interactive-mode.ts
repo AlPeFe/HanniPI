@@ -147,6 +147,7 @@ import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { FooterComponent, formatTokens } from "./components/footer.ts";
+import { hanniLogoLines, hanniWordmark, supportsHanniLogo } from "./components/hanni-logo.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { openMemoryExplorer } from "./components/memory-explorer.ts";
@@ -159,7 +160,6 @@ import {
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.ts";
 import { PackageManagerSelector } from "./components/package-manager-selector.ts";
-import { hanniLogoLines, hanniWordmark, supportsHanniLogo } from "./components/hanni-logo.ts";
 import { createLoginMenuSelector } from "./components/radius-login-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
