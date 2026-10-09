@@ -249,6 +249,48 @@ function updateSoddIndicator(ui: ExtensionUIContext, cwd: string): void {
 
 export function createHanniorqExtension(): ExtensionFactory {
 	return (pi) => {
+		// Estado del turno actual: tools usadas, escrituras de memoria, si se
+		// tocó sODD. Se resetea en turn_start y se resume en turn_end como un
+		// widget pequeñito (abajo), estilo "updated skill" de Hermes.
+		let turnTools = new Set<string>();
+		let turnMemoryWrites = 0;
+		let turnSoddTouched = false;
+
+		pi.on("turn_start", () => {
+			turnTools = new Set<string>();
+			turnMemoryWrites = 0;
+			turnSoddTouched = false;
+		});
+
+		pi.on("tool_execution_start", (event, ctx) => {
+			turnTools.add(event.toolName);
+			if (
+				event.toolName === "mem_save" ||
+				event.toolName === "mem_session_summary" ||
+				event.toolName === "mem_delete"
+			) {
+				turnMemoryWrites++;
+			}
+			if (event.toolName === "task" || event.toolName === "hanniorq" || event.toolName === "hannigram") {
+				turnSoddTouched = true;
+			}
+			if (event.toolName !== "subagent") return;
+			const task =
+				typeof (event.args as { task?: unknown })?.task === "string" ? (event.args as { task: string }).task : "?";
+			fleet.set(event.toolCallId, { id: event.toolCallId, task, status: "running", startedAt: Date.now() });
+			startFleetTimer(ctx.ui);
+			renderFleet(ctx.ui);
+		});
+
+		pi.on("tool_execution_end", (event, ctx) => {
+			if (event.toolName !== "subagent") return;
+			const agent = fleet.get(event.toolCallId);
+			if (agent) {
+				agent.status = event.isError ? "error" : "done";
+				renderFleet(ctx.ui);
+			}
+		});
+
 		// =================================================================
 		// /hannigram — memoria del proyecto (instancia BD + fichero local
 		// exportado, crea ADR, consulta estado). Delega en el CLI del motor
@@ -314,33 +356,29 @@ export function createHanniorqExtension(): ExtensionFactory {
 				ctx.ui.notify("Uso: /hannigram init|status|adr <título> [contenido]", "warning");
 			},
 		});
-		// Flota de subagentes: cada llamada a la tool `subagent` es un worker.
-		// sODD: sODD (el agente) decide cuándo delegar según la ficha; si el
-		// usuario escribe "delega", se fuerza. Aquí solo se observa y se pinta.
-		pi.on("tool_execution_start", (event, ctx) => {
-			if (event.toolName !== "subagent") return;
-			const task =
-				typeof (event.args as { task?: unknown })?.task === "string" ? (event.args as { task: string }).task : "?";
-			fleet.set(event.toolCallId, { id: event.toolCallId, task, status: "running", startedAt: Date.now() });
-			startFleetTimer(ctx.ui);
-			renderFleet(ctx.ui);
+
+		// Resumen de fin de turno: widget pequeñito (abajo) con tools usadas,
+		// si sODD se usó y si se escribió en memoria de HanniGram — estilo
+		// "updated skill" de Hermes.
+		pi.on("turn_end", (_event, ctx) => {
+			const cwd = ctx.cwd ?? process.cwd();
+			const ind = soddIndicator(cwd);
+			const parts: string[] = [];
+			if (turnTools.size > 0) parts.push(`tools: ${[...turnTools].join(", ")}`);
+			parts.push(
+				ind ? `sODD: ${ind.slug} (${ind.done}/${ind.total})` : turnSoddTouched ? "sODD: tocado" : "sODD: inline",
+			);
+			parts.push(turnMemoryWrites > 0 ? `mem: +${turnMemoryWrites}` : "mem: —");
+			ctx.ui.setWidget("hanniorq-turn", [`▸ ${parts.join(" · ")}`]);
+			updateSoddIndicator(ctx.ui, cwd);
 		});
-		pi.on("tool_execution_end", (event, ctx) => {
-			if (event.toolName !== "subagent") return;
-			const agent = fleet.get(event.toolCallId);
-			if (agent) {
-				agent.status = event.isError ? "error" : "done";
-				renderFleet(ctx.ui);
-			}
-		});
-		// Indicador sODD: pinta si hay ficha activa (al iniciar y al terminar cada turno,
-		// que es cuando la ficha avanza).
+
+		// Indicador sODD: pinta si hay ficha activa (al iniciar la sesión,
+		// que es cuando la ficha se retoma).
 		pi.on("session_start", (_event, ctx) => {
 			updateSoddIndicator(ctx.ui, ctx.cwd ?? process.cwd());
 		});
-		pi.on("turn_end", (_event, ctx) => {
-			updateSoddIndicator(ctx.ui, ctx.cwd ?? process.cwd());
-		});
+
 		pi.registerCommand("hanniorq", {
 			description: "Orquestador sODD: help|on|off|status|plan|new|run|watch|close|resume",
 			handler: async (args, ctx) => {
