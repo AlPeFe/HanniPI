@@ -547,8 +547,10 @@ export class InteractiveMode {
 	// Extension widgets (components rendered above/below the editor)
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
 	private extensionWidgetsBelow = new Map<string, Component & { dispose?(): void }>();
+	private extensionWidgetsRight = new Map<string, Component & { dispose?(): void }>();
 	private widgetContainerAbove!: Container;
 	private widgetContainerBelow!: Container;
+	private widgetContainerRight!: Container;
 
 	// Custom footer from extension (undefined = use built-in footer)
 	private customFooter: (Component & { dispose?(): void }) | undefined = undefined;
@@ -619,6 +621,7 @@ export class InteractiveMode {
 		this.statusContainer = new Container();
 		this.widgetContainerAbove = new Container();
 		this.widgetContainerBelow = new Container();
+		this.widgetContainerRight = new Container();
 		this.keybindings = KeybindingsManager.create();
 		setKeybindings(this.keybindings);
 		const editorPaddingX = this.settingsManager.getEditorPaddingX();
@@ -951,6 +954,8 @@ export class InteractiveMode {
 			editor: this.editorContainer,
 			widgetsBelow: this.widgetContainerBelow,
 			footer: this.footerContainer,
+			rightRail: this.widgetContainerRight,
+			rightRailVisible: () => this.extensionWidgetsRight.size > 0,
 			scrollbar: this.settingsManager.getFullscreenScrollbar(),
 			scrollbarTrackStyle: (text) => theme.fg("scrollbarTrack", text),
 			scrollbarThumbStyle: (text) => theme.fg("scrollbarThumb", text),
@@ -965,6 +970,7 @@ export class InteractiveMode {
 			this.editorContainer,
 			this.widgetContainerBelow,
 			this.footerContainer,
+			this.widgetContainerRight,
 		]);
 		// Accept text while startup completes, but only enable interrupt, exit, and submission feedback.
 		this.defaultEditor.onAction("app.clear", () => this.handleCtrlC());
@@ -2351,6 +2357,7 @@ export class InteractiveMode {
 
 		removeExisting(this.extensionWidgetsAbove);
 		removeExisting(this.extensionWidgetsBelow);
+		removeExisting(this.extensionWidgetsRight);
 
 		if (content === undefined) {
 			this.renderWidgets();
@@ -2374,7 +2381,12 @@ export class InteractiveMode {
 			component = content(this.ui, theme);
 		}
 
-		const targetMap = placement === "belowEditor" ? this.extensionWidgetsBelow : this.extensionWidgetsAbove;
+		const targetMap =
+			placement === "belowEditor"
+				? this.extensionWidgetsBelow
+				: placement === "rightRail"
+					? this.extensionWidgetsRight
+					: this.extensionWidgetsAbove;
 		targetMap.set(key, component);
 		this.renderWidgets();
 	}
@@ -2386,8 +2398,12 @@ export class InteractiveMode {
 		for (const widget of this.extensionWidgetsBelow.values()) {
 			widget.dispose?.();
 		}
+		for (const widget of this.extensionWidgetsRight.values()) {
+			widget.dispose?.();
+		}
 		this.extensionWidgetsAbove.clear();
 		this.extensionWidgetsBelow.clear();
+		this.extensionWidgetsRight.clear();
 		this.renderWidgets();
 	}
 
@@ -2434,6 +2450,9 @@ export class InteractiveMode {
 		if (!this.widgetContainerAbove || !this.widgetContainerBelow) return;
 		this.renderWidgetContainer(this.widgetContainerAbove, this.extensionWidgetsAbove, true, true);
 		this.renderWidgetContainer(this.widgetContainerBelow, this.extensionWidgetsBelow, false, false);
+		if (this.widgetContainerRight) {
+			this.renderWidgetContainer(this.widgetContainerRight, this.extensionWidgetsRight, false, false);
+		}
 		this.ui.requestRender();
 	}
 

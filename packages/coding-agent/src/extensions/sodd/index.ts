@@ -137,7 +137,7 @@ export function createSoddExtension(): ExtensionFactory {
 						return;
 					}
 					case "diff": {
-						const base = taskPath ? readFileSync(taskPath, "utf-8").match(/^base: (S+)/m)?.[1] : undefined;
+						const base = taskPath ? readFileSync(taskPath, "utf-8").match(/^base: (\S+)/m)?.[1] : undefined;
 						const r = spawnSync("git", ["diff", base ?? "HEAD", "--stat"], { cwd, encoding: "utf-8" });
 						ctx.ui.notify(r.stdout || r.stderr || "(sin cambios)");
 						return;

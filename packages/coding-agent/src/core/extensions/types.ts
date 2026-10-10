@@ -119,7 +119,7 @@ export interface ExtensionUIDialogOptions {
 }
 
 /** Placement for extension widgets. */
-export type WidgetPlacement = "aboveEditor" | "belowEditor";
+export type WidgetPlacement = "aboveEditor" | "belowEditor" | "rightRail";
 
 /** Options for extension widgets. */
 export interface ExtensionWidgetOptions {

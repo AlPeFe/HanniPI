@@ -20,6 +20,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { ThemedText } from "../../modes/interactive/components/themed-text.ts";
 import type { ExtensionFactory, ExtensionUIContext } from "../../core/extensions/types.ts";
 
 function getOddDir(cwd: string): string {
@@ -244,6 +245,140 @@ function updateSoddIndicator(ui: ExtensionUIContext, cwd: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Rail derecho: estado del proyecto en el que se trabaja (proyecto · memoria
+// HanniGram · sODD · tareas como TODO). Se pinta en la columna derecha de la
+// TUI (placement "rightRail") y se refresca en cada evento de sesión/turno.
+// ---------------------------------------------------------------------------
+
+const RAIL_WIDTH = 32;
+
+/** Cache del estado de la memoria HanniGram (daemon + nº observaciones del proyecto). */
+let memoryCache: { up: boolean; count: number; checked: boolean } = { up: false, count: 0, checked: false };
+
+function clip(s: string, n: number): string {
+	return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+
+/** Nombre del proyecto: owner/repo del git remote, o nombre del directorio. */
+function projectName(cwd: string): string {
+	const r = git(cwd, ["config", "--get", "remote.origin.url"]);
+	if (r.ok && r.out) {
+		let url = r.out.trim().replace(/\/+$/, "");
+		if (url.toLowerCase().endsWith(".git")) url = url.slice(0, -4);
+		const parts = url.split(/[:\/]/).filter(Boolean);
+		if (parts.length >= 2) return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
+		return url;
+	}
+	return cwd.split(/[\\/]/).filter(Boolean).pop() ?? cwd;
+}
+
+/** Pasos de la ficha sODD activa como lista de TODOs (## Pasos → - [ ] / - [x]). */
+function todoSteps(cwd: string): Array<{ done: boolean; text: string }> {
+	const p = getActiveTaskPath(cwd);
+	if (!p) return [];
+	try {
+		const lines = readFileSync(p, "utf-8").split("\n");
+		const out: Array<{ done: boolean; text: string }> = [];
+		let inPasos = false;
+		for (const line of lines) {
+			if (line.startsWith("## Pasos")) {
+				inPasos = true;
+				continue;
+			}
+			if (line.startsWith("## ")) {
+				inPasos = false;
+				continue;
+			}
+			if (!inPasos) continue;
+			const m = line.match(/^-\s*\[( |x|X)\]\s*(.*)$/);
+			if (m) out.push({ done: m[1] !== " ", text: (m[2] ?? "").trim() });
+		}
+		return out;
+	} catch {
+		return [];
+	}
+}
+
+/** Consulta el daemon HanniGram (health + observaciones del proyecto) y refresca la cache. */
+async function checkMemory(cwd: string): Promise<void> {
+	try {
+		const health = await hannigram<{ status?: string }>("/health");
+		const up = health?.status === "ok";
+		let count = 0;
+		if (up) {
+			const obs = await hannigram<Array<unknown>>(
+				`/api/observations?${new URLSearchParams({ cwd, limit: "200" })}`,
+			);
+			count = obs?.length ?? 0;
+		}
+		memoryCache = { up, count, checked: true };
+	} catch {
+		memoryCache = { up: false, count: 0, checked: true };
+	}
+}
+
+/** Líneas del rail derecho (coloreadas con el tema vivo vía ui.theme). */
+function railLines(ui: ExtensionUIContext, cwd: string): string[] {
+	const theme = ui.theme;
+	const W = RAIL_WIDTH;
+	const sep = theme.fg("border", "─".repeat(W));
+	const lines: string[] = [];
+
+	// Proyecto
+	const project = projectName(cwd);
+	lines.push(theme.bold(theme.fg("accent", clip(project, W))));
+	lines.push(theme.fg("dim", `rama ${clip(currentBranch(cwd), W - 5)}`));
+	lines.push(sep);
+
+	// Memoria HanniGram
+	lines.push(theme.fg("accent", "memoria"));
+	if (!memoryCache.checked) {
+		lines.push(theme.fg("muted", "comprobando…"));
+	} else if (memoryCache.up) {
+		lines.push(`${theme.fg("success", "✓")} ${theme.fg("text", "ON")} · ${memoryCache.count} obs`);
+	} else {
+		lines.push(`${theme.fg("error", "✗")} ${theme.fg("text", "OFF")} (daemon caído)`);
+	}
+	lines.push(sep);
+
+	// sODD
+	lines.push(theme.fg("accent", "sODD"));
+	const ind = soddIndicator(cwd);
+	if (ind) {
+		lines.push(`${theme.fg("success", "✓")} activo · ${clip(ind.slug, 16)} (${ind.done}/${ind.total})`);
+	} else {
+		lines.push(`${theme.fg("muted", "·")} inline`);
+	}
+	lines.push(sep);
+
+	// Tareas (TODO)
+	const todos = todoSteps(cwd);
+	if (todos.length > 0) {
+		lines.push(theme.fg("accent", "tareas"));
+		for (const t of todos.slice(0, 8)) {
+			const mark = t.done ? theme.fg("success", "☑") : theme.fg("muted", "☐");
+			lines.push(`${mark} ${clip(t.text, W - 3)}`);
+		}
+		if (todos.length > 8) lines.push(theme.fg("muted", `… +${todos.length - 8}`));
+	}
+
+	return lines;
+}
+
+/** Renderiza el rail derecho (widget "hanniorq-rail", placement rightRail). */
+function renderRail(ui: ExtensionUIContext, cwd: string): void {
+	ui.setWidget("hanniorq-rail", () => new ThemedText(() => railLines(ui, cwd).join("\n"), 1, 1), {
+		placement: "rightRail",
+	});
+}
+
+/** Render inmediato + refresco asíncrono de la memoria (re-render al completar). */
+function refreshRail(ui: ExtensionUIContext, cwd: string): void {
+	renderRail(ui, cwd);
+	void checkMemory(cwd).then(() => renderRail(ui, cwd));
+}
+
+// ---------------------------------------------------------------------------
 // Extensión
 // ---------------------------------------------------------------------------
 
@@ -283,6 +418,17 @@ export function createHanniorqExtension(): ExtensionFactory {
 		});
 
 		pi.on("tool_execution_end", (event, ctx) => {
+			// Refresca el rail derecho cuando cambia estado relevante (memoria/sODD/tareas).
+			if (
+				event.toolName === "mem_save" ||
+				event.toolName === "mem_session_summary" ||
+				event.toolName === "mem_delete" ||
+				event.toolName === "task" ||
+				event.toolName === "hanniorq" ||
+				event.toolName === "hannigram"
+			) {
+				renderRail(ctx.ui, ctx.cwd ?? process.cwd());
+			}
 			if (event.toolName !== "subagent") return;
 			const agent = fleet.get(event.toolCallId);
 			if (agent) {
@@ -371,12 +517,15 @@ export function createHanniorqExtension(): ExtensionFactory {
 			parts.push(turnMemoryWrites > 0 ? `mem: +${turnMemoryWrites}` : "mem: —");
 			ctx.ui.setWidget("hanniorq-turn", [`▸ ${parts.join(" · ")}`]);
 			updateSoddIndicator(ctx.ui, cwd);
+			refreshRail(ctx.ui, cwd);
 		});
 
 		// Indicador sODD: pinta si hay ficha activa (al iniciar la sesión,
 		// que es cuando la ficha se retoma).
 		pi.on("session_start", (_event, ctx) => {
-			updateSoddIndicator(ctx.ui, ctx.cwd ?? process.cwd());
+			const cwd = ctx.cwd ?? process.cwd();
+			updateSoddIndicator(ctx.ui, cwd);
+			refreshRail(ctx.ui, cwd);
 		});
 
 		pi.registerCommand("hanniorq", {
