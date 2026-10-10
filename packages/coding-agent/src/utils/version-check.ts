@@ -81,19 +81,17 @@ export async function getLatestPiRelease(
 		typeof data.version === "string" && data.version.trim()
 			? data.version.trim()
 			: typeof data.tag_name === "string" && data.tag_name.trim()
-				? data.tag_name
-						.trim()
-						.replace(/^v/, "")
-						.replace(/-hannipi$/, "")
+				? data.tag_name.trim()
 				: undefined;
-	if (!rawVersion) {
+	const normalizedVersion = rawVersion?.replace(/^v/, "").replace(/-hannipi$/, "");
+	if (!normalizedVersion) {
 		return undefined;
 	}
 	const packageName =
 		typeof data.packageName === "string" && data.packageName.trim() ? data.packageName.trim() : undefined;
 	const note = typeof data.note === "string" && data.note.trim() ? data.note.trim() : undefined;
 	return {
-		version: rawVersion,
+		version: normalizedVersion,
 		packageName,
 		...(note ? { note } : {}),
 	};

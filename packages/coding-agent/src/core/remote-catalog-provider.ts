@@ -10,7 +10,10 @@ import { VERSION } from "../config.ts";
 import { fetchWithRetry } from "../utils/management-http.ts";
 import { getPiUserAgent } from "../utils/pi-user-agent.ts";
 
-const DEFAULT_CATALOG_BASE_URL = "https://pi.dev";
+// HanniPI has no catalog backend, so the remote model catalog is disabled by
+// default (empty base URL). Set PI_CATALOG_BASE_URL to re-enable it against a
+// custom catalog server (upstream was https://pi.dev).
+const DEFAULT_CATALOG_BASE_URL = process.env.PI_CATALOG_BASE_URL ?? "";
 const REMOTE_CATALOG_ATTEMPT_TIMEOUT_MS = 4_000;
 export const REMOTE_CATALOG_REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000;
 /**
@@ -86,6 +89,7 @@ export function withRemoteCatalog(
 				return;
 			}
 			if (!context.allowNetwork || context.signal.aborted) return;
+			if (!catalogBaseUrl) return;
 			if (
 				!context.force &&
 				stored?.checkedAt !== undefined &&
