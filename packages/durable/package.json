@@ -1,6 +1,6 @@
 {
   "name": "@earendil-works/pi-durable",
-  "version": "0.1.1-hannipi",
+  "version": "0.1.2-hannipi",
   "description": "Durable conversation, task, and document runtime for Pi",
   "type": "module",
   "main": "./dist/index.js",

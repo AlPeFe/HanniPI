@@ -1,12 +1,12 @@
 {
 	"name": "@earendil-works/pi-coding-agent",
-	"version": "0.1.1-hannipi",
+	"version": "0.1.2-hannipi",
 	"lockfileVersion": 3,
 	"requires": true,
 	"packages": {
 		"": {
 			"name": "@earendil-works/pi-coding-agent",
-			"version": "0.1.1-hannipi",
+			"version": "0.1.2-hannipi",
 			"license": "MIT",
 			"dependencies": {
 				"@earendil-works/chord": "^1.0.0",
@@ -411,8 +411,8 @@
 			}
 		},
 		"node_modules/@earendil-works/chord": {
-			"version": "0.1.1-hannipi",
-			"resolved": "https://registry.npmjs.org/@earendil-works/chord/-/chord-0.1.1-hannipi.tgz",
+			"version": "0.1.2-hannipi",
+			"resolved": "https://registry.npmjs.org/@earendil-works/chord/-/chord-0.1.2-hannipi.tgz",
 			"license": "MIT",
 			"dependencies": {
 				"esbuild": "0.28.2"
@@ -422,8 +422,8 @@
 			}
 		},
 		"node_modules/@earendil-works/pi-agent-core": {
-			"version": "0.1.1-hannipi",
-			"resolved": "https://registry.npmjs.org/@earendil-works/pi-agent-core/-/pi-agent-core-0.1.1-hannipi.tgz",
+			"version": "0.1.2-hannipi",
+			"resolved": "https://registry.npmjs.org/@earendil-works/pi-agent-core/-/pi-agent-core-0.1.2-hannipi.tgz",
 			"license": "MIT",
 			"dependencies": {
 				"@earendil-works/pi-ai": "^1.0.0",
@@ -434,8 +434,8 @@
 			}
 		},
 		"node_modules/@earendil-works/pi-ai": {
-			"version": "0.1.1-hannipi",
-			"resolved": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-0.1.1-hannipi.tgz",
+			"version": "0.1.2-hannipi",
+			"resolved": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-0.1.2-hannipi.tgz",
 			"license": "MIT",
 			"dependencies": {
 				"@anthropic-ai/sdk": "0.124.0",
@@ -517,8 +517,8 @@
 			}
 		},
 		"node_modules/@earendil-works/pi-codemode": {
-			"version": "0.1.1-hannipi",
-			"resolved": "https://registry.npmjs.org/@earendil-works/pi-codemode/-/pi-codemode-0.1.1-hannipi.tgz",
+			"version": "0.1.2-hannipi",
+			"resolved": "https://registry.npmjs.org/@earendil-works/pi-codemode/-/pi-codemode-0.1.2-hannipi.tgz",
 			"license": "MIT",
 			"dependencies": {
 				"quickjs-wasi": "3.6.2"
@@ -528,8 +528,8 @@
 			}
 		},
 		"node_modules/@earendil-works/pi-mcp": {
-			"version": "0.1.1-hannipi",
-			"resolved": "https://registry.npmjs.org/@earendil-works/pi-mcp/-/pi-mcp-0.1.1-hannipi.tgz",
+			"version": "0.1.2-hannipi",
+			"resolved": "https://registry.npmjs.org/@earendil-works/pi-mcp/-/pi-mcp-0.1.2-hannipi.tgz",
 			"license": "MIT",
 			"dependencies": {
 				"cross-spawn": "7.0.6"
@@ -539,16 +539,16 @@
 			}
 		},
 		"node_modules/@earendil-works/pi-telemetry": {
-			"version": "0.1.1-hannipi",
-			"resolved": "https://registry.npmjs.org/@earendil-works/pi-telemetry/-/pi-telemetry-0.1.1-hannipi.tgz",
+			"version": "0.1.2-hannipi",
+			"resolved": "https://registry.npmjs.org/@earendil-works/pi-telemetry/-/pi-telemetry-0.1.2-hannipi.tgz",
 			"license": "MIT",
 			"engines": {
 				"node": ">=22.19.0"
 			}
 		},
 		"node_modules/@earendil-works/pi-tui": {
-			"version": "0.1.1-hannipi",
-			"resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.1.1-hannipi.tgz",
+			"version": "0.1.2-hannipi",
+			"resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.1.2-hannipi.tgz",
 			"license": "MIT",
 			"dependencies": {
 				"get-east-asian-width": "1.6.0",

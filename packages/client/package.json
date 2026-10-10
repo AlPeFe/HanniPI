@@ -1,6 +1,6 @@
 {
   "name": "@earendil-works/pi-client",
-  "version": "0.1.1-hannipi",
+  "version": "0.1.2-hannipi",
   "description": "Transport-neutral client for remote pi sessions over framed CBOR bytes",
   "type": "module",
   "main": "./dist/index.js",

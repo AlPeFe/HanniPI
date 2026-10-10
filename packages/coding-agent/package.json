@@ -1,6 +1,6 @@
 {
   "name": "@earendil-works/pi-coding-agent",
-  "version": "0.1.1-hannipi",
+  "version": "0.1.2-hannipi",
   "description": "Coding agent CLI with read, bash, edit, write tools and session management",
   "type": "module",
   "piConfig": {
@@ -9,7 +9,7 @@
   },
   "bin": {
     "hanni": "dist/bundle/cli.js"
-    },
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
