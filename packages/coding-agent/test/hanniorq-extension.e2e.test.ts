@@ -14,9 +14,11 @@ function createMockPi() {
 	const registeredCommands = new Map<string, { description: string; handler: Function }>();
 	const listeners = new Map<string, Function[]>();
 	const widgets = new Map<string, string[]>();
+	const sentMessages: string[] = [];
 
 	const ui = {
 		notify: () => {},
+		select: async () => undefined,
 		setWidget: (name: string, lines?: string[]) => {
 			if (lines === undefined) widgets.delete(name);
 			else widgets.set(name, lines);
@@ -32,10 +34,13 @@ function createMockPi() {
 			arr.push(handler);
 			listeners.set(event, arr);
 		},
+		sendUserMessage: (content: string) => {
+			sentMessages.push(content);
+		},
 		ui,
 	} as unknown as Parameters<ExtensionFactory>[0];
 
-	return { registeredCommands, listeners, widgets, ui, pi };
+	return { registeredCommands, listeners, widgets, ui, pi, sentMessages };
 }
 
 async function emit(pi: ReturnType<typeof createMockPi>["pi"], event: string, payload: any, ctx: any) {
@@ -51,6 +56,41 @@ describe("extensión hanniorq", () => {
 		expect(registeredCommands.has("hannigram")).toBe(true);
 		expect(registeredCommands.get("hanniorq")!.description).toContain("Orquestador sODD");
 		expect(registeredCommands.get("hannigram")!.description).toContain("Memoria del proyecto");
+	});
+
+	it("registra /helpme, /hannidump y /explore", () => {
+		const { registeredCommands, pi } = createMockPi();
+		createHanniorqExtension()(pi);
+		expect(registeredCommands.has("helpme")).toBe(true);
+		expect(registeredCommands.has("hannidump")).toBe(true);
+		expect(registeredCommands.has("explore")).toBe(true);
+		expect(registeredCommands.get("helpme")!.description).toContain("comandos de HanniPI");
+		expect(registeredCommands.get("hannidump")!.description).toContain("agents.md");
+		expect(registeredCommands.get("explore")!.description).toContain("memoria inicial");
+	});
+
+	it("/explore envía un turno al modelo pidiendo construir memoria del proyecto", async () => {
+		const { registeredCommands, pi, sentMessages } = createMockPi();
+		createHanniorqExtension()(pi);
+		const handler = registeredCommands.get("explore")!.handler;
+		const ctx = { cwd: "C:/proyectos/demo", ui: (pi as any).ui };
+		await handler("", ctx);
+		expect(sentMessages.length).toBe(1);
+		const msg = sentMessages[0];
+		expect(msg).toContain("C:/proyectos/demo");
+		expect(msg).toContain("mem_save");
+		expect(msg).toContain("type=adr");
+		expect(msg).toContain("topicKey=adr/");
+	});
+
+	it("/hannidump sin memoria avisa y no envía turno", async () => {
+		const { registeredCommands, pi, sentMessages } = createMockPi();
+		createHanniorqExtension()(pi);
+		const handler = registeredCommands.get("hannidump")!.handler;
+		const ctx = { cwd: "C:/proyectos/demo", ui: (pi as any).ui };
+		// Sin daemon HanniGram (fetch falla → undefined), no hay observaciones.
+		await handler("", ctx);
+		expect(sentMessages.length).toBe(0);
 	});
 
 	it("genera el widget de fin de turno con tools · sODD · memoria cuando se usa memoria", async () => {

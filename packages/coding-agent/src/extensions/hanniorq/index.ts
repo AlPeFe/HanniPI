@@ -20,8 +20,8 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ThemedText } from "../../modes/interactive/components/themed-text.ts";
 import type { ExtensionFactory, ExtensionUIContext } from "../../core/extensions/types.ts";
+import { ThemedText } from "../../modes/interactive/components/themed-text.ts";
 
 function getOddDir(cwd: string): string {
 	return join(cwd, "odd");
@@ -265,7 +265,7 @@ function projectName(cwd: string): string {
 	if (r.ok && r.out) {
 		let url = r.out.trim().replace(/\/+$/, "");
 		if (url.toLowerCase().endsWith(".git")) url = url.slice(0, -4);
-		const parts = url.split(/[:\/]/).filter(Boolean);
+		const parts = url.split(/[:/]/).filter(Boolean);
 		if (parts.length >= 2) return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
 		return url;
 	}
@@ -306,9 +306,7 @@ async function checkMemory(cwd: string): Promise<void> {
 		const up = health?.status === "ok";
 		let count = 0;
 		if (up) {
-			const obs = await hannigram<Array<unknown>>(
-				`/api/observations?${new URLSearchParams({ cwd, limit: "200" })}`,
-			);
+			const obs = await hannigram<Array<unknown>>(`/api/observations?${new URLSearchParams({ cwd, limit: "200" })}`);
 			count = obs?.length ?? 0;
 		}
 		memoryCache = { up, count, checked: true };
@@ -759,6 +757,106 @@ export function createHanniorqExtension(): ExtensionFactory {
 					default:
 						ctx.ui.notify("Uso: /hanniorq on|off|status|plan|new <slug>|run|watch|close|resume", "warning");
 				}
+			},
+		});
+		// =================================================================
+		// /helpme — listado maestro de comandos HanniPI (qué hace cada uno).
+		// =================================================================
+		pi.registerCommand("helpme", {
+			description: "Lista los comandos de HanniPI y para qué sirven",
+			handler: async (_args, ctx) => {
+				const commands: Array<{ cmd: string; desc: string }> = [
+					{ cmd: "/helpme", desc: "Este listado de comandos." },
+					{
+						cmd: "/hannidump [ruta]",
+						desc: "Genera un fichero agents.md (contexto + ADRs resumidos por el LLM) para harness externos que no usan HanniGram.",
+					},
+					{
+						cmd: "/explore",
+						desc: "Explora el proyecto (md, README, estructura) y construye su memoria inicial en HanniGram la primera vez.",
+					},
+					{
+						cmd: "/task new|list|plan <petición>",
+						desc: "Fichas sODD: crear/listar/clasificar trabajo (trivial → inline, sustancial → ficha).",
+					},
+					{
+						cmd: "/hanniorq on|off|status|plan|new|run|watch|close|resume",
+						desc: "Orquestador sODD: activa/desactiva, arranca por pasos, vigila subagentes, cierra con resumen.",
+					},
+					{
+						cmd: "/hannigram init|status|adr <título>",
+						desc: "Memoria del proyecto: instancia la BD + exporta .hannigram/memory.md, consulta estado, guarda ADRs.",
+					},
+					{ cmd: "/model", desc: "Seleccionar proveedor/modelo." },
+					{ cmd: "/session", desc: "Info y estadísticas de la sesión actual." },
+					{ cmd: "/new", desc: "Nueva sesión." },
+					{ cmd: "/compact", desc: "Compactar manualmente el contexto." },
+					{ cmd: "/reload", desc: "Recargar extensiones, skills, prompts y temas." },
+					{ cmd: "/quit", desc: "Salir." },
+				];
+				const chunks = commands.map((c) => `• ${c.cmd}\n${c.desc}`);
+				ctx.ui.notify(`Comandos de HanniPI:\n\n${chunks.join("\n\n")}`, "info");
+				try {
+					const picked = await ctx.ui.select(
+						"Ayuda de comandos (HanniPI)",
+						commands.map((c) => `${c.cmd} — ${c.desc.split(".")[0]}.`),
+					);
+					if (picked) {
+						const cmd = commands.find((c) => picked.startsWith(c.cmd.split(" ")[0])) ?? commands[0];
+						ctx.ui.notify(`${cmd.cmd}\n━━━━━━━━━━━━━━━━━━━━\n${cmd.desc}`, "info");
+					}
+				} catch {
+					// select cancelado (o TUI sin soporte) — la lista ya se mostró.
+				}
+			},
+		});
+
+		// =================================================================
+		// /hannidump — dump de contexto + ADRs a un fichero agents.md para
+		// harness que NO usan HanniGram. Lee la memoria del daemon y pide al
+		// LLM el resumen autocontenido (escribiendo el fichero con sus tools).
+		// =================================================================
+		pi.registerCommand("hannidump", {
+			description: "Generar agents.md (contexto + ADRs) para harness externos sin HanniGram",
+			handler: async (args, ctx) => {
+				const cwd = ctx.cwd ?? process.cwd();
+				const target = args.trim().split(/\s+/)[0] || "agents.md";
+				const obs =
+					(await hannigram<
+						Array<{ id: number; title: string; content: string; topicKey?: string; type?: string }>
+					>(`/api/observations?${new URLSearchParams({ cwd, limit: "200" })}`)) ?? [];
+				if (obs.length === 0) {
+					ctx.ui.notify(
+						"No hay memoria en HanniGram para este proyecto. Usa /explore primero para construirla.",
+						"warning",
+					);
+					return;
+				}
+				const memBlock = obs
+					.map(
+						(o) =>
+							`- [${o.type ?? "obs"}] ${o.title}${o.topicKey ? ` (${o.topicKey})` : ""}\n  ${o.content.replace(/\n/g, "\n  ")}`,
+					)
+					.join("\n");
+				ctx.ui.notify(`Generando ${target} con ${obs.length} observaciones (vía LLM).`, "info");
+				pi.sendUserMessage(
+					`Genera el fichero \`${target}\` en la raíz del proyecto (${cwd}) para agentes/harnesses de IA que NO usan HanniGram, de modo que arranquen con contexto sin depender de este daemon.\n\nResume en ese fichero:\n- Qué es el proyecto y su stack/estructura.\n- Decisiones de arquitectura (ADR) y convenciones/estilos a respetar.\n- Reglas o patrones relevantes.\n\nEscribe \`${target}\` con el resultado. Sé conciso y no inventes nada que no esté en la memoria ni en el proyecto.\n\nMemoria de HanniGram (${obs.length} observaciones):\n${memBlock}`,
+				);
+			},
+		});
+
+		// =================================================================
+		// /explore — primera vez en un proyecto: lee md/README/estructura y
+		// construye la memoria inicial (ADR + contexto) vía el LLM.
+		// =================================================================
+		pi.registerCommand("explore", {
+			description: "Explora el proyecto y construye su memoria inicial en HanniGram",
+			handler: async (_args, ctx) => {
+				const cwd = ctx.cwd ?? process.cwd();
+				ctx.ui.notify("Explorando el proyecto para construir su memoria inicial (vía LLM).", "info");
+				pi.sendUserMessage(
+					`Explora este proyecto para construir su memoria inicial en HanniGram (primera vez). Directorio de trabajo: ${cwd}.\n\nHaz:\n1. Lee los ficheros informativos: README, *.md, AGENTS.md, CONTRIBUTING.md, docs/, package.json (o equivalente) y la estructura de directorios.\n2. Identifica: qué es el proyecto, stack/tecnología, decisiones de arquitectura y convenciones/estilo (naming, estructura, patrones).\n3. Guarda la memoria: para cada decisión usa la tool \`mem_save\` con \`type=adr\` y \`topicKey=adr/<slug>\`; para el contexto general usa topics descriptivos. Si \`mem_save\` no está disponible, ejecuta por bash: \`hannigram save "<título>" --content "<texto>" --type adr --topic adr/<slug> --cwd "${cwd}"\`.\n4. No inventes nada que no esté en el proyecto.\n\nEmpieza listando la raíz del proyecto.`,
+				);
 			},
 		});
 	};

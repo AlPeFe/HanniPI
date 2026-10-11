@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- HanniPI: added `/helpme` (lists every HanniPI command and what it does), `/hannidump [ruta]` (writes an `agents.md` context+ADR dump for harnesses that do not use HanniGram, summarized by the model), and `/explore` (reads the project's md files/README and builds initial HanniGram memory on first run).
+
 ### Changed
 
 - `/arminsayshi` now plays a 3D version in fullscreen mode, with one cube per pixel of Armin. The 3D pi logo easter egg on header logo click is replaced by it.
