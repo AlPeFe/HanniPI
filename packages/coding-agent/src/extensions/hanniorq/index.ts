@@ -129,13 +129,20 @@ async function mirrorTask(cwd: string, slug: string, content: string): Promise<n
 	return obs?.id;
 }
 
-/** Guarda el resumen de sesión. */
+/** Guarda el resumen de sesión: crea la sesión (start) y la cierra (end) con el
+ *  mismo id, para no dejar sesiones huérfanas ("ended" sin "started"). */
 async function saveSessionSummary(cwd: string, summary: string): Promise<boolean> {
-	const ok = await hannigram<{ ok?: boolean }>(`/api/sessions/end?${new URLSearchParams({ cwd })}`, {
+	const sessionId = `hanniorq-${Date.now().toString(36)}`;
+	const started = await hannigram<Record<string, unknown>>(`/api/sessions/start?${new URLSearchParams({ cwd })}`, {
 		method: "POST",
-		body: JSON.stringify({ sessionId: `hanniorq-${Date.now().toString(36)}`, summary }),
+		body: JSON.stringify({ sessionId }),
 	});
-	return ok !== undefined;
+	if (started === undefined) return false;
+	const ended = await hannigram<{ ok?: boolean }>(`/api/sessions/end?${new URLSearchParams({ cwd })}`, {
+		method: "POST",
+		body: JSON.stringify({ sessionId, summary }),
+	});
+	return ended !== undefined;
 }
 
 // ---------------------------------------------------------------------------

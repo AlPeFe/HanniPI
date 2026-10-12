@@ -64,6 +64,60 @@ function compactTask(full: string): string {
 	return out.join("\n");
 }
 
+/** Resuelve el nombre de proyecto (owner/repo del git remote, o nombre del
+ *  directorio). Debe coincidir con ProjectResolver.Resolve del daemon HanniGram
+ *  para que el scoping por proyecto sea consistente entre daemon y harness. */
+function resolveProjectName(cwd: string): string | undefined {
+	const r = spawnSync("git", ["config", "--get", "remote.origin.url"], { cwd, encoding: "utf-8" });
+	if (r.status === 0 && r.stdout) {
+		let url = r.stdout.trim().replace(/\/+$/, "");
+		if (url.toLowerCase().endsWith(".git")) url = url.slice(0, -4);
+		const parts = url.split(/[:/]/).filter(Boolean);
+		if (parts.length >= 2) return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
+		return url;
+	}
+	const dir = cwd.split(/[\\/]/).filter(Boolean).pop();
+	return dir || undefined;
+}
+
+function fmtObs(r: { title: string; topic_key: string | null; learned: string | null }): string {
+	return `- ${r.title}${r.topic_key ? ` (${r.topic_key})` : ""}${r.learned ? `: ${r.learned}` : ""}`;
+}
+
+/** Lee la memoria del proyecto actual (scope HanniGram) en DOS bloques:
+ *  - decisiones/convenciones a RESPETAR (type='adr'): se inyectan siempre.
+ *  - contexto/ideas en curso (el resto): índice ligero reciente (título + topic + learned).
+ *  Nunca se devuelve contenido completo; el detalle se pide con mem_get_observation. */
+function readProjectMemory(cwd: string): { adr: string[]; context: string[] } {
+	const dbPath = join(homedir(), ".hannigram", "hannigram.db");
+	if (!existsSync(dbPath)) return { adr: [], context: [] };
+	const name = resolveProjectName(cwd);
+	if (!name) return { adr: [], context: [] };
+	let db: DatabaseSync;
+	try {
+		db = new DatabaseSync(dbPath, { readOnly: true });
+	} catch {
+		return { adr: [], context: [] };
+	}
+	try {
+		const adr = db
+			.prepare(
+				"SELECT o.title, o.topic_key, o.learned FROM observations o JOIN projects p ON p.id = o.project_id WHERE p.name = ? AND o.type = 'adr' ORDER BY o.updated_at_utc DESC LIMIT 12",
+			)
+			.all(name) as Array<{ title: string; topic_key: string | null; learned: string | null }>;
+		const ctx = db
+			.prepare(
+				"SELECT o.title, o.topic_key, o.learned FROM observations o JOIN projects p ON p.id = o.project_id WHERE p.name = ? AND (o.type IS NULL OR o.type != 'adr') ORDER BY o.updated_at_utc DESC LIMIT 6",
+			)
+			.all(name) as Array<{ title: string; topic_key: string | null; learned: string | null }>;
+		return { adr: adr.map(fmtObs), context: ctx.map(fmtObs) };
+	} catch {
+		return { adr: [], context: [] };
+	} finally {
+		db.close();
+	}
+}
+
 export function createSoddExtension(): ExtensionFactory {
 	return (pi) => {
 		pi.registerCommand("task", {
@@ -193,31 +247,22 @@ export function createSoddExtension(): ExtensionFactory {
 			}
 		});
 
-		// P0-4: inyectar las observaciones recientes de HanniGram del proyecto actual
-		// como mensaje de sistema, solo cuando hay ficha sODD activa (para no inflar tokens).
+		// Inyectar la memoria de HanniGram del proyecto ACTUAL en cada llamada
+		// (recall push, no pull). Escopada por proyecto (owner/repo del git remote)
+		// con DOS bloques: decisiones/convenciones a respetar (type='adr', siempre)
+		// y contexto reciente (índice ligero, sin contenido completo).
 		pi.on("context", (event) => {
 			const cwd = process.cwd();
-			if (!getActiveSlug(cwd)) return;
-			const dbPath = join(homedir(), ".hannigram", "hannigram.db");
-			if (!existsSync(dbPath)) return;
-			try {
-				const db = new DatabaseSync(dbPath, { readOnly: true });
-				const rows = db
-					.prepare("SELECT title, topic_key, learned FROM observations ORDER BY updated_at_utc DESC LIMIT 5")
-					.all() as Array<{ title: string; topic_key: string | null; learned: string | null }>;
-				db.close();
-				if (rows.length === 0) return;
-				const text = rows
-					.map((r) => `- ${r.title}${r.topic_key ? ` (${r.topic_key})` : ""}${r.learned ? `: ${r.learned}` : ""}`)
-					.join("\n");
-				event.messages.push({
-					role: "system",
-					content: `[HanniGram memoria reciente]\n${text}\n[/HanniGram]`,
-					timestamp: Date.now(),
-				});
-			} catch {
-				// BD no disponible: no inyectar nada.
-			}
+			const { adr, context } = readProjectMemory(cwd);
+			if (adr.length === 0 && context.length === 0) return;
+			const blocks: string[] = [];
+			if (adr.length > 0) blocks.push(`[HanniGram · decisiones/convenciones — respeta esto]\n${adr.join("\n")}`);
+			if (context.length > 0) blocks.push(`[HanniGram · contexto reciente]\n${context.join("\n")}`);
+			event.messages.push({
+				role: "system",
+				content: `${blocks.join("\n\n")}\n[/HanniGram]`,
+				timestamp: Date.now(),
+			});
 		});
 	};
 }
