@@ -5,23 +5,23 @@ base: 58d392051
 ---
 # sODD, HanniGram, MCP, and project rail
 
-Objective: Make HanniPI's HanniGram startup, sODD guidance, default Context7 MCP, and project rail behavior accurate and useful without turning every change into a task.
+Objective: Make HanniPI's HanniGram startup, sODD guidance, optional on-demand Context7 MCP, and project rail behavior accurate and useful without turning every change into a task.
 
 Why: HanniPI should stay aligned with HanniGram's daemon auto-start change; sODD should organically keep trivial work inline while helping the harness track substantial work; Context7 and live project state should be visible when available.
 
-Scope: HanniGram client startup and status; sODD prompt/task lifecycle; Context7 default MCP configuration; Hanniorq right rail and focused tests. Out of scope: changing HanniGram itself, enabling receipt-driven development, broad ODD conversion, or remote writes.
+Scope: HanniGram client startup and status; sODD prompt/task lifecycle; opt-in/deferred Context7 MCP configuration; Hanniorq right rail and focused tests. Out of scope: changing HanniGram itself, enabling receipt-driven development, broad ODD conversion, or remote writes.
 
-Constraints: Keep sODD deliberately lighter than ODD. Inline trivial understood work; use a task sheet only when multi-step, multi-file, interruptible, or otherwise worth recovering. Never imply the harness launches a subagent unless the runtime actually exposes one. Context7 is opt-out/overridable. Rail state must be observational and read-only. TDD: off (explicit user choice); run focused tests and `npm run check`. RDD: off (global status). Local commits are explicitly authorized on this feature branch; no push or PR.
+Constraints: Keep sODD deliberately lighter than ODD. Inline trivial understood work; use a task sheet only when multi-step, multi-file, interruptible, or otherwise worth recovering. Never imply the harness launches a subagent unless the runtime actually exposes one. Context7 must not connect or enter prompt context by default; it is an optional MCP, enabled only when useful, with deferred tool exposure. Rail state must be observational and read-only. TDD: off (explicit user choice); run focused tests and `npm run check`. RDD: off (global status). Local commits are explicitly authorized on this feature branch; no push or PR.
 
 ## Tasks
 
 - [x] S1 Port HanniGram daemon auto-start behavior to HanniPI with safe runtime/path checks and tests. Route: direct. Evidence: `804f55335` (`feat(coding-agent): auto-start HanniGram daemon`); injected startup probe and Node syntax checks passed; focused Vitest unavailable (dependencies absent).
-- [x] S2 Add Context7 as a default, overridable MCP server and expose truthful connected-server status to the Hanniorq rail. Route: direct. Evidence: `75e02e59b` (`feat(coding-agent): default Context7 MCP server`); status snapshot probe and syntax checks passed; Vitest/check blocked because dependencies are absent.
+- [ ] S2 Revise Context7 default to remain disconnected and absent from prompt context until explicitly enabled; use deferred exposure after opt-in and cover behavior in docs/tests. Reopened after user clarified it must not be mandatory or default prompt content. Route: direct. Prior evidence: `75e02e59b`; current changes pending.
 - [x] S3 Make sODD classification guidance automatic in the assistant context, keep trivial requests inline, show TODOs and current modified files in its rail, and fix task-sheet directory creation. Route: direct. Evidence: Node syntax checks and injected HanniGram/MCP snapshot probes passed; Vitest blocked (missing node_modules/vitest); npm run check blocked (Biome absent).
 
 ## Next
 
-Done: all three scoped tasks are implemented. Global check remains blocked until dependencies are installed.
+S2: Change the built-in Context7 entry to disabled + deferred; verify explicit `/mcp` enablement persists it and tools remain on-demand.
 
 ## Verification
 
