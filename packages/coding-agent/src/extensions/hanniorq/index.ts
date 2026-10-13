@@ -65,6 +65,55 @@ interface FleetAgent {
 const fleet = new Map<string, FleetAgent>();
 let fleetWidgetTimer: ReturnType<typeof setInterval> | undefined;
 
+// Actividad de memoria de la sesión (lecturas/escrituras). Permite ver qué se
+// consultó o guardó y, si un trabajo queda a medias, recuperar el contexto.
+interface MemActivity {
+	kind: "read" | "write";
+	detail: string;
+}
+const memActivity: MemActivity[] = [];
+let railHidden = false;
+
+/** Tools mem_* que son LECTURA de memoria (no modifican la BD). */
+const MEM_READ_TOOLS = new Set([
+	"mem_search",
+	"mem_context",
+	"mem_timeline",
+	"mem_get_observation",
+	"mem_current_project",
+	"mem_suggest_topic_key",
+]);
+
+/** Tools mem_* que ESCRIBEN en memoria. */
+const MEM_WRITE_TOOLS = new Set(["mem_save", "mem_delete", "mem_session_summary"]);
+
+/** Detalle legible de una llamada mem_* para el log de actividad del rail. */
+function memDetail(toolName: string, args: Record<string, unknown> | undefined): string {
+	const a = args ?? {};
+	switch (toolName) {
+		case "mem_save":
+			return typeof a.title === "string" && a.title ? a.title : "observación";
+		case "mem_search":
+			return typeof a.query === "string" && a.query ? a.query : "búsqueda";
+		case "mem_timeline":
+			return typeof a.topicKey === "string" && a.topicKey ? a.topicKey : "timeline";
+		case "mem_get_observation":
+			return a.id !== undefined ? `#${a.id}` : "observación";
+		case "mem_delete":
+			return a.id !== undefined ? `#${a.id}` : "borrado";
+		case "mem_context":
+			return "contexto reciente";
+		case "mem_current_project":
+			return "proyecto actual";
+		case "mem_suggest_topic_key":
+			return "topic keys";
+		case "mem_session_summary":
+			return "resumen de sesión";
+		default:
+			return toolName;
+	}
+}
+
 function git(cwd: string, args: string[]): { ok: boolean; out: string } {
 	const r = spawnSync("git", args, { cwd, encoding: "utf-8" });
 	return { ok: r.status === 0, out: (r.stdout || r.stderr || "").trim() };
@@ -369,26 +418,41 @@ function railLines(ui: ExtensionUIContext, cwd: string): string[] {
 	} else {
 		lines.push(`${theme.fg("error", "✗")} ${theme.fg("text", "OFF")} (daemon caído)`);
 	}
+	// Actividad de la sesión: lecturas (≫) y escrituras (✎).
+	if (memActivity.length > 0) {
+		const readCount = memActivity.filter((m) => m.kind === "read").length;
+		const writeCount = memActivity.filter((m) => m.kind === "write").length;
+		lines.push(`${theme.fg("muted", "≫")}${readCount} · ${theme.fg("success", "✎")}${writeCount}`);
+		for (const m of memActivity.slice(-5).reverse()) {
+			const icon = m.kind === "write" ? theme.fg("success", "✎") : theme.fg("muted", "≫");
+			lines.push(`${icon} ${clip(m.detail, W - 4)}`);
+		}
+	}
 	lines.push(sep);
 
 	// sODD
 	lines.push(theme.fg("accent", "sODD"));
 	const ind = soddIndicator(cwd);
 	if (ind) {
-		lines.push(`${theme.fg("success", "✓")} activo · ${clip(ind.slug, 16)} (${ind.done}/${ind.total})`);
+		lines.push(`${theme.fg("success", "●")} activo · ${clip(ind.slug, 14)} (${ind.done}/${ind.total})`);
 	} else {
-		lines.push(`${theme.fg("muted", "·")} inline`);
+		lines.push(`${theme.fg("error", "●")} inactivo`);
 	}
 	lines.push(sep);
 
-	// Tareas (TODO)
+	// Tareas (TODO) — la primera sin hacer es la que está "en curso".
 	const todos = todoSteps(cwd);
 	if (todos.length > 0) {
-		lines.push(theme.fg("accent", "tareas"));
-		for (const t of todos.slice(0, 8)) {
-			const mark = t.done ? theme.fg("success", "☑") : theme.fg("muted", "☐");
+		lines.push(theme.fg("accent", `tareas (${todos.filter((t) => t.done).length}/${todos.length})`));
+		const current = todos.findIndex((t) => !t.done);
+		todos.slice(0, 8).forEach((t, i) => {
+			const mark = t.done
+				? theme.fg("success", "✓")
+				: i === current
+					? theme.fg("warning", "▸")
+					: theme.fg("muted", "·");
 			lines.push(`${mark} ${clip(t.text, W - 3)}`);
-		}
+		});
 		if (todos.length > 8) lines.push(theme.fg("muted", `… +${todos.length - 8}`));
 	}
 
@@ -415,6 +479,10 @@ function railLines(ui: ExtensionUIContext, cwd: string): string[] {
 
 /** Renderiza el rail derecho (widget "hanniorq-rail", placement rightRail). */
 function renderRail(ui: ExtensionUIContext, cwd: string): void {
+	if (railHidden) {
+		ui.setWidget("hanniorq-rail", undefined);
+		return;
+	}
 	ui.setWidget("hanniorq-rail", () => new ThemedText(() => railLines(ui, cwd).join("\n"), 1, 1), {
 		placement: "rightRail",
 	});
@@ -484,6 +552,14 @@ export function createHanniorqExtension(
 			}
 			if (event.toolName === "task" || event.toolName === "hanniorq" || event.toolName === "hannigram") {
 				turnSoddTouched = true;
+			}
+			// Actividad de memoria: registra lecturas y escrituras para el rail.
+			if (MEM_READ_TOOLS.has(event.toolName) || MEM_WRITE_TOOLS.has(event.toolName)) {
+				memActivity.push({
+					kind: MEM_WRITE_TOOLS.has(event.toolName) ? "write" : "read",
+					detail: memDetail(event.toolName, event.args as Record<string, unknown> | undefined),
+				});
+				renderRail(ctx.ui, ctx.cwd ?? process.cwd());
 			}
 			if (event.toolName !== "subagent") return;
 			const task =
@@ -588,9 +664,9 @@ export function createHanniorqExtension(
 			const parts: string[] = [];
 			if (turnTools.size > 0) parts.push(`tools: ${[...turnTools].join(", ")}`);
 			parts.push(
-				ind ? `sODD: ${ind.slug} (${ind.done}/${ind.total})` : turnSoddTouched ? "sODD: tocado" : "sODD: inline",
+				ind ? `sODD: activo (${ind.done}/${ind.total})` : turnSoddTouched ? "sODD: activo" : "sODD: inactivo",
 			);
-			parts.push(turnMemoryWrites > 0 ? `mem: +${turnMemoryWrites}` : "mem: —");
+			if (turnMemoryWrites > 0) parts.push(`memoria: +${turnMemoryWrites}`);
 			ctx.ui.setWidget("hanniorq-turn", [`▸ ${parts.join(" · ")}`]);
 			updateSoddIndicator(ctx.ui, cwd);
 			refreshRail(ctx.ui, cwd);
@@ -621,7 +697,7 @@ export function createHanniorqExtension(
 		});
 
 		pi.registerCommand("hanniorq", {
-			description: "Orquestador sODD: help|on|off|status|plan|new|run|watch|close|resume",
+			description: "Orquestador sODD: help|on|off|status|plan|new|run|watch|close|resume|rail|clear",
 			handler: async (args, ctx) => {
 				const [sub, ...rest] = args.trim().split(/\s+/);
 				const cwd = ctx.cwd ?? process.cwd();
@@ -848,8 +924,23 @@ export function createHanniorqExtension(
 						);
 						return;
 					}
+					case "rail": {
+						railHidden = !railHidden;
+						renderRail(ctx.ui, cwd);
+						ctx.ui.notify(railHidden ? "Rail derecho oculto." : "Rail derecho visible.", "info");
+						return;
+					}
+					case "clear": {
+						memActivity.length = 0;
+						renderRail(ctx.ui, cwd);
+						ctx.ui.notify("Actividad de memoria del rail limpiada (la memoria en HanniGram no se toca).", "info");
+						return;
+					}
 					default:
-						ctx.ui.notify("Uso: /hanniorq on|off|status|plan|new <slug>|run|watch|close|resume", "warning");
+						ctx.ui.notify(
+							"Uso: /hanniorq on|off|status|plan|new <slug>|run|watch|close|resume|rail|clear",
+							"warning",
+						);
 				}
 			},
 		});

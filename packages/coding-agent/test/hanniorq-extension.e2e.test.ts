@@ -28,6 +28,10 @@ function createMockPi() {
 			if (lines === undefined) widgets.delete(name);
 			else widgets.set(name, lines);
 		},
+		theme: {
+			fg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		},
 	};
 
 	const pi = {
@@ -176,10 +180,10 @@ describe("extensión hanniorq", () => {
 		const widget = widgets.get("hanniorq-turn");
 		expect(widget).toBeDefined();
 		const line = (widget as string[])[0];
-		expect(line).toContain("mem: +1");
+		expect(line).toContain("memoria: +1");
 		expect(line).toContain("tools: mem_save, search_files");
-		// sin ficha sODD en disco → inline o tocado
-		expect(line).toMatch(/sODD: (inline|tocado)/);
+		// sin ficha sODD en disco → inactivo
+		expect(line).toContain("sODD: inactivo");
 	});
 
 	it("marca sODD tocado cuando se usa /task", async () => {
@@ -193,7 +197,7 @@ describe("extensión hanniorq", () => {
 		await emit(pi, "turn_end", {}, ctx);
 
 		const line = (widgets.get("hanniorq-turn") as string[])[0];
-		expect(line).toContain("sODD: tocado");
+		expect(line).toContain("sODD: activo");
 	});
 
 	it("no marca memoria cuando no se escribió", async () => {
@@ -207,6 +211,34 @@ describe("extensión hanniorq", () => {
 		await emit(pi, "turn_end", {}, ctx);
 
 		const line = (widgets.get("hanniorq-turn") as string[])[0];
-		expect(line).toContain("mem: —");
+		expect(line).not.toContain("memoria:");
+	});
+
+	it("muestra lecturas y escrituras de memoria en el rail derecho", async () => {
+		const { listeners, widgets, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHanniorqExtension()(pi);
+		const ctx = { cwd: "C:/x", ui: (pi as any).ui };
+		await emit(pi, "turn_start", {}, ctx);
+		await emit(
+			pi,
+			"tool_execution_start",
+			{ toolName: "mem_save", toolCallId: "t1", args: { title: "decisión ADR" } },
+			ctx,
+		);
+		await emit(
+			pi,
+			"tool_execution_start",
+			{ toolName: "mem_search", toolCallId: "t2", args: { query: "paleta rosa" } },
+			ctx,
+		);
+		const widget = widgets.get("hanniorq-rail");
+		const rail =
+			typeof widget === "function"
+				? (widget as () => { render(width: number): string[] })().render(32).join("\n")
+				: "";
+		expect(rail).toContain("decisión ADR"); // escritura
+		expect(rail).toContain("paleta rosa"); // lectura
+		expect(rail).toContain("inactivo"); // sin ficha sODD
 	});
 });
