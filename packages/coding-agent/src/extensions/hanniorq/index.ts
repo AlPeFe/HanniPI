@@ -434,14 +434,14 @@ async function refreshModifiedFiles(
 	const pending = modifiedFilesRefresh.get(cwd);
 	if (pending) return pending;
 	const refresh = (async () => {
-	try {
-		const result = await pi.exec("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd });
-		if (result.code !== 0) return;
-		modifiedFilesCache.set(cwd, parseGitStatusPaths(result.stdout));
-		renderRail(ui, cwd);
-	} catch {
-		// A rail refresh is observational; failure must not interrupt the session.
-	}
+		try {
+			const result = await pi.exec("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd });
+			if (result.code !== 0) return;
+			modifiedFilesCache.set(cwd, parseGitStatusPaths(result.stdout));
+			renderRail(ui, cwd);
+		} catch {
+			// A rail refresh is observational; failure must not interrupt the session.
+		}
 	})();
 	modifiedFilesRefresh.set(cwd, refresh);
 	try {
@@ -455,9 +455,9 @@ async function refreshModifiedFiles(
 // Extensión
 // ---------------------------------------------------------------------------
 
-export function createHanniorqExtension(options: {
-	ensureDaemon?: typeof ensureHanniGramDaemon;
-} = {}): ExtensionFactory {
+export function createHanniorqExtension(
+	options: { ensureDaemon?: typeof ensureHanniGramDaemon } = {},
+): ExtensionFactory {
 	return (pi) => {
 		let unsubscribeMcpStatus: (() => void) | undefined;
 		// Estado del turno actual: tools usadas, escrituras de memoria, si se

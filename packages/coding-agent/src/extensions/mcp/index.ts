@@ -44,13 +44,13 @@ import { openBrowser } from "../../utils/open-browser.ts";
 import { CODEMODE_TOOL_NAME, isCodemodeTool } from "../codemode/tool.ts";
 import { isToolSearchTool, TOOL_SEARCH_TOOL_NAME } from "../tool-search/tool.ts";
 import {
+	addMcpServerConfig,
 	getMcpToolExposure,
 	type LoadedMcpConfig,
 	loadMcpConfig,
 	type McpExposure,
 	type McpServerConfigPatch,
 	type McpServerEntry,
-	addMcpServerConfig,
 	updateMcpServerConfig,
 	withDefaultContext7,
 } from "./config.ts";
@@ -64,9 +64,9 @@ import {
 import { loadMcpRuntime } from "./runtime.lazy.ts";
 import type * as McpRuntime from "./runtime.ts";
 import type { McpServerConnection, McpServerLog, McpTransportFactory } from "./runtime.ts";
+import { publishMcpConnectionStatuses } from "./status.ts";
 import { createMcpToolDefinition, createMcpToolName, type McpToolDetails } from "./tools.ts";
 import { type McpMenu, type McpUi, showMcpManager } from "./ui.ts";
-import { publishMcpConnectionStatuses } from "./status.ts";
 
 const MCP_STATUS_EXTENSION_ID = fileURLToPath(import.meta.url);
 

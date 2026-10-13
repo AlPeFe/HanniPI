@@ -6,10 +6,11 @@
  *
  * Se ejecuta contra la extensión real, con un pi mock que captura eventos y widgets.
  */
-import { describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import type { ExtensionFactory } from "../src/core/extensions/types.ts";
 import { createHanniorqExtension, parseGitStatusPaths } from "../src/extensions/hanniorq/index.ts";
 import { publishMcpConnectionStatuses } from "../src/extensions/mcp/status.ts";
@@ -87,7 +88,10 @@ describe("extensión hanniorq", () => {
 		(pi as any).__listeners = listeners;
 		createHanniorqExtension()(pi);
 		const ctx = { cwd: "C:/x", ui: (pi as any).ui };
-		publishMcpConnectionStatuses("test", [{ name: "context7", state: "connected" }, { name: "local", state: "failed" }]);
+		publishMcpConnectionStatuses("test", [
+			{ name: "context7", state: "connected" },
+			{ name: "local", state: "failed" },
+		]);
 		await emit(pi, "session_start", {}, ctx);
 		const railWidget = widgets.get("hanniorq-rail");
 		const rail =
@@ -122,11 +126,9 @@ describe("extensión hanniorq", () => {
 			expect(rail).toContain("visible todo");
 			expect(rail).toContain("source.ts");
 			expect(rail).toContain("new.ts");
-			expect(exec).toHaveBeenCalledWith(
-				"git",
-				["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-				{ cwd: root },
-			);
+			expect(exec).toHaveBeenCalledWith("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+				cwd: root,
+			});
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
@@ -173,7 +175,7 @@ describe("extensión hanniorq", () => {
 
 		const widget = widgets.get("hanniorq-turn");
 		expect(widget).toBeDefined();
-		const line = widget![0];
+		const line = (widget as string[])[0];
 		expect(line).toContain("mem: +1");
 		expect(line).toContain("tools: mem_save, search_files");
 		// sin ficha sODD en disco → inline o tocado
@@ -190,7 +192,7 @@ describe("extensión hanniorq", () => {
 		await emit(pi, "tool_execution_start", { toolName: "task", toolCallId: "t1", args: {} }, ctx);
 		await emit(pi, "turn_end", {}, ctx);
 
-		const line = widgets.get("hanniorq-turn")![0];
+		const line = (widgets.get("hanniorq-turn") as string[])[0];
 		expect(line).toContain("sODD: tocado");
 	});
 
@@ -204,7 +206,7 @@ describe("extensión hanniorq", () => {
 		await emit(pi, "tool_execution_start", { toolName: "read_file", toolCallId: "t1", args: {} }, ctx);
 		await emit(pi, "turn_end", {}, ctx);
 
-		const line = widgets.get("hanniorq-turn")![0];
+		const line = (widgets.get("hanniorq-turn") as string[])[0];
 		expect(line).toContain("mem: —");
 	});
 });

@@ -81,10 +81,11 @@ export async function ensureHanniGramDaemon(options: {
 	const executable = daemonCommand(options.cwd);
 	if (!executable) return false;
 	try {
-		(options.spawnDaemon ?? defaultSpawnDaemon)(
-			executable.command,
-			[...executable.args, "--urls", process.env.HANNIGRAM_URLS ?? new URL(options.baseUrl).origin],
-		);
+		(options.spawnDaemon ?? defaultSpawnDaemon)(executable.command, [
+			...executable.args,
+			"--urls",
+			process.env.HANNIGRAM_URLS ?? new URL(options.baseUrl).origin,
+		]);
 	} catch {
 		return false;
 	}

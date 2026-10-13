@@ -52,7 +52,11 @@ describe("sODD extension", () => {
 		const notifications: string[] = [];
 		await commands.get("task")!.handler("commit feat: test", {
 			cwd: root,
-			ui: { notify(message: string) { notifications.push(message); } },
+			ui: {
+				notify(message: string) {
+					notifications.push(message);
+				},
+			},
 		});
 		expect(notifications).toContain("No hay ficha activa para commitear.");
 	});

@@ -242,7 +242,10 @@ export function createSoddExtension(): ExtensionFactory {
 						const taskRelativePath = taskCommitPath.replace(/\\/g, "/");
 						if (
 							existingStaged.status !== 0 ||
-							existingStaged.stdout.split("\0").filter(Boolean).some((path) => path !== taskRelativePath)
+							existingStaged.stdout
+								.split("\0")
+								.filter(Boolean)
+								.some((path) => path !== taskRelativePath)
 						) {
 							ctx.ui.notify("Hay otros cambios staged. Commitéalos aparte antes de /task commit.", "warning");
 							return;

@@ -22,16 +22,16 @@ import {
 } from "../src/extensions/mcp/config.ts";
 import { MAX_SERVERS_SECTION_CHARS, renderServersSection } from "../src/extensions/mcp/index.ts";
 import {
-	getMcpConnectionStatuses,
-	publishMcpConnectionStatuses,
-	subscribeMcpConnectionStatuses,
-} from "../src/extensions/mcp/status.ts";
-import {
 	createDefaultTransport,
 	McpOAuthCredentialStore,
 	McpServerConnection,
 	McpServerLog,
 } from "../src/extensions/mcp/runtime.ts";
+import {
+	getMcpConnectionStatuses,
+	publishMcpConnectionStatuses,
+	subscribeMcpConnectionStatuses,
+} from "../src/extensions/mcp/status.ts";
 import { convertMcpResult, createMcpToolName } from "../src/extensions/mcp/tools.ts";
 
 // Config values are resolved at connect time, so the literal reference must survive loading.
@@ -240,7 +240,9 @@ describe("MCP config", () => {
 			).servers[0].config,
 		).toEqual({ url: "https://custom/mcp" });
 		expect(withDefaultContext7(loaded, { registeredNames: ["context7"], enabled: true }).servers).toEqual([]);
-		expect(withDefaultContext7(loaded, { registeredNames: ["context7-extra"], enabled: true }).servers).toHaveLength(1);
+		expect(withDefaultContext7(loaded, { registeredNames: ["context7-extra"], enabled: true }).servers).toHaveLength(
+			1,
+		);
 		expect(withDefaultContext7(loaded, { registeredNames: [], enabled: false })).toBe(loaded);
 	});
 });
