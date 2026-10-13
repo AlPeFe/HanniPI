@@ -294,11 +294,15 @@ export function createSoddExtension(): ExtensionFactory {
 			const cwd = ctx.cwd;
 			const hasSubagent = pi.getAllTools().some((tool) => tool.name === "subagent");
 			const classification = [
-				"[sODD guidance] Classify this request automatically; do not ask the user to run /task just to classify it.",
-				"For a small, understood request that can be completed inline, work inline without creating a task sheet.",
-				"Create or update odd/tasks/<slug>.md and odd/.active only when work is multi-step, multi-file, interruptible, or worth recovering; TODOs alone do not make work a feature task.",
+				"[sODD guidance · Small ODD, keep it small] Classify automatically; never ask the user to run /task just to classify.",
+				"Trivial/understood changes: do them inline now with an atomic commit — no questions, no sheet, no summary. Don't over-plan or generate .md files for everything.",
+				"Create/update odd/tasks/<slug>.md (+ odd/.active) only when work is multi-step, multi-file, interruptible, or worth recovering.",
+				"Ask only when genuinely unsure or the decision is consequential; otherwise act on sensible defaults. Be organic and lean on the person behind the harness.",
+				"No TDD and no exhaustive test suites: write a test only when a specific case truly needs one; otherwise verify functionally.",
+				"Ask before pushing large changes or opening a PR. Atomic commits need no confirmation.",
+				"Summarize changes as bullet points, then give a short, DECISIVE summary (a few lines). Save durable takeaways to memory (mem_save) only when worth recalling. Keep summaries clear, human and scannable.",
 				hasSubagent
-					? "Delegate only when work is independent and the available subagent tool can make progress without conflicts; otherwise work inline."
+					? "Delegate only when work is independent and the subagent tool can progress without conflicts; otherwise work inline."
 					: "No subagent tool is available in this runtime; do not claim to delegate.",
 			].join("\n");
 			event.messages.push({ role: "system", content: classification, timestamp: Date.now() });

@@ -32,7 +32,7 @@ describe("sODD extension", () => {
 		expect(readFileSync(join(root, "odd", ".active"), "utf8")).toBe("sample");
 		const event = { messages: [] as Array<{ role: string; content: string; timestamp: number }> };
 		listeners.get("context")!(event, { cwd: root });
-		expect(event.messages[0]?.content).toContain("Classify this request automatically");
+		expect(event.messages[0]?.content).toContain("Classify automatically");
 		expect(event.messages[0]?.content).toContain("No subagent tool is available");
 	});
 

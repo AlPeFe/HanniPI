@@ -9,9 +9,9 @@ Versión reducida de ODD (Organic Driven Development) para un agente único con 
 
 ## Cuándo usar sODD
 
-- Tarea de desarrollo con **2+ pasos** o que toque **más de un archivo**.
-- Tarea que pueda interrumpirse (cortes de contexto, cierre de sesión).
-- Si la tarea es trivial (1 paso, <20 líneas): **no hay ficha**, commit directo.
+- Solo cuando el trabajo es **multi-paso**, toca **varios archivos**, puede **interrumpirse** (corte de contexto) o **merece recuperarse** después.
+- **No sobre-planificar**: sODD es de "Small". No generes `.md` para todo; un cambio rápido y entendido se hace inline con un commit atómico y listo.
+- Los cambios triviales son atómicos, sin ficha, sin pregunta y sin resumen.
 
 ## Principios
 
@@ -21,6 +21,14 @@ Versión reducida de ODD (Organic Driven Development) para un agente único con 
 4. **Commit atómico por paso** con Conventional Commit; la evidencia es el sha.
 5. **Promoción:** si la tarea crece, se promueve a ODD adulto (feature document completo).
 6. **Delegación CONDICIONAL (sODD decide, tú puedes forzar):** si la ficha activa es grande (2+ pasos, varios archivos/paquetes) y **spliteable** (pasos independientes que no chocan entre sí), delega cada parte con la tool `subagent`, pasándole la ficha recortada + el paso concreto como contexto. Un subagente no ve esta conversación, así que el contexto debe ser autocontenido (ficha + paso + verify). Los subagentes devuelven su respuesta y sobreviven (puedes cambiar a su conversación). Solo ejecuta inline lo que no sea spliteable. **El usuario puede forzar la delegación** escribiendo "delega" en su petición: entonces delega aunque la tarea parezca pequeña; y puede prohibirla con "no delegues". El widget `hanniorq-fleet` pinta cada subagente en vuelo (spinner + tarea) mientras trabaja; `/hanniorq watch` muestra fichas + flota.
+
+## Conducta (orgánico, no burocrático)
+
+- **Clasifica y actúa:** cambios rápidos → inline atómico, sin ficha ni resumen. No preguntes para clasificar.
+- **Pregunta solo ante duda real o decisión con consecuencias.** No sobrepreguntes; apóyate en la persona detrás del harness.
+- **Sin TDD ni miles de tests:** test solo si el caso concreto lo exige; si no, verificación funcional.
+- **Pregunta antes de pushear cambios grandes o abrir una PR.** Los commits atómicos no necesitan confirmación.
+- **Resumen:** por puntos; al final, resumen corto y decidido (pocas líneas) + guardar en memoria (`mem_save`) solo lo que merezca recordarse. Resúmenes claros, humanos y escaneables (lectura vertical, sin abrumar).
 
 ## Flujo
 
