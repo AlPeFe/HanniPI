@@ -20,6 +20,5 @@ export const THINKING_LEVEL_OPTIONS: readonly ThinkingLevel[] = [
  */
 export const DEFAULT_PACKAGES: readonly PackageSource[] = [
 	"npm:pi-mcp-adapter",
-	"npm:pi-subagents",
 	"npm:pi-web-access",
 ];
