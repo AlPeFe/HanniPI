@@ -62,6 +62,36 @@ export interface LoadedMcpConfig {
 	errors: string[];
 }
 
+/** Adds the public Context7 endpoint unless configuration overrides it or the user opted out. */
+export function withDefaultContext7(
+	loaded: LoadedMcpConfig,
+	options: { registeredNames: readonly string[]; enabled: boolean },
+): LoadedMcpConfig {
+	if (
+		!options.enabled ||
+		loaded.servers.some((server) => mcpNamespace(server.name) === mcpNamespace("context7")) ||
+		options.registeredNames.some((name) => mcpNamespace(name) === mcpNamespace("context7"))
+	) {
+		return loaded;
+	}
+	return {
+		...loaded,
+		servers: [
+			...loaded.servers,
+			{
+				name: "context7",
+				config: {
+					url: "https://mcp.context7.com/mcp",
+					description: "Search current documentation for software libraries.",
+					exposure: "codemode",
+				},
+				source: "<built-in-context7>",
+				scope: "global",
+			},
+		],
+	};
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -14,8 +14,13 @@ import { createInMemoryTransportPair, type InMemoryTransport } from "@earendil-w
 import { afterEach, describe, expect, it } from "vitest";
 import { InMemoryAuthStorageBackend } from "../src/core/auth-storage.ts";
 import { truncateMiddle } from "../src/core/tools/truncate.ts";
-import { getMcpToolExposure, loadMcpConfig, type McpServerEntry } from "../src/extensions/mcp/config.ts";
+import { getMcpToolExposure, loadMcpConfig, type McpServerEntry, withDefaultContext7 } from "../src/extensions/mcp/config.ts";
 import { MAX_SERVERS_SECTION_CHARS, renderServersSection } from "../src/extensions/mcp/index.ts";
+import {
+	getMcpConnectionStatuses,
+	publishMcpConnectionStatuses,
+	subscribeMcpConnectionStatuses,
+} from "../src/extensions/mcp/status.ts";
 import {
 	createDefaultTransport,
 	McpOAuthCredentialStore,
@@ -213,6 +218,32 @@ describe("MCP config", () => {
 			expect.stringContaining('server "empty": auth.provider must be a provider name'),
 			expect.stringContaining('server "radius": auth is only allowed in the global mcp.json'),
 		]);
+	});
+
+	it("adds Context7 by default but respects explicit config, registered servers, and opt-out", () => {
+		const loaded = { servers: [], errors: [] };
+		const defaulted = withDefaultContext7(loaded, { registeredNames: [], enabled: true });
+		expect(defaulted.servers).toHaveLength(1);
+		expect(defaulted.servers[0]).toMatchObject({
+			name: "context7",
+			config: { url: "https://mcp.context7.com/mcp" },
+		});
+		expect(withDefaultContext7({ servers: [{ name: "context7", config: { url: "https://custom/mcp" }, source: "test" }], errors: [] }, { registeredNames: [], enabled: true }).servers[0].config).toEqual({ url: "https://custom/mcp" });
+		expect(withDefaultContext7(loaded, { registeredNames: ["context7"], enabled: true }).servers).toEqual([]);
+		expect(withDefaultContext7(loaded, { registeredNames: [], enabled: false })).toBe(loaded);
+	});
+});
+
+describe("MCP connection status snapshot", () => {
+	it("publishes readonly live-state changes to subscribers", () => {
+		let changes = 0;
+		const unsubscribe = subscribeMcpConnectionStatuses(() => changes++);
+		publishMcpConnectionStatuses("mcp-extension-test", [{ name: "context7", state: "connected" }]);
+		expect(getMcpConnectionStatuses()).toContainEqual({ name: "context7", state: "connected" });
+		expect(changes).toBe(1);
+		unsubscribe();
+		publishMcpConnectionStatuses("mcp-extension-test", []);
+		expect(getMcpConnectionStatuses()).not.toContainEqual({ name: "context7", state: "connected" });
 	});
 });
 

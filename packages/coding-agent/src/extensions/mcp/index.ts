@@ -49,7 +49,9 @@ import {
 	type McpExposure,
 	type McpServerConfigPatch,
 	type McpServerEntry,
+	addMcpServerConfig,
 	updateMcpServerConfig,
+	withDefaultContext7,
 } from "./config.ts";
 import type { McpOAuthCredentialStore, McpSignInPrompt } from "./oauth.ts";
 import {
@@ -63,6 +65,9 @@ import type * as McpRuntime from "./runtime.ts";
 import type { McpServerConnection, McpServerLog, McpTransportFactory } from "./runtime.ts";
 import { createMcpToolDefinition, createMcpToolName, type McpToolDetails } from "./tools.ts";
 import { type McpMenu, type McpUi, showMcpManager } from "./ui.ts";
+import { publishMcpConnectionStatuses } from "./status.ts";
+
+const MCP_STATUS_EXTENSION_ID = new URL(import.meta.url).pathname;
 
 export type { McpTransportFactory } from "./runtime.ts";
 
@@ -296,11 +301,26 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		let modelRegistry: ModelRegistry | undefined;
 		let serverLog: McpServerLog | undefined;
 		const openUrl = options.openUrl ?? openBrowser;
-		const updateConfig =
-			options.updateConfig ?? ((entry, patch) => updateMcpServerConfig(entry.source, entry.name, patch));
+		const updateConfig = options.updateConfig ?? ((entry, patch) => {
+			if (entry.source === "<built-in-context7>") {
+				addMcpServerConfig(join(getAgentDir(), "mcp.json"), entry.name, { ...entry.config, ...patch });
+				return;
+			}
+			updateMcpServerConfig(entry.source, entry.name, patch);
+		});
 
 		const listeners = new Set<() => void>();
 		const emitChange = () => {
+			publishMcpConnectionStatuses(MCP_STATUS_EXTENSION_ID,
+				servers.map((server) => ({
+					name: server.entry.name,
+					state: !isEnabled(server)
+						? "disabled"
+						: server.connection === undefined
+							? "starting"
+							: server.connection.state,
+				})),
+			);
 			for (const listener of listeners) listener();
 		};
 		const subscribe = (listener: () => void) => {
@@ -952,7 +972,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		};
 
 		pi.on("session_start", (_event, ctx) => {
-			const loaded = (options.loadConfig ?? defaultLoadConfig)(ctx);
+			const loaded = withDefaultContext7((options.loadConfig ?? defaultLoadConfig)(ctx), {
+				registeredNames: pi.getMcpServers().map(({ name }) => name),
+				enabled: process.env.PI_CONTEXT7_MCP !== "0" && process.env.PI_CONTEXT7_MCP?.toLowerCase() !== "false",
+			});
+			publishMcpConnectionStatuses(MCP_STATUS_EXTENSION_ID, []);
 			configErrors = loaded.errors;
 			autoEnableCodemode = loaded.autoEnableCodemode ?? true;
 			warnedUnreachable = false;
@@ -1093,7 +1117,6 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 			emitChange();
 			await Promise.all(closing.map((connection) => connection.close()));
 		});
-
 		pi.registerCommand("mcp", {
 			description: "Manage MCP servers: sign in, reconnect, enable or disable, and change exposure",
 			getArgumentCompletions: (prefix) => {

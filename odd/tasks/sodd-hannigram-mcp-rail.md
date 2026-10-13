@@ -16,12 +16,12 @@ Constraints: Keep sODD deliberately lighter than ODD. Inline trivial understood 
 ## Tasks
 
 - [x] S1 Port HanniGram daemon auto-start behavior to HanniPI with safe runtime/path checks and tests. Route: direct. Evidence: focused Vitest unavailable (dependencies not installed); injected startup probe and Node syntax checks passed. Commit SHA will be recorded in the next tracker update.
-- [ ] S2 Add Context7 as a default, overridable MCP server and expose truthful connected-server status to the Hanniorq rail. Route: delegated direct (MCP configuration/runtime and rail integration). Evidence: pending.
-- [ ] S3 Make sODD classification guidance automatic in the assistant context, keep trivial requests inline, show TODOs and current modified files in its rail, and fix task-sheet directory creation. Route: delegated direct (multiple extension files and tests). Evidence: pending.
+- [x] S2 Add Context7 as a default, overridable MCP server and expose truthful connected-server status to the Hanniorq rail. Route: direct. Evidence: status snapshot probe and syntax checks passed; Vitest/check blocked because dependencies are not installed. Commit SHA pending.
+- [ ] S3 Make sODD classification guidance automatic in the assistant context, keep trivial requests inline, show TODOs and current modified files in its rail, and fix task-sheet directory creation. Route: direct. Evidence: implementation underway; focused tests/check pending.
 
 ## Next
 
-S2: Add the default Context7 entry without masking explicit MCP configuration, expose the MCP extension's live connection snapshot, and render that actual state in the Hanniorq rail.
+S3: Verify prompt classification, task directory creation, accurate cwd hooks, and observational rail tests; then commit only S3 paths plus this tracker.
 
 ## Verification
 
