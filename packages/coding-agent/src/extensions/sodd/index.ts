@@ -2,7 +2,7 @@
  * hanni-sodd: Small ODD (Organic Driven Development) para HanniPI.
  *
  * Aporta:
- *  - Comandos `/task new|status|next|done|promote` para gestionar la ficha activa.
+ *  - Comandos `/task new|status|next|done|promote|diff|verify|commit` para gestionar la ficha activa.
  *  - Reinyección de la ficha activa al contexto antes de compactar
  *    (hook `session_before_compact`), recortada a "Pasos" y "Siguiente".
  *
@@ -11,9 +11,9 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { ExtensionFactory } from "../../core/extensions/types.ts";
 
@@ -31,6 +31,10 @@ function getActiveTaskPath(cwd: string): string | undefined {
 	const slug = getActiveSlug(cwd);
 	if (!slug) return undefined;
 	return join(getOddDir(cwd), "tasks", `${slug}.md`);
+}
+
+function safeTaskSlug(slug: string): boolean {
+	return slug.length > 0 && basename(slug) === slug && !slug.includes("\\") && slug !== "." && slug !== "..";
 }
 
 /** Recorta la ficha a las secciones Pasos y Siguiente (para reinyección compacta). */
@@ -135,7 +139,12 @@ export function createSoddExtension(): ExtensionFactory {
 							ctx.ui.notify("Uso: /task new <slug>", "warning");
 							return;
 						}
+						if (!safeTaskSlug(slug)) {
+							ctx.ui.notify("El slug debe ser un nombre de ficha, no una ruta.", "warning");
+							return;
+						}
 						const tasksDir = join(oddDir, "tasks");
+						mkdirSync(tasksDir, { recursive: true });
 						writeFileSync(
 							join(tasksDir, `${slug}.md`),
 							`---\ntopic_key: ${slug}\nstatus: active\nbase: \n---\n# ${slug}\nObjetivo: \nAlcance: \nVerify: \n\n## Pasos\n- [ ] S1 \n\n## Siguiente\nS1: \n`,
@@ -220,9 +229,36 @@ export function createSoddExtension(): ExtensionFactory {
 							ctx.ui.notify("Uso: /task commit <mensaje>", "warning");
 							return;
 						}
-						const r = spawnSync("git", ["add", "-A"], { cwd, encoding: "utf-8" });
+						const slug = getActiveSlug(cwd);
+						if (!slug) {
+							ctx.ui.notify("No hay ficha activa para commitear.", "warning");
+							return;
+						}
+						const taskCommitPath = join(oddDir, "tasks", `${slug}.md`);
+						const existingStaged = spawnSync("git", ["diff", "--cached", "--name-only", "-z"], {
+							cwd,
+							encoding: "utf-8",
+						});
+						const taskRelativePath = taskCommitPath.replace(/\\/g, "/");
+						if (
+							existingStaged.status !== 0 ||
+							existingStaged.stdout.split("\0").filter(Boolean).some((path) => path !== taskRelativePath)
+						) {
+							ctx.ui.notify("Hay otros cambios staged. Commitéalos aparte antes de /task commit.", "warning");
+							return;
+						}
+						const r = spawnSync("git", ["add", "--", taskCommitPath], { cwd, encoding: "utf-8" });
 						if (r.status !== 0) {
 							ctx.ui.notify(r.stderr || "git add falló", "error");
+							return;
+						}
+						const staged = spawnSync("git", ["diff", "--cached", "--name-only", "-z"], {
+							cwd,
+							encoding: "utf-8",
+						});
+						const stagedPaths = staged.stdout.split("\0").filter(Boolean);
+						if (staged.status !== 0 || stagedPaths.some((path) => path !== taskRelativePath)) {
+							ctx.ui.notify("Hay otros cambios staged. Commitéalos aparte antes de /task commit.", "warning");
 							return;
 						}
 						const c = spawnSync("git", ["commit", "-m", msg], { cwd, encoding: "utf-8" });
@@ -230,14 +266,14 @@ export function createSoddExtension(): ExtensionFactory {
 						return;
 					}
 					default:
-						ctx.ui.notify("Uso: /task new|status|next|done|promote", "warning");
+						ctx.ui.notify("Uso: /task new|status|next|done|promote|diff|verify|commit", "warning");
 				}
 			},
 		});
 
 		// Reinyección de la ficha activa antes de compactar.
-		pi.on("session_before_compact", (event) => {
-			const cwd = process.cwd();
+		pi.on("session_before_compact", (event, ctx) => {
+			const cwd = ctx.cwd;
 			const taskPath = getActiveTaskPath(cwd);
 			if (!taskPath || !existsSync(taskPath)) return;
 			const full = readFileSync(taskPath, "utf-8");
@@ -251,8 +287,18 @@ export function createSoddExtension(): ExtensionFactory {
 		// (recall push, no pull). Escopada por proyecto (owner/repo del git remote)
 		// con DOS bloques: decisiones/convenciones a respetar (type='adr', siempre)
 		// y contexto reciente (índice ligero, sin contenido completo).
-		pi.on("context", (event) => {
-			const cwd = process.cwd();
+		pi.on("context", (event, ctx) => {
+			const cwd = ctx.cwd;
+			const hasSubagent = pi.getAllTools().some((tool) => tool.name === "subagent");
+			const classification = [
+				"[sODD guidance] Classify this request automatically; do not ask the user to run /task just to classify it.",
+				"For a small, understood request that can be completed inline, work inline without creating a task sheet.",
+				"Create or update odd/tasks/<slug>.md and odd/.active only when work is multi-step, multi-file, interruptible, or worth recovering; TODOs alone do not make work a feature task.",
+				hasSubagent
+					? "Delegate only when work is independent and the available subagent tool can make progress without conflicts; otherwise work inline."
+					: "No subagent tool is available in this runtime; do not claim to delegate.",
+			].join("\n");
+			event.messages.push({ role: "system", content: classification, timestamp: Date.now() });
 			const { adr, context } = readProjectMemory(cwd);
 			if (adr.length === 0 && context.length === 0) return;
 			const blocks: string[] = [];

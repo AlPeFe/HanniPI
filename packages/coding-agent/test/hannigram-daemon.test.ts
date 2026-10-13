@@ -14,7 +14,7 @@ afterEach(() => {
 describe("ensureHanniGramDaemon", () => {
 	it("starts a configured daemon only when needed and waits for health", async () => {
 		process.env.HANNIGRAM_DAEMON = "hannigram-test-daemon";
-		process.env.HANNIGRAM_URLS = "http://127.0.0.1:9876";
+		delete process.env.HANNIGRAM_URLS;
 		let checks = 0;
 		const fetcher = vi.fn(async () => {
 			checks++;
@@ -41,14 +41,24 @@ describe("ensureHanniGramDaemon", () => {
 		const spawnDaemon = vi.fn();
 		const healthyFetch = vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 }));
 		await expect(
-			ensureHanniGramDaemon({ cwd: process.cwd(), baseUrl: "http://localhost:8765", fetcher: healthyFetch, spawnDaemon }),
+			ensureHanniGramDaemon({
+				cwd: process.cwd(),
+				baseUrl: "http://localhost:8765",
+				fetcher: healthyFetch,
+				spawnDaemon,
+			}),
 		).resolves.toBe(true);
 		expect(spawnDaemon).not.toHaveBeenCalled();
 
 		process.env.HANNIGRAM_DAEMON = "missing/path/daemon";
 		const unavailableFetch = vi.fn(async () => new Response("unavailable", { status: 503 }));
 		await expect(
-			ensureHanniGramDaemon({ cwd: process.cwd(), baseUrl: "http://localhost:8765", fetcher: unavailableFetch, spawnDaemon }),
+			ensureHanniGramDaemon({
+				cwd: process.cwd(),
+				baseUrl: "http://localhost:8765",
+				fetcher: unavailableFetch,
+				spawnDaemon,
+			}),
 		).resolves.toBe(false);
 		expect(spawnDaemon).not.toHaveBeenCalled();
 	});

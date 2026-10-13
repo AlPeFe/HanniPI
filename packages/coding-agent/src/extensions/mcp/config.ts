@@ -69,8 +69,8 @@ export function withDefaultContext7(
 ): LoadedMcpConfig {
 	if (
 		!options.enabled ||
-		loaded.servers.some((server) => mcpNamespace(server.name) === mcpNamespace("context7")) ||
-		options.registeredNames.some((name) => mcpNamespace(name) === mcpNamespace("context7"))
+		loaded.servers.some((server) => server.name.toLowerCase() === "context7") ||
+		options.registeredNames.some((name) => name.toLowerCase() === "context7")
 	) {
 		return loaded;
 	}

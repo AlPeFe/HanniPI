@@ -15,13 +15,13 @@ Constraints: Keep sODD deliberately lighter than ODD. Inline trivial understood 
 
 ## Tasks
 
-- [x] S1 Port HanniGram daemon auto-start behavior to HanniPI with safe runtime/path checks and tests. Route: direct. Evidence: focused Vitest unavailable (dependencies not installed); injected startup probe and Node syntax checks passed. Commit SHA will be recorded in the next tracker update.
-- [x] S2 Add Context7 as a default, overridable MCP server and expose truthful connected-server status to the Hanniorq rail. Route: direct. Evidence: status snapshot probe and syntax checks passed; Vitest/check blocked because dependencies are not installed. Commit SHA pending.
-- [ ] S3 Make sODD classification guidance automatic in the assistant context, keep trivial requests inline, show TODOs and current modified files in its rail, and fix task-sheet directory creation. Route: direct. Evidence: implementation underway; focused tests/check pending.
+- [x] S1 Port HanniGram daemon auto-start behavior to HanniPI with safe runtime/path checks and tests. Route: direct. Evidence: `804f55335` (`feat(coding-agent): auto-start HanniGram daemon`); injected startup probe and Node syntax checks passed; focused Vitest unavailable (dependencies absent).
+- [x] S2 Add Context7 as a default, overridable MCP server and expose truthful connected-server status to the Hanniorq rail. Route: direct. Evidence: `75e02e59b` (`feat(coding-agent): default Context7 MCP server`); status snapshot probe and syntax checks passed; Vitest/check blocked because dependencies are absent.
+- [x] S3 Make sODD classification guidance automatic in the assistant context, keep trivial requests inline, show TODOs and current modified files in its rail, and fix task-sheet directory creation. Route: direct. Evidence: Node syntax checks and injected HanniGram/MCP snapshot probes passed; Vitest blocked (missing node_modules/vitest); npm run check blocked (Biome absent).
 
 ## Next
 
-S3: Verify prompt classification, task directory creation, accurate cwd hooks, and observational rail tests; then commit only S3 paths plus this tracker.
+Done: all three scoped tasks are implemented. Global check remains blocked until dependencies are installed.
 
 ## Verification
 

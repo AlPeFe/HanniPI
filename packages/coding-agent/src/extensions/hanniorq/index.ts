@@ -22,6 +22,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionFactory, ExtensionUIContext } from "../../core/extensions/types.ts";
 import { ThemedText } from "../../modes/interactive/components/themed-text.ts";
+import { getMcpConnectionStatuses, subscribeMcpConnectionStatuses } from "../mcp/status.ts";
 import { ensureHanniGramDaemon } from "./hannigram-daemon.ts";
 
 function getOddDir(cwd: string): string {
@@ -69,8 +70,29 @@ function git(cwd: string, args: string[]): { ok: boolean; out: string } {
 	return { ok: r.status === 0, out: (r.stdout || r.stderr || "").trim() };
 }
 
+export function parseGitStatusPaths(output: string): string[] {
+	const entries = output.split("\0");
+	const paths: string[] = [];
+	for (let index = 0; index < entries.length; index++) {
+		const entry = entries[index] ?? "";
+		if (entry.length < 4) continue;
+		paths.push(entry.slice(3));
+		if (entry.startsWith("R") || entry.startsWith("C") || entry[1] === "R" || entry[1] === "C") index++;
+	}
+	return paths;
+}
+
 function currentBranch(cwd: string): string {
 	return git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]).out || "?";
+}
+
+function visibleWorktreeFiles(cwd: string, files: readonly string[]): string[] {
+	return files.filter((file) => {
+		const relative = file.replace(/\\/g, "/");
+		const atl = relative === ".atl" || relative.startsWith(".atl/");
+		if (!atl) return true;
+		return !existsSync(join(cwd, relative));
+	});
 }
 
 function lastCommit(cwd: string): string {
@@ -259,6 +281,8 @@ function updateSoddIndicator(ui: ExtensionUIContext, cwd: string): void {
 // ---------------------------------------------------------------------------
 
 const RAIL_WIDTH = 32;
+const modifiedFilesCache = new Map<string, string[]>();
+const modifiedFilesRefresh = new Map<string, Promise<void>>();
 
 /** Cache del estado de la memoria HanniGram (daemon + nº observaciones del proyecto). */
 let memoryCache: { up: boolean; count: number; checked: boolean } = { up: false, count: 0, checked: false };
@@ -368,6 +392,24 @@ function railLines(ui: ExtensionUIContext, cwd: string): string[] {
 		if (todos.length > 8) lines.push(theme.fg("muted", `… +${todos.length - 8}`));
 	}
 
+	const mcp = getMcpConnectionStatuses();
+	if (mcp.length > 0) {
+		lines.push(sep, theme.fg("accent", "MCP"));
+		for (const server of mcp.slice(0, 6)) {
+			const icon = server.state === "connected" ? "✓" : server.state === "disabled" ? "·" : "!";
+			const color = server.state === "connected" ? "success" : server.state === "disabled" ? "muted" : "warning";
+			lines.push(
+				`${theme.fg(color, icon)} ${clip(server.name, W - 15)} ${theme.fg("muted", clip(server.state, 10))}`,
+			);
+		}
+		if (mcp.length > 6) lines.push(theme.fg("muted", `… +${mcp.length - 6} MCP`));
+	}
+
+	const files = visibleWorktreeFiles(cwd, modifiedFilesCache.get(cwd) ?? []);
+	lines.push(sep, theme.fg("accent", `cambios (${files.length})`));
+	for (const file of files.slice(0, 6)) lines.push(`${theme.fg("muted", "·")} ${clip(file, W - 2)}`);
+	if (files.length > 6) lines.push(theme.fg("muted", `… +${files.length - 6}`));
+
 	return lines;
 }
 
@@ -384,12 +426,40 @@ function refreshRail(ui: ExtensionUIContext, cwd: string): void {
 	void checkMemory(cwd).then(() => renderRail(ui, cwd));
 }
 
+async function refreshModifiedFiles(
+	pi: Parameters<ExtensionFactory>[0],
+	ui: ExtensionUIContext,
+	cwd: string,
+): Promise<void> {
+	const pending = modifiedFilesRefresh.get(cwd);
+	if (pending) return pending;
+	const refresh = (async () => {
+	try {
+		const result = await pi.exec("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd });
+		if (result.code !== 0) return;
+		modifiedFilesCache.set(cwd, parseGitStatusPaths(result.stdout));
+		renderRail(ui, cwd);
+	} catch {
+		// A rail refresh is observational; failure must not interrupt the session.
+	}
+	})();
+	modifiedFilesRefresh.set(cwd, refresh);
+	try {
+		await refresh;
+	} finally {
+		modifiedFilesRefresh.delete(cwd);
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Extensión
 // ---------------------------------------------------------------------------
 
-export function createHanniorqExtension(): ExtensionFactory {
+export function createHanniorqExtension(options: {
+	ensureDaemon?: typeof ensureHanniGramDaemon;
+} = {}): ExtensionFactory {
 	return (pi) => {
+		let unsubscribeMcpStatus: (() => void) | undefined;
 		// Estado del turno actual: tools usadas, escrituras de memoria, si se
 		// tocó sODD. Se resetea en turn_start y se resume en turn_end como un
 		// widget pequeñito (abajo), estilo "updated skill" de Hermes.
@@ -524,6 +594,11 @@ export function createHanniorqExtension(): ExtensionFactory {
 			ctx.ui.setWidget("hanniorq-turn", [`▸ ${parts.join(" · ")}`]);
 			updateSoddIndicator(ctx.ui, cwd);
 			refreshRail(ctx.ui, cwd);
+			void refreshModifiedFiles(pi, ctx.ui, cwd);
+		});
+
+		pi.on("tool_execution_end", (_event, ctx) => {
+			void refreshModifiedFiles(pi, ctx.ui, ctx.cwd ?? process.cwd());
 		});
 
 		// Indicador sODD: pinta si hay ficha activa (al iniciar la sesión,
@@ -532,10 +607,17 @@ export function createHanniorqExtension(): ExtensionFactory {
 			const cwd = ctx.cwd ?? process.cwd();
 			updateSoddIndicator(ctx.ui, cwd);
 			refreshRail(ctx.ui, cwd);
-			void ensureHanniGramDaemon({ cwd, baseUrl: HANNIGRAM_BASE }).then((started) => {
+			void refreshModifiedFiles(pi, ctx.ui, cwd);
+			unsubscribeMcpStatus?.();
+			unsubscribeMcpStatus = subscribeMcpConnectionStatuses(() => renderRail(ctx.ui, cwd));
+			void (options.ensureDaemon ?? ensureHanniGramDaemon)({ cwd, baseUrl: HANNIGRAM_BASE }).then((started) => {
 				if (!started) return;
 				void checkMemory(cwd).then(() => renderRail(ctx.ui, cwd));
 			});
+		});
+		pi.on("session_shutdown", () => {
+			unsubscribeMcpStatus?.();
+			unsubscribeMcpStatus = undefined;
 		});
 
 		pi.registerCommand("hanniorq", {

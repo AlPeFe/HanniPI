@@ -4,7 +4,7 @@ Pi connects to [Model Context Protocol](https://modelcontextprotocol.io) servers
 
 ## Quick setup
 
-Add a local stdio server, check the connection, then start Pi:
+Context7 is available by default as a remote documentation server. Add a local stdio server, check the connection, then start Pi:
 
 ```bash
 pi mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem .
@@ -30,6 +30,8 @@ Use `/mcp` inside an interactive session to inspect connections, sign in, reconn
 ## Configure servers
 
 Pi reads user-level servers from `~/.pi/agent/mcp.json` and project servers from `.pi/mcp.json`. Project configuration is read only after [project trust](security.md#understand-project-trust) is granted. A project entry replaces a user-level entry with the same name.
+
+Unless overridden by a configured or extension-registered `context7` server, Pi adds `https://mcp.context7.com/mcp` for the session. To disable this fallback, set `PI_CONTEXT7_MCP=0` (or `false`). Use `/mcp` to disable it for later sessions; that choice is saved to the user-level `mcp.json`. The fallback is not written to disk unless changed through `/mcp`.
 
 The format matches other MCP clients:
 

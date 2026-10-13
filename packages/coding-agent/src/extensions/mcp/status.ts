@@ -7,7 +7,11 @@ const statusByExtension = new Map<string, readonly McpConnectionStatus[]>();
 const listeners = new Set<() => void>();
 
 export function getMcpConnectionStatuses(): readonly McpConnectionStatus[] {
-	return [...statusByExtension.values()].flat();
+	const statuses = new Map<string, McpConnectionStatus>();
+	for (const extensionStatuses of statusByExtension.values()) {
+		for (const status of extensionStatuses) statuses.set(status.name, status);
+	}
+	return [...statuses.values()];
 }
 
 export function subscribeMcpConnectionStatuses(listener: () => void): () => void {

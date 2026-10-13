@@ -14,7 +14,12 @@ import { createInMemoryTransportPair, type InMemoryTransport } from "@earendil-w
 import { afterEach, describe, expect, it } from "vitest";
 import { InMemoryAuthStorageBackend } from "../src/core/auth-storage.ts";
 import { truncateMiddle } from "../src/core/tools/truncate.ts";
-import { getMcpToolExposure, loadMcpConfig, type McpServerEntry, withDefaultContext7 } from "../src/extensions/mcp/config.ts";
+import {
+	getMcpToolExposure,
+	loadMcpConfig,
+	type McpServerEntry,
+	withDefaultContext7,
+} from "../src/extensions/mcp/config.ts";
 import { MAX_SERVERS_SECTION_CHARS, renderServersSection } from "../src/extensions/mcp/index.ts";
 import {
 	getMcpConnectionStatuses,
@@ -228,8 +233,14 @@ describe("MCP config", () => {
 			name: "context7",
 			config: { url: "https://mcp.context7.com/mcp" },
 		});
-		expect(withDefaultContext7({ servers: [{ name: "context7", config: { url: "https://custom/mcp" }, source: "test" }], errors: [] }, { registeredNames: [], enabled: true }).servers[0].config).toEqual({ url: "https://custom/mcp" });
+		expect(
+			withDefaultContext7(
+				{ servers: [{ name: "context7", config: { url: "https://custom/mcp" }, source: "test" }], errors: [] },
+				{ registeredNames: [], enabled: true },
+			).servers[0].config,
+		).toEqual({ url: "https://custom/mcp" });
 		expect(withDefaultContext7(loaded, { registeredNames: ["context7"], enabled: true }).servers).toEqual([]);
+		expect(withDefaultContext7(loaded, { registeredNames: ["context7-extra"], enabled: true }).servers).toHaveLength(1);
 		expect(withDefaultContext7(loaded, { registeredNames: [], enabled: false })).toBe(loaded);
 	});
 });

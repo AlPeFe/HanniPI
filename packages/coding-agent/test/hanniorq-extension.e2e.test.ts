@@ -6,20 +6,24 @@
  *
  * Se ejecuta contra la extensión real, con un pi mock que captura eventos y widgets.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionFactory } from "../src/core/extensions/types.ts";
-import { createHanniorqExtension } from "../src/extensions/hanniorq/index.ts";
+import { createHanniorqExtension, parseGitStatusPaths } from "../src/extensions/hanniorq/index.ts";
+import { publishMcpConnectionStatuses } from "../src/extensions/mcp/status.ts";
 
 function createMockPi() {
 	const registeredCommands = new Map<string, { description: string; handler: (...args: any[]) => any }>();
 	const listeners = new Map<string, ((...args: any[]) => any)[]>();
-	const widgets = new Map<string, string[]>();
+	const widgets = new Map<string, string[] | ((...args: any[]) => unknown)>();
 	const sentMessages: string[] = [];
 
 	const ui = {
 		notify: () => {},
 		select: async () => undefined,
-		setWidget: (name: string, lines?: string[]) => {
+		setWidget: (name: string, lines?: string[] | ((...args: any[]) => unknown)) => {
 			if (lines === undefined) widgets.delete(name);
 			else widgets.set(name, lines);
 		},
@@ -29,6 +33,7 @@ function createMockPi() {
 		registerCommand: (name: string, def: { description: string; handler: (...args: any[]) => any }) => {
 			registeredCommands.set(name, def);
 		},
+		exec: async () => ({ stdout: "", stderr: "", code: 0, killed: false }),
 		on: (event: string, handler: (...args: any[]) => any) => {
 			const arr = listeners.get(event) ?? [];
 			arr.push(handler);
@@ -49,6 +54,14 @@ async function emit(pi: ReturnType<typeof createMockPi>["pi"], event: string, pa
 }
 
 describe("extensión hanniorq", () => {
+	it("parses NUL-delimited modified and renamed paths from git status", () => {
+		expect(parseGitStatusPaths(" M file with spaces.ts\0?? untracked.ts\0R  new-name.ts\0old-name.ts\0")).toEqual([
+			"file with spaces.ts",
+			"untracked.ts",
+			"new-name.ts",
+		]);
+	});
+
 	it("registra los comandos /hanniorq y /hannigram", () => {
 		const { registeredCommands, pi } = createMockPi();
 		createHanniorqExtension()(pi);
@@ -67,6 +80,56 @@ describe("extensión hanniorq", () => {
 		expect(registeredCommands.get("helpme")!.description).toContain("comandos de HanniPI");
 		expect(registeredCommands.get("hannidump")!.description).toContain("agents.md");
 		expect(registeredCommands.get("explore")!.description).toContain("memoria inicial");
+	});
+
+	it("renders configured MCP connection state on the right rail", async () => {
+		const { listeners, widgets, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHanniorqExtension()(pi);
+		const ctx = { cwd: "C:/x", ui: (pi as any).ui };
+		publishMcpConnectionStatuses("test", [{ name: "context7", state: "connected" }, { name: "local", state: "failed" }]);
+		await emit(pi, "session_start", {}, ctx);
+		const railWidget = widgets.get("hanniorq-rail");
+		const rail =
+			typeof railWidget === "function"
+				? (railWidget as () => { render(width: number): string[] })().render(32).join("\n")
+				: "";
+		expect(rail).toContain("MCP");
+		expect(rail).toContain("context7");
+		expect(rail).toContain("connected");
+		expect(rail).toContain("local");
+	});
+
+	it("renders the active sheet TODOs and current modified-file snapshot", async () => {
+		const { listeners, widgets, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		const exec = vi.fn(async () => ({ stdout: " M source.ts\0?? new.ts\0", stderr: "", code: 0, killed: false }));
+		(pi as any).exec = exec;
+		createHanniorqExtension()(pi);
+		const root = mkdtempSync(join(tmpdir(), "hanniorq-rail-"));
+		try {
+			mkdirSync(join(root, "odd", "tasks"), { recursive: true });
+			writeFileSync(join(root, "odd", ".active"), "demo");
+			writeFileSync(join(root, "odd", "tasks", "demo.md"), "## Pasos\n- [ ] S1 visible todo\n- [x] S2 completed\n");
+			const ctx = { cwd: root, ui: (pi as any).ui };
+			await emit(pi, "session_start", {}, ctx);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			const widget = widgets.get("hanniorq-rail");
+			const rail =
+				typeof widget === "function"
+					? (widget as () => { render(width: number): string[] })().render(32).join("\n")
+					: "";
+			expect(rail).toContain("visible todo");
+			expect(rail).toContain("source.ts");
+			expect(rail).toContain("new.ts");
+			expect(exec).toHaveBeenCalledWith(
+				"git",
+				["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+				{ cwd: root },
+			);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	it("/explore envía un turno al modelo pidiendo construir memoria del proyecto", async () => {

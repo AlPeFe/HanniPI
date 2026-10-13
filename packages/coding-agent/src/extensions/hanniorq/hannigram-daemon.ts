@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 const HEALTH_TIMEOUT_MS = 400;
 const STARTUP_TIMEOUT_MS = 10_000;
@@ -10,6 +10,7 @@ type SpawnDaemon = (command: string, args: string[]) => void;
 
 function defaultSpawnDaemon(command: string, args: string[]): void {
 	const child = spawn(command, args, { detached: true, stdio: "ignore", windowsHide: true });
+	child.once("error", () => {});
 	child.unref();
 }
 
@@ -25,7 +26,11 @@ function siblingDaemonCandidates(cwd: string): Array<{ command: string; args: st
 			continue;
 		}
 		for (const framework of frameworks) {
-			const appHost = join(releaseDir, framework, process.platform === "win32" ? "HanniGram.Server.exe" : "HanniGram.Server");
+			const appHost = join(
+				releaseDir,
+				framework,
+				process.platform === "win32" ? "HanniGram.Server.exe" : "HanniGram.Server",
+			);
 			const assembly = join(releaseDir, framework, "HanniGram.Server.dll");
 			if (existsSync(appHost)) candidates.push({ command: appHost, args: [] });
 			else if (existsSync(assembly)) candidates.push({ command: "dotnet", args: [assembly] });
@@ -37,14 +42,13 @@ function siblingDaemonCandidates(cwd: string): Array<{ command: string; args: st
 function daemonCommand(cwd: string): { command: string; args: string[] } | undefined {
 	const configured = process.env.HANNIGRAM_DAEMON;
 	if (configured) {
-		const command = resolve(cwd, configured);
-		if (!existsSync(command)) {
-			if (configured.includes("/") || configured.includes("\\")) return undefined;
-			return { command: configured, args: [] };
+		const isPath = configured.includes("/") || configured.includes("\\");
+		const command = isPath ? resolve(cwd, configured) : configured;
+		if (isPath && !existsSync(command)) {
+			return undefined;
 		}
-		return basename(command).toLowerCase().endsWith(".dll")
-			? { command: "dotnet", args: [command] }
-			: { command, args: [] };
+		if (configured.toLowerCase().endsWith(".dll")) return { command: "dotnet", args: [command] };
+		return { command, args: [] };
 	}
 	return siblingDaemonCandidates(cwd)[0];
 }
@@ -76,13 +80,16 @@ export async function ensureHanniGramDaemon(options: {
 	if (await healthy(options.baseUrl, fetcher)) return true;
 	const executable = daemonCommand(options.cwd);
 	if (!executable) return false;
-	const urls = process.env.HANNIGRAM_URLS ?? options.baseUrl;
 	try {
-		(options.spawnDaemon ?? defaultSpawnDaemon)(executable.command, [...executable.args, "--urls", urls]);
+		(options.spawnDaemon ?? defaultSpawnDaemon)(
+			executable.command,
+			[...executable.args, "--urls", process.env.HANNIGRAM_URLS ?? new URL(options.baseUrl).origin],
+		);
 	} catch {
 		return false;
 	}
-	const wait = options.wait ?? ((milliseconds: number) => new Promise((resolveWait) => setTimeout(resolveWait, milliseconds)));
+	const wait =
+		options.wait ?? ((milliseconds: number) => new Promise((resolveWait) => setTimeout(resolveWait, milliseconds)));
 	const deadline = Date.now() + (options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS);
 	do {
 		if (await healthy(options.baseUrl, fetcher)) return true;

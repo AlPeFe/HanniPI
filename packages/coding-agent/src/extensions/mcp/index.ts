@@ -27,6 +27,7 @@
  */
 
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { hyperlink, type SelectItem } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
 import { getAgentDir } from "../../config.ts";
@@ -67,7 +68,7 @@ import { createMcpToolDefinition, createMcpToolName, type McpToolDetails } from 
 import { type McpMenu, type McpUi, showMcpManager } from "./ui.ts";
 import { publishMcpConnectionStatuses } from "./status.ts";
 
-const MCP_STATUS_EXTENSION_ID = new URL(import.meta.url).pathname;
+const MCP_STATUS_EXTENSION_ID = fileURLToPath(import.meta.url);
 
 export type { McpTransportFactory } from "./runtime.ts";
 
@@ -301,17 +302,21 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 		let modelRegistry: ModelRegistry | undefined;
 		let serverLog: McpServerLog | undefined;
 		const openUrl = options.openUrl ?? openBrowser;
-		const updateConfig = options.updateConfig ?? ((entry, patch) => {
-			if (entry.source === "<built-in-context7>") {
-				addMcpServerConfig(join(getAgentDir(), "mcp.json"), entry.name, { ...entry.config, ...patch });
-				return;
-			}
-			updateMcpServerConfig(entry.source, entry.name, patch);
-		});
+		const updateConfig =
+			options.updateConfig ??
+			((entry, patch) => {
+				if (entry.source === "<built-in-context7>") {
+					const configPath = join(getAgentDir(), "mcp.json");
+					addMcpServerConfig(configPath, entry.name, { ...entry.config, ...patch });
+					return;
+				}
+				updateMcpServerConfig(entry.source, entry.name, patch);
+			});
 
 		const listeners = new Set<() => void>();
 		const emitChange = () => {
-			publishMcpConnectionStatuses(MCP_STATUS_EXTENSION_ID,
+			publishMcpConnectionStatuses(
+				MCP_STATUS_EXTENSION_ID,
 				servers.map((server) => ({
 					name: server.entry.name,
 					state: !isEnabled(server)
