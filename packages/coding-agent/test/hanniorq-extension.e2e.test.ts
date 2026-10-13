@@ -11,8 +11,8 @@ import type { ExtensionFactory } from "../src/core/extensions/types.ts";
 import { createHanniorqExtension } from "../src/extensions/hanniorq/index.ts";
 
 function createMockPi() {
-	const registeredCommands = new Map<string, { description: string; handler: Function }>();
-	const listeners = new Map<string, Function[]>();
+	const registeredCommands = new Map<string, { description: string; handler: (...args: any[]) => any }>();
+	const listeners = new Map<string, ((...args: any[]) => any)[]>();
 	const widgets = new Map<string, string[]>();
 	const sentMessages: string[] = [];
 
@@ -26,10 +26,10 @@ function createMockPi() {
 	};
 
 	const pi = {
-		registerCommand: (name: string, def: { description: string; handler: Function }) => {
+		registerCommand: (name: string, def: { description: string; handler: (...args: any[]) => any }) => {
 			registeredCommands.set(name, def);
 		},
-		on: (event: string, handler: Function) => {
+		on: (event: string, handler: (...args: any[]) => any) => {
 			const arr = listeners.get(event) ?? [];
 			arr.push(handler);
 			listeners.set(event, arr);

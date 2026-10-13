@@ -16,9 +16,11 @@ export const THINKING_LEVEL_OPTIONS: readonly ThinkingLevel[] = [
  * Paquetes que vienen activos por defecto en HanniPI. No se persisten en
  * settings.json: se fusionan en tiempo de lectura (getEffectivePackages) para
  * que una versión nueva del harness pueda actualizarlos sin tocar el archivo.
- * Un paquete por defecto se puede desactivar añadiéndolo a `disabledDefaultPackages`.
+ *
+ * Vacío a propósito: subagentes, web y MCP ya no son tools fijos del prompt.
+ * La orquestación de subagentes es externa (orquestador) y los tools pesados
+ * (web_search, mcp, ...) inflaban ~12k prompt tokens por turno sin ser usados.
+ * Si en el futuro se necesita alguno, reintroducirlo aquí o vía `packages`
+ * bajo demanda en settings.json.
  */
-export const DEFAULT_PACKAGES: readonly PackageSource[] = [
-	"npm:pi-mcp-adapter",
-	"npm:pi-web-access",
-];
+export const DEFAULT_PACKAGES: readonly PackageSource[] = [];
