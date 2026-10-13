@@ -22,6 +22,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionFactory, ExtensionUIContext } from "../../core/extensions/types.ts";
 import { ThemedText } from "../../modes/interactive/components/themed-text.ts";
+import { ensureHanniGramDaemon } from "./hannigram-daemon.ts";
 
 function getOddDir(cwd: string): string {
 	return join(cwd, "odd");
@@ -470,7 +471,7 @@ export function createHanniorqExtension(): ExtensionFactory {
 					const health = await hannigram<{ status?: string; db?: string }>("/health");
 					if (!health) {
 						ctx.ui.notify(
-							"Daemon HanniGram NO disponible (127.0.0.1:8765). Arranca con: dotnet run -c Release --project src/HanniGram.Server",
+							`Daemon HanniGram NO disponible (${HANNIGRAM_BASE}). Define HANNIGRAM_DAEMON o inicia el daemon manualmente.`,
 							"warning",
 						);
 						return;
@@ -531,6 +532,10 @@ export function createHanniorqExtension(): ExtensionFactory {
 			const cwd = ctx.cwd ?? process.cwd();
 			updateSoddIndicator(ctx.ui, cwd);
 			refreshRail(ctx.ui, cwd);
+			void ensureHanniGramDaemon({ cwd, baseUrl: HANNIGRAM_BASE }).then((started) => {
+				if (!started) return;
+				void checkMemory(cwd).then(() => renderRail(ctx.ui, cwd));
+			});
 		});
 
 		pi.registerCommand("hanniorq", {
