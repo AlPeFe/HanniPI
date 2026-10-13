@@ -1,6 +1,6 @@
 {
   "name": "@earendil-works/pi-telemetry",
-  "version": "0.1.3-hannipi",
+  "version": "0.2.0-hannipi",
   "description": "Vendor-neutral telemetry contracts and typed schema utilities for pi",
   "type": "module",
   "main": "./dist/index.js",
