@@ -1,6 +1,6 @@
 {
   "name": "@earendil-works/pi-evals",
-  "version": "0.2.1-hannipi",
+  "version": "0.2.2-hannipi",
   "private": true,
   "type": "module",
   "scripts": {
