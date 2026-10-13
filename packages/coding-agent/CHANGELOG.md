@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-10-13
-
 ### Added
 
 - HanniPI: added `/helpme` (lists every HanniPI command and what it does), `/hannidump [ruta]` (writes an `agents.md` context+ADR dump for harnesses that do not use HanniGram, summarized by the model), and `/explore` (reads the project's md files/README and builds initial HanniGram memory on first run).
