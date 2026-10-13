@@ -180,8 +180,11 @@ export function compareVersions(v1: ChangelogEntry, v2: ChangelogEntry): number 
  * Get entries newer than lastVersion
  */
 export function getNewEntries(entries: ChangelogEntry[], lastVersion: string): ChangelogEntry[] {
-	// Parse lastVersion
-	const parts = lastVersion.split(".").map(Number);
+	// Extract the numeric core (major.minor.patch); a suffix like "-hannipi"
+	// otherwise made the patch parse to NaN, so the latest entry always looked
+	// "new" and the changelog re-shown on every startup.
+	const core = lastVersion.match(/(\d+\.\d+\.\d+)/)?.[0] ?? "0.0.0";
+	const parts = core.split(".").map(Number);
 	const last: ChangelogEntry = {
 		major: parts[0] || 0,
 		minor: parts[1] || 0,

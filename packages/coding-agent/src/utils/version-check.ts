@@ -31,9 +31,18 @@ export function formatVersionCheckError(error: unknown): string {
 	return causeMessage ? `${rootMessage} (cause: ${causeMessage})` : rootMessage;
 }
 
+/** Extract the numeric core (major.minor.patch) from a version string, ignoring
+ * any "v" prefix or prerelease suffix like "-hannipi". A suffix would otherwise
+ * read as a prerelease (e.g. "0.2.1-hannipi" < "0.2.1"), so HanniPI always
+ * reported "update available" against its own release. */
+function coreVersion(version: string): string {
+	const match = version.trim().match(/(\d+\.\d+\.\d+)/);
+	return match ? match[1] : version.trim();
+}
+
 export function comparePackageVersions(leftVersion: string, rightVersion: string): number | undefined {
-	const left = valid(leftVersion.trim());
-	const right = valid(rightVersion.trim());
+	const left = valid(coreVersion(leftVersion));
+	const right = valid(coreVersion(rightVersion));
 	if (!left || !right) {
 		return undefined;
 	}
@@ -45,7 +54,7 @@ export function isNewerPackageVersion(candidateVersion: string, currentVersion: 
 	if (comparison !== undefined) {
 		return comparison > 0;
 	}
-	return candidateVersion.trim() !== currentVersion.trim();
+	return coreVersion(candidateVersion) !== coreVersion(currentVersion);
 }
 
 export async function getLatestPiRelease(
