@@ -298,6 +298,7 @@ export function createSoddExtension(): ExtensionFactory {
 				"Trivial/understood changes: do them inline now with an atomic commit — no questions, no sheet, no summary. Don't over-plan or generate .md files for everything.",
 				"Create/update odd/tasks/<slug>.md (+ odd/.active) only when work is multi-step, multi-file, interruptible, or worth recovering.",
 				"Ask only when genuinely unsure or the decision is consequential; otherwise act on sensible defaults. Be organic and lean on the person behind the harness.",
+				"For multi-step requests, declare the plan with the `todo` tool (the full task list) and update it as steps complete; a new list replaces the previous one.",
 				"No TDD and no exhaustive test suites: write a test only when a specific case truly needs one; otherwise verify functionally.",
 				"Ask before pushing large changes or opening a PR. Atomic commits need no confirmation.",
 				"Summarize changes as bullet points, then give a short, DECISIVE summary (a few lines). Save durable takeaways to memory (mem_save) only when worth recalling. Keep summaries clear, human and scannable.",

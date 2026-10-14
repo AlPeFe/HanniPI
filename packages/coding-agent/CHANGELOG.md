@@ -5,9 +5,11 @@
 ### Added
 
 - HanniPI: added `/helpme` (lists every HanniPI command and what it does), `/hannidump [ruta]` (writes an `agents.md` context+ADR dump for harnesses that do not use HanniGram, summarized by the model), and `/explore` (reads the project's md files/README and builds initial HanniGram memory on first run).
+- HanniPI: added the `todo` tool, which the harness uses to declare/update the current request's task list. The right rail shows it with `✓`/`▸`/`·` marks; a new list replaces the previous one (so new tasks in the next prompt clear the old ones), and without a list the rail falls back to the active sODD sheet's steps.
 
 ### Changed
 
+- HanniPI: the right rail's memory line shows `ON` plus whether records were added (`nuevo`), deleted (`borrado`), or unchanged (`igual`) instead of an observation count. The changed-files list is capped at 3 paths so it does not accumulate and push the rest off the rail.
 - `/arminsayshi` now plays a 3D version in fullscreen mode, with one cube per pixel of Armin. The 3D pi logo easter egg on header logo click is replaced by it.
 
 ## [1.0.0] - 2026-10-01

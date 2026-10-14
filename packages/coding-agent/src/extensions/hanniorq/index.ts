@@ -21,7 +21,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Key } from "@earendil-works/pi-tui";
-import type { ExtensionFactory, ExtensionUIContext } from "../../core/extensions/types.ts";
+import { Type } from "typebox";
+import type { ExtensionFactory, ExtensionUIContext, ToolDefinition } from "../../core/extensions/types.ts";
 import { ThemedText } from "../../modes/interactive/components/themed-text.ts";
 import { getMcpConnectionStatuses, subscribeMcpConnectionStatuses } from "../mcp/status.ts";
 import { ensureHanniGramDaemon } from "./hannigram-daemon.ts";
@@ -71,8 +72,17 @@ let fleetWidgetTimer: ReturnType<typeof setInterval> | undefined;
 interface MemActivity {
 	kind: "read" | "write";
 	detail: string;
+	/** Para escrituras: si añadió (`add`) o borró (`del`) un registro. */
+	op?: "add" | "del";
 }
 const memActivity: MemActivity[] = [];
+/** Lista de tareas del turno actual, definida por el harness vía la tool `todo`.
+ *  Cada llamada reemplaza la lista entera (una lista nueva limpia la anterior). */
+interface HarnessTodo {
+	text: string;
+	status: "pending" | "in_progress" | "completed";
+}
+let harnessTodos: HarnessTodo[] = [];
 let railHidden = false;
 /** Pasos sODD del rail plegados (toggle: tecla RAIL_TASKS_KEY o /hanniorq tasks). */
 let railTasksHidden = false;
@@ -340,8 +350,8 @@ const RAIL_WIDTH = 32;
 const modifiedFilesCache = new Map<string, string[]>();
 const modifiedFilesRefresh = new Map<string, Promise<void>>();
 
-/** Cache del estado de la memoria HanniGram (daemon + nº observaciones del proyecto). */
-let memoryCache: { up: boolean; count: number; checked: boolean } = { up: false, count: 0, checked: false };
+/** Cache del estado de la memoria HanniGram (daemon arriba/abajo). */
+let memoryCache: { up: boolean; checked: boolean } = { up: false, checked: false };
 
 function clip(s: string, n: number): string {
 	return s.length > n ? `${s.slice(0, n - 1)}…` : s;
@@ -399,20 +409,40 @@ function collectTodos(lines: string[], onlyPasos: boolean): Array<{ done: boolea
 	return out;
 }
 
-/** Consulta el daemon HanniGram (health + observaciones del proyecto) y refresca la cache. */
-async function checkMemory(cwd: string): Promise<void> {
+/** Consulta el daemon HanniGram (health) y refresca la cache. */
+async function checkMemory(): Promise<void> {
 	try {
 		const health = await hannigram<{ status?: string }>("/health");
-		const up = health?.status === "ok";
-		let count = 0;
-		if (up) {
-			const obs = await hannigram<Array<unknown>>(`/api/observations?${new URLSearchParams({ cwd, limit: "200" })}`);
-			count = obs?.length ?? 0;
-		}
-		memoryCache = { up, count, checked: true };
+		memoryCache = { up: health?.status === "ok", checked: true };
 	} catch {
-		memoryCache = { up: false, count: 0, checked: true };
+		memoryCache = { up: false, checked: true };
 	}
+}
+
+/** Estado de la memoria de la sesión: si se añadió algo, se borró, o quedó igual. */
+function memoryDelta(): { label: string; color: "muted" | "success" | "error" | "warning" } {
+	const added = memActivity.some((m) => m.op === "add");
+	const deleted = memActivity.some((m) => m.op === "del");
+	if (added && deleted) return { label: "nuevo + borrado", color: "warning" };
+	if (added) return { label: "nuevo", color: "success" };
+	if (deleted) return { label: "borrado", color: "error" };
+	return { label: "igual", color: "muted" };
+}
+
+/** Tareas del rail: la lista del harness (`todo`) si existe; si no, los pasos de la ficha sODD. */
+function railTodos(cwd: string): Array<{ done: boolean; text: string; current: boolean }> {
+	if (harnessTodos.length > 0) {
+		const hasInProgress = harnessTodos.some((t) => t.status === "in_progress");
+		const firstPending = harnessTodos.findIndex((t) => t.status === "pending");
+		return harnessTodos.map((t, i) => ({
+			done: t.status === "completed",
+			text: t.text,
+			current: t.status === "in_progress" || (!hasInProgress && i === firstPending),
+		}));
+	}
+	const steps = todoSteps(cwd);
+	const current = steps.findIndex((t) => !t.done);
+	return steps.map((t, i) => ({ done: t.done, text: t.text, current: i === current }));
 }
 
 /** Líneas del rail derecho (coloreadas con el tema vivo vía ui.theme). */
@@ -428,21 +458,19 @@ function railLines(ui: ExtensionUIContext, cwd: string): string[] {
 	lines.push(theme.fg("dim", `rama ${clip(currentBranch(cwd), W - 5)}`));
 	lines.push(sep);
 
-	// Memoria HanniGram
+	// Memoria HanniGram: ON/OFF + si en la sesión se añadió o borró algo.
 	lines.push(theme.fg("accent", "memoria"));
 	if (!memoryCache.checked) {
 		lines.push(theme.fg("muted", "comprobando…"));
 	} else if (memoryCache.up) {
-		lines.push(`${theme.fg("success", "✓")} ${theme.fg("text", "ON")} · ${memoryCache.count} obs`);
+		const delta = memoryDelta();
+		lines.push(`${theme.fg("success", "✓")} ${theme.fg("text", "ON")} · ${theme.fg(delta.color, delta.label)}`);
 	} else {
 		lines.push(`${theme.fg("error", "✗")} ${theme.fg("text", "OFF")} (daemon caído)`);
 	}
-	// Actividad de la sesión: lecturas (≫) y escrituras (✎).
+	// Actividad de la sesión: qué se leyó (≫) o guardó (✎) en la memoria.
 	if (memActivity.length > 0) {
-		const readCount = memActivity.filter((m) => m.kind === "read").length;
-		const writeCount = memActivity.filter((m) => m.kind === "write").length;
-		lines.push(`${theme.fg("muted", "≫")}${readCount} · ${theme.fg("success", "✎")}${writeCount}`);
-		for (const m of memActivity.slice(-5).reverse()) {
+		for (const m of memActivity.slice(-4).reverse()) {
 			const icon = m.kind === "write" ? theme.fg("success", "✎") : theme.fg("muted", "≫");
 			lines.push(`${icon} ${clip(m.detail, W - 4)}`);
 		}
@@ -459,20 +487,20 @@ function railLines(ui: ExtensionUIContext, cwd: string): string[] {
 	}
 	lines.push(sep);
 
-	// Tareas (TODO) — la primera sin hacer es la que está "en curso".
+	// Tareas — las define el harness (tool `todo`) para el turno actual; si no,
+	// se muestran los pasos de la ficha sODD. La que está "en curso" va con ▸.
 	// Se pliegan/despliegan con la tecla del rail o /hanniorq tasks.
-	const todos = todoSteps(cwd);
+	const todos = railTodos(cwd);
 	if (todos.length > 0) {
 		const doneTodos = todos.filter((t) => t.done).length;
 		lines.push(theme.fg("accent", `tareas (${doneTodos}/${todos.length})`));
 		if (railTasksHidden) {
 			lines.push(theme.fg("muted", `plegadas · ${RAIL_TASKS_KEY}`));
 		} else {
-			const current = todos.findIndex((t) => !t.done);
-			todos.slice(0, MAX_RAIL_TODOS).forEach((t, i) => {
+			todos.slice(0, MAX_RAIL_TODOS).forEach((t) => {
 				const mark = t.done
 					? theme.fg("success", "✓")
-					: i === current
+					: t.current
 						? theme.fg("warning", "▸")
 						: theme.fg("muted", "·");
 				lines.push(`${mark} ${clip(t.text, W - 3)}`);
@@ -496,10 +524,15 @@ function railLines(ui: ExtensionUIContext, cwd: string): string[] {
 		if (mcp.length > 6) lines.push(theme.fg("muted", `… +${mcp.length - 6} MCP`));
 	}
 
+	// Cambios: compacto (máx. 3 rutas) para que no se acumule y empuje al resto.
 	const files = visibleWorktreeFiles(cwd, modifiedFilesCache.get(cwd) ?? []);
 	lines.push(sep, theme.fg("accent", `cambios (${files.length})`));
-	for (const file of files.slice(0, 6)) lines.push(`${theme.fg("muted", "·")} ${clip(file, W - 2)}`);
-	if (files.length > 6) lines.push(theme.fg("muted", `… +${files.length - 6}`));
+	if (files.length === 0) {
+		lines.push(theme.fg("muted", "sin cambios"));
+	} else {
+		for (const file of files.slice(0, 3)) lines.push(`${theme.fg("muted", "·")} ${clip(file, W - 2)}`);
+		if (files.length > 3) lines.push(theme.fg("muted", `… +${files.length - 3}`));
+	}
 
 	return lines;
 }
@@ -525,7 +558,7 @@ function toggleRailTasks(ui: ExtensionUIContext, cwd: string): void {
 /** Render inmediato + refresco asíncrono de la memoria (re-render al completar). */
 function refreshRail(ui: ExtensionUIContext, cwd: string): void {
 	renderRail(ui, cwd);
-	void checkMemory(cwd).then(() => renderRail(ui, cwd));
+	void checkMemory().then(() => renderRail(ui, cwd));
 }
 
 async function refreshModifiedFiles(
@@ -551,6 +584,47 @@ async function refreshModifiedFiles(
 	} finally {
 		modifiedFilesRefresh.delete(cwd);
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Tool `todo`: la lista de tareas del turno actual, definida por el harness.
+// Se pinta en el rail derecho y cada llamada reemplaza la lista entera (así,
+// al llegar un prompt con tareas nuevas, las anteriores se limpian).
+// ---------------------------------------------------------------------------
+
+const todoSchema = Type.Object({
+	todos: Type.Array(
+		Type.Object({
+			text: Type.String({ description: "Descripción de la tarea." }),
+			status: Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("completed")], {
+				description: "pending (sin empezar) | in_progress (en curso) | completed (hecha).",
+			}),
+		}),
+		{ description: "Lista COMPLETA de tareas del turno actual, en orden." },
+	),
+});
+
+export function createTodoToolDefinition(): ToolDefinition<typeof todoSchema, { count: number; done: number }> {
+	return {
+		name: "todo",
+		label: "todo",
+		description: `# Lista de tareas\n\nDeclara la lista de tareas de la petición actual para verla en el rail derecho. Llámala al empezar trabajo de varios pasos con la lista completa, y de nuevo con la lista completa cada vez que una tarea empiece o termine. Enviar una lista nueva reemplaza a la anterior.\n\nEstados: "pending" (sin empezar), "in_progress" (en curso), "completed" (hecha).`,
+		promptSnippet: "Declara/actualiza la lista de tareas de la petición actual (se ve en el rail derecho)",
+		promptGuidelines: [
+			"En peticiones de varios pasos, llama a `todo` al principio con la lista completa de tareas (una entrada por tarea) y actualízala al avanzar; manda siempre la lista completa para que los estados cuadren.",
+			"`todo` es para la petición actual: una lista nueva reemplaza a la anterior.",
+		],
+		parameters: todoSchema,
+		async execute(_toolCallId, { todos }, _signal, _onUpdate, ctx) {
+			harnessTodos = todos.map((t) => ({ text: t.text.trim(), status: t.status }));
+			renderRail(ctx.ui, ctx.cwd ?? process.cwd());
+			const done = harnessTodos.filter((t) => t.status === "completed").length;
+			return {
+				content: [{ type: "text", text: `Tareas (${done}/${harnessTodos.length}).` }],
+				details: { count: harnessTodos.length, done },
+			};
+		},
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -589,9 +663,16 @@ export function createHanniorqExtension(
 			}
 			// Actividad de memoria: registra lecturas y escrituras para el rail.
 			if (MEM_READ_TOOLS.has(event.toolName) || MEM_WRITE_TOOLS.has(event.toolName)) {
+				const op: MemActivity["op"] =
+					event.toolName === "mem_delete"
+						? "del"
+						: event.toolName === "mem_save" || event.toolName === "mem_session_summary"
+							? "add"
+							: undefined;
 				memActivity.push({
 					kind: MEM_WRITE_TOOLS.has(event.toolName) ? "write" : "read",
 					detail: memDetail(event.toolName, event.args as Record<string, unknown> | undefined),
+					op,
 				});
 				renderRail(ctx.ui, ctx.cwd ?? process.cwd());
 			}
@@ -715,6 +796,9 @@ export function createHanniorqExtension(
 		// que es cuando la ficha se retoma).
 		pi.on("session_start", (_event, ctx) => {
 			const cwd = ctx.cwd ?? process.cwd();
+			// Sesión nueva: la actividad de memoria y las tareas del harness son de la sesión.
+			memActivity.length = 0;
+			harnessTodos = [];
 			updateSoddIndicator(ctx.ui, cwd);
 			refreshRail(ctx.ui, cwd);
 			void refreshModifiedFiles(pi, ctx.ui, cwd);
@@ -722,7 +806,7 @@ export function createHanniorqExtension(
 			unsubscribeMcpStatus = subscribeMcpConnectionStatuses(() => renderRail(ctx.ui, cwd));
 			void (options.ensureDaemon ?? ensureHanniGramDaemon)({ cwd, baseUrl: HANNIGRAM_BASE }).then((started) => {
 				if (!started) return;
-				void checkMemory(cwd).then(() => renderRail(ctx.ui, cwd));
+				void checkMemory().then(() => renderRail(ctx.ui, cwd));
 			});
 		});
 		pi.on("session_shutdown", () => {
@@ -970,8 +1054,12 @@ export function createHanniorqExtension(
 					}
 					case "clear": {
 						memActivity.length = 0;
+						harnessTodos = [];
 						renderRail(ctx.ui, cwd);
-						ctx.ui.notify("Actividad de memoria del rail limpiada (la memoria en HanniGram no se toca).", "info");
+						ctx.ui.notify(
+							"Actividad de memoria y tareas del rail limpiadas (la memoria en HanniGram no se toca).",
+							"info",
+						);
 						return;
 					}
 					default:
@@ -990,6 +1078,9 @@ export function createHanniorqExtension(
 				toggleRailTasks(ctx.ui, ctx.cwd ?? process.cwd());
 			},
 		});
+
+		// Tool `todo`: el harness declara la lista de tareas del turno actual.
+		pi.registerTool(createTodoToolDefinition());
 
 		// =================================================================
 		// /helpme — listado maestro de comandos HanniPI (qué hace cada uno).

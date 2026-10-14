@@ -18,6 +18,7 @@ import { publishMcpConnectionStatuses } from "../src/extensions/mcp/status.ts";
 function createMockPi() {
 	const registeredCommands = new Map<string, { description: string; handler: (...args: any[]) => any }>();
 	const shortcuts = new Map<string, { description?: string; handler: (...args: any[]) => any }>();
+	const tools = new Map<string, any>();
 	const listeners = new Map<string, ((...args: any[]) => any)[]>();
 	const widgets = new Map<string, string[] | ((...args: any[]) => unknown)>();
 	const sentMessages: string[] = [];
@@ -42,6 +43,9 @@ function createMockPi() {
 		registerShortcut: (shortcut: string, def: { description?: string; handler: (...args: any[]) => any }) => {
 			shortcuts.set(shortcut, def);
 		},
+		registerTool: (def: { name: string }) => {
+			tools.set(def.name, def);
+		},
 		exec: async () => ({ stdout: "", stderr: "", code: 0, killed: false }),
 		on: (event: string, handler: (...args: any[]) => any) => {
 			const arr = listeners.get(event) ?? [];
@@ -54,7 +58,7 @@ function createMockPi() {
 		ui,
 	} as unknown as Parameters<ExtensionFactory>[0];
 
-	return { registeredCommands, shortcuts, listeners, widgets, ui, pi, sentMessages };
+	return { registeredCommands, shortcuts, tools, listeners, widgets, ui, pi, sentMessages };
 }
 
 async function emit(pi: ReturnType<typeof createMockPi>["pi"], event: string, payload: any, ctx: any) {
@@ -301,5 +305,66 @@ describe("extensión hanniorq", () => {
 		expect(rail).toContain("decisión ADR"); // escritura
 		expect(rail).toContain("paleta rosa"); // lectura
 		expect(rail).toContain("inactivo"); // sin ficha sODD
+	});
+
+	it("la tool todo pinta las tareas del harness y las marca completadas", async () => {
+		const { widgets, tools, pi } = createMockPi();
+		createHanniorqExtension()(pi);
+		const ctx = { cwd: "C:/x", ui: (pi as any).ui };
+		const todo = tools.get("todo");
+		expect(todo).toBeDefined();
+
+		await todo.execute(
+			"t1",
+			{
+				todos: [
+					{ text: "S1 hecho", status: "completed" },
+					{ text: "S2 en curso", status: "in_progress" },
+					{ text: "S3 pendiente", status: "pending" },
+				],
+			},
+			undefined,
+			undefined,
+			ctx,
+		);
+		const rail = railText(widgets);
+		expect(rail).toContain("tareas (1/3)");
+		expect(rail).toContain("S1 hecho");
+		expect(rail).toContain("S2 en curso");
+		expect(rail).toContain("S3 pendiente");
+
+		// Una lista nueva limpia las tareas anteriores.
+		await todo.execute("t2", { todos: [{ text: "N1 nueva", status: "pending" }] }, undefined, undefined, ctx);
+		expect(railText(widgets)).toContain("N1 nueva");
+		expect(railText(widgets)).not.toContain("S1 hecho");
+	});
+
+	it("el rail indica si la memoria quedó igual, con altas o con bajas", async () => {
+		const { listeners, widgets, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHanniorqExtension()(pi);
+		const fetchStub = vi.fn(async () => ({ ok: true, json: async () => ({ status: "ok" }) }));
+		vi.stubGlobal("fetch", fetchStub);
+		try {
+			const ctx = { cwd: "C:/x", ui: (pi as any).ui };
+			await emit(pi, "session_start", {}, ctx);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(railText(widgets)).toContain("ON");
+			expect(railText(widgets)).toContain("igual");
+			expect(railText(widgets)).not.toContain("obs");
+
+			await emit(
+				pi,
+				"tool_execution_start",
+				{ toolName: "mem_save", toolCallId: "t1", args: { title: "algo" } },
+				ctx,
+			);
+			expect(railText(widgets)).toContain("nuevo");
+
+			await emit(pi, "tool_execution_start", { toolName: "mem_delete", toolCallId: "t2", args: { id: 3 } }, ctx);
+			expect(railText(widgets)).toContain("nuevo + borrado");
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 });
