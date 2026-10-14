@@ -1,6 +1,6 @@
 ---
 topic_key: odd/hanni-setup-unificado/tasks
-status: active
+status: done
 base: fe167f0ee
 ---
 # Instalador unificado HanniPI + HanniGram (release v0.2.5-hannipi)
@@ -15,22 +15,23 @@ Constraints: Un único punto de entrada (`.bat` de doble clic) que delega en un 
 
 ## Pasos
 
-- [ ] S1 Publicar HanniGram (Server + Cli) self-contained win-x64 y empaquetarlo.
-- [ ] S2 Escribir el script unificado (`HANNI.bat` + `hanni-setup.ps1`): menu instalar/actualizar/desinstalar, Stop-HanniProcesses, instalar/desinstalar HanniPI+HanniGram.
-- [ ] S3 Verificar sintaxis PowerShell y una ejecucion controlada (menu + stop).
-- [ ] S4 Bump a 0.2.5-hannipi + build del binario Windows x64 y assets (HanniPI + HanniGram).
-- [ ] S5 Commit + push main + crear release v0.2.5-hannipi con scripts y assets.
-- [ ] S6 Verificar release/asset/checksum.
+- [x] S1 Publicar HanniGram (Server + Cli) self-contained win-x64 y empaquetarlo. Evidencia: `hannigram-windows-x64.zip` (81.6 MB), `97df6afd…`.
+- [x] S2 Escribir el script unificado (`HANNI.bat` + `hanni-setup.ps1`). Evidencia: commit `747fef2f6`.
+- [x] S3 Verificar sintaxis PowerShell y ejecucion controlada (menu + install a LOCALAPPDATA falso). Evidencia: parse OK, install exit 0, `hanni --version` = 0.2.5-hannipi.
+- [x] S4 Bump a 0.2.5-hannipi + build del binario Windows x64 y assets. Evidencia: `d1f1258a4`, `pi-windows-x64.zip` (`86df4090…`).
+- [x] S5 Commit + push main + release v0.2.5-hannipi con scripts y assets. Evidencia: tag `v0.2.5-hannipi`, 5 assets.
+- [x] S6 Verificar release/asset/checksum y el flujo real `HANNI.bat` solo (descarga hanni-setup.ps1 y muestra menu). Evidencia: `releases/latest` = v0.2.5-hannipi; SHA256SUMS remoto = local.
 
 ## Siguiente
 
-S1: publish self-contained de HanniGram.
+ninguno.
 
 ## Verification
 
-- `powershell -NoProfile -Command "& { ... }"` parsea sin errores.
+- `hanni-setup.ps1` parsea sin errores; install a LOCALAPPDATA falso exit 0.
 - Assets de la release: `pi-windows-x64.zip`, `hannigram-windows-x64.zip`, `SHA256SUMS`, `HANNI.bat`, `hanni-setup.ps1`.
-- `releases/latest` = `v0.2.5-hannipi`.
+- `releases/latest` = `v0.2.5-hannipi`; SHA256SUMS remoto = local.
+- Flujo real: `HANNI.bat` suelto descarga `hanni-setup.ps1` y muestra el menu.
 
 ## Notes
 
