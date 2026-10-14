@@ -1,6 +1,6 @@
 ---
 topic_key: odd/release-0.2.6-hannipi/tasks
-status: in_progress
+status: done
 base: 5baf07544
 ---
 # Release HanniPI v0.2.6-hannipi
@@ -16,16 +16,16 @@ Constraints: Seguir `.pi/skills/release.md`. `origin` = `AlPeFe/HanniPI`, `-R` e
 ## Pasos
 
 - [x] S1 Identidad femenina en el system prompt + kaomoji, help de arranque en femenino, test y changelog. Evidencia: commit `5baf07544`.
-- [ ] S2 Bump lockstep a 0.2.6-hannipi y regenerar lockfiles (shrinkwrap + install-lock).
-- [ ] S3 `npm run check` en verde.
-- [ ] S4 Commit del bump y push de `main`.
-- [ ] S5 Binario Windows x64 (bun compile) + `pi.exe --version`.
-- [ ] S6 Empaquetar zip (python) + SHA256SUMS.
-- [ ] S7 `gh release create v0.2.6-hannipi --latest` y verificar `releases/latest`.
+- [x] S2 Bump lockstep a 0.2.6-hannipi y regenerar lockfiles (shrinkwrap + install-lock). Evidencia: commit `d86007ab8`.
+- [x] S3 `npm run check` en verde. Evidencia: exit 0.
+- [x] S4 Commit del bump y push de `main`. Evidencia: `d6c5a661d..716845ac6`.
+- [x] S5 Binario Windows x64 (bun compile) + `pi.exe --version`. Evidencia: `0.2.6-hannipi`.
+- [x] S6 Empaquetar zip (python) + SHA256SUMS. Evidencia: `35c60c54…`, 47.76 MB.
+- [x] S7 `gh release create v0.2.6-hannipi --latest` y verificar `releases/latest`. Evidencia: tag `v0.2.6-hannipi`, assets `pi-windows-x64.zip` + `SHA256SUMS`, checksum remoto = local.
 
 ## Siguiente
 
-S2: bump lockstep.
+ninguno.
 
 ## Verification
 
