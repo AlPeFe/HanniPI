@@ -1,6 +1,6 @@
 {
   "name": "@earendil-works/pi-mcp",
-  "version": "0.2.6-hannipi",
+  "version": "0.2.7-hannipi",
   "description": "Standalone Model Context Protocol client for pi and other applications",
   "type": "module",
   "main": "./dist/index.js",
