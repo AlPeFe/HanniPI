@@ -1,6 +1,6 @@
 ---
 topic_key: odd/release-0.2.4-hannipi/tasks
-status: active
+status: done
 base: c50fefa19
 ---
 # Release HanniPI v0.2.4-hannipi
@@ -15,16 +15,16 @@ Constraints: Seguir `.pi/skills/release.md`. `origin` = `AlPeFe/HanniPI`, `-R` e
 
 ## Pasos
 
-- [ ] S1 Bump lockstep a 0.2.4-hannipi y regenerar lockfiles (shrinkwrap + install-lock).
-- [ ] S2 Hidratar datos de modelo y `npm run check` en verde.
-- [ ] S3 Commit del bump y push de `main`.
-- [ ] S4 Binario Windows x64 (bun compile) + `pi.exe --version`.
-- [ ] S5 Empaquetar zip (python), SHA256SUMS.
-- [ ] S6 `gh release create v0.2.4-hannipi --latest` y verificar `releases/latest`.
+- [x] S1 Bump lockstep a 0.2.4-hannipi y regenerar lockfiles (shrinkwrap + install-lock). Evidencia: commit `212fb1424`.
+- [x] S2 Hidratar datos de modelo y `npm run check` en verde. Evidencia: exit 0.
+- [x] S3 Commit del bump y push de `main`. Evidencia: `c301bf357..212fb1424`.
+- [x] S4 Binario Windows x64 (bun compile) + `pi.exe --version`. Evidencia: `0.2.4-hannipi`.
+- [x] S5 Empaquetar zip (python), SHA256SUMS. Evidencia: `f5f58b41…`.
+- [x] S6 `gh release create v0.2.4-hannipi --latest` y verificar `releases/latest`. Evidencia: tag `v0.2.4-hannipi`, assets `pi-windows-x64.zip` + `SHA256SUMS`.
 
 ## Siguiente
 
-S1: bump lockstep.
+ninguno.
 
 ## Verification
 
