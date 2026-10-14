@@ -78,6 +78,30 @@ describe("AgentSession model and extension characterization", () => {
 		expect(harness.settingsManager.getDefaultThinkingLevel()).toBe("high");
 	});
 
+	it("uses the model in use as the default after a turn runs (last used wins)", async () => {
+		const harness = await createHarness({
+			models: [
+				{ id: "faux-1", name: "One", reasoning: true },
+				{ id: "faux-2", name: "Two", reasoning: true },
+			],
+			settings: { defaultProvider: "faux", defaultModel: "faux-1" },
+		});
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("ok")]);
+
+		const nextModel = harness.getModel("faux-2")!;
+		await harness.session.setModel(nextModel);
+
+		// Switching alone is session-only: the default is untouched.
+		expect(harness.settingsManager.getDefaultModel()).toBe("faux-1");
+
+		await harness.session.prompt("hola");
+
+		// Using the model makes it the default for the next session.
+		expect(harness.settingsManager.getDefaultProvider()).toBe(nextModel.provider);
+		expect(harness.settingsManager.getDefaultModel()).toBe("faux-2");
+	});
+
 	it("persists the requested default thinking level even when the current model clamps it", async () => {
 		const harness = await createHarness({ models: [{ id: "faux-1", reasoning: true }] });
 		harnesses.push(harness);

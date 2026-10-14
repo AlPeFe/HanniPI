@@ -1777,6 +1777,7 @@ export class AgentSession {
 		// Compaction before the prompt may have scheduled a retry; the new prompt replaces it.
 		this._failedResponse = undefined;
 		this._recordSelection();
+		this._persistLastUsedModelAsDefault();
 		// The run records the loadout in the transcript; restored tools that did not register by now
 		// are dropped, so a tool that never registers does not stay pending.
 		this._pendingToolNames.clear();
@@ -2461,6 +2462,24 @@ export class AgentSession {
 		const modelReference = `${model.provider}/${model.id}`;
 		if (enabledModels.some((pattern) => pattern.toLowerCase() === modelReference.toLowerCase())) return;
 		this.settingsManager.setEnabledModels([...enabledModels, modelReference]);
+	}
+
+	/**
+	 * Persist the model in use as the default so the next session starts with it.
+	 * Model switching stays session-only until the model is actually used: this runs when a
+	 * turn starts, so the last model used wins (HanniPI default-model behavior).
+	 */
+	private _persistLastUsedModelAsDefault(): void {
+		const model = this.model;
+		if (!model) return;
+		if (
+			this.settingsManager.getDefaultProvider() === model.provider &&
+			this.settingsManager.getDefaultModel() === model.id
+		) {
+			return;
+		}
+		this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
+		this._addPersistedDefaultToNonEmptyScope(model);
 	}
 
 	/**
