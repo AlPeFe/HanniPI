@@ -1007,7 +1007,7 @@ export class InteractiveMode {
 			const onboarding = () =>
 				theme.fg(
 					"dim",
-					`Hanni can explain its own features and look up its docs. Ask it how to use or extend Hanni.`,
+					`Hanni can explain her own features and look up her docs. Ask her how to use or extend Hanni.`,
 				);
 			this.builtInHeader = new ExpandableText(
 				() => `${withLogo(compactInstructions())}\n${compactOnboarding()}\n\n${onboarding()}`,

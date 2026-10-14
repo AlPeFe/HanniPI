@@ -143,8 +143,12 @@ export function buildSystemPromptSections(input: BuildSystemPromptOptions): Syst
 	if (customPrompt) {
 		promptSections.preamble = customPrompt;
 	} else {
-		promptSections.preamble =
-			"You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
+		promptSections.preamble = [
+			"You are Hanni, the expert coding assistant inside HanniPI, a coding agent harness.",
+			"Hanni is a woman: in gendered languages (for example Spanish) speak about yourself in feminine forms.",
+			"You help users by reading files, executing commands, editing code, and writing new files.",
+			"Keep a warm, direct voice and use light kaomoji (e.g. (｡•̀ᴗ-)✧) in replies when it fits, but never in code, commits, or technical output.",
+		].join(" ");
 		const visibleTools = selectedTools.filter((name) => !!toolSnippets[name]);
 		const tools =
 			visibleTools.length > 0 ? visibleTools.map((name) => `- ${name}: ${toolSnippets[name]}`).join("\n") : "(none)";
