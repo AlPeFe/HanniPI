@@ -20,6 +20,7 @@ Constraints: Keep sODD deliberately lighter than ODD. Inline trivial understood 
 - [x] S3 Make sODD classification guidance automatic in the assistant context, keep trivial requests inline, show TODOs and current modified files in its rail, and fix task-sheet directory creation. Route: direct. Evidence: Node syntax checks and injected HanniGram/MCP snapshot probes passed; Vitest blocked (missing node_modules/vitest); npm run check blocked (Biome absent).
 - [x] S4 Show the active sheet's steps in the right rail even when the sheet does not use the `## Pasos` section: `todoSteps` falls back to any `- [ ]`/`- [x]` checkbox in the file (covers `## Tasks`, `## P0/P1` layouts). Route: direct. Evidence: focused Vitest (13/13) + `npm run check` exit 0.
 - [x] S5 Add a rail-tasks toggle so the TODO list can be collapsed: `ctrl+alt+t` shortcut and `/hanniorq tasks` (whole rail still toggles with `/hanniorq rail`). Route: direct. Evidence: `hanniorq-extension.e2e.test.ts` covers the no-`## Pasos` fallback and the expand/collapse cycle.
+- [x] S6 Release v0.2.3-hannipi: version bump (17 files, lockstep), Windows x64 binary, GitHub release marked latest. Route: direct. Evidence: tag `v0.2.3-hannipi` @ `2546dfed2`, assets `pi-windows-x64.zip` + `SHA256SUMS` (sha `fdd4c0548c10…`), `releases/latest` = v0.2.3-hannipi.
 
 ## Next
 
