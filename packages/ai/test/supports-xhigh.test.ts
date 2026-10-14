@@ -42,7 +42,7 @@ describe("getSupportedThinkingLevels", () => {
 	it("includes Claude Sonnet 5.5 with managed effort levels and official pricing", () => {
 		const model = getModel("anthropic", "claude-sonnet-5-5");
 		expect(model).toMatchObject({
-			cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+			cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
 			contextWindow: 1_000_000,
 			maxTokens: 128_000,
 			compat: {
@@ -175,10 +175,10 @@ describe("getSupportedThinkingLevels", () => {
 		expect(getSupportedThinkingLevels(model!)).toEqual(["off", "low", "high", "max"]);
 	});
 
-	it("includes low/high/max plus off for DeepSeek V4 Flash on opencode-go", () => {
-		const model = getModel("opencode-go", "deepseek-v4-flash");
+	it("includes high/max plus off for DeepSeek V4 Pro on opencode-go", () => {
+		const model = getModel("opencode-go", "deepseek-v4-pro");
 		expect(model).toBeDefined();
-		expect(getSupportedThinkingLevels(model!)).toEqual(["off", "low", "high", "max"]);
+		expect(getSupportedThinkingLevels(model!)).toEqual(["off", "high", "max"]);
 	});
 
 	it("preserves low/high/max metadata for DeepSeek V4.1 Flash on OpenRouter", () => {
