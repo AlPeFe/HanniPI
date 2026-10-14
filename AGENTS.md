@@ -38,7 +38,7 @@
 - For `packages/coding-agent/test/suite/`, use `test/suite/harness.ts` + the faux provider. No real provider APIs, keys, or paid tokens.
 - When regressions tests for fixing a github issue, add a comment with the github issue number next to the test.
 - For ad-hoc scripts, `write` them to a temp file (e.g. `/tmp`), run, edit if needed, remove when done. Don't embed multi-line scripts in `bash` commands.
-- Never commit unless the user asks.
+- Committing: see the policy under Git > Committing (small, clearly requested changes go straight in; ask for large or delicate ones).
 
 ## Dependency and Install Security
 
@@ -55,6 +55,7 @@ Multiple pi sessions may be running in this cwd at the same time, each modifying
 
 Committing:
 
+- Commit directly when the user clearly asked for a small, contained change. Ask before committing when the change is large, spans multiple packages, or touches delicate areas (auth, security, publishing, migrations, public APIs).
 - Only commit files YOU changed in THIS session.
 - Stage explicit paths (`git add <path1> <path2>`); never `git add -A` / `git add .`.
 - Before committing, run `git status` and verify you are only staging your files.
