@@ -76,13 +76,18 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 
 ## Instalación
 
-**Windows** — un comando (descarga el binario standalone de la última release, verifica SHA256 y lo añade al PATH como `hanni`):
+**Windows** — un solo script instala **HanniPI + HanniGram** juntos (descarga el binario standalone de la última release, verifica SHA256, lo añade al PATH como `hanni` e instala el daemon y el CLI de HanniGram):
+
+1. Descarga **`HANNI.bat`** de la [última release](https://github.com/AlPeFe/HanniPI/releases/latest) y haz doble clic. Te pregunta **instalar / actualizar / desinstalar**.
+
+O, si lo prefieres por comando:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/AlPeFe/HanniPI/main/install.ps1 | iex"
 ```
 
 > Se instala como **`hanni`** (no `pi`) para no chocar con el pi de earendil-works si ya lo tienes instalado. Después de instalar, abre una terminal nueva y escribe `hanni`.
+> Al instalar, actualizar o desinstalar, el script **para antes todos los procesos de Hanni** (el binario compilado con bun y el daemon HanniGram) para poder reemplazar o borrar los ficheros sin bloqueos de Windows.
 
 **Desde el repo (desarrollo):**
 
