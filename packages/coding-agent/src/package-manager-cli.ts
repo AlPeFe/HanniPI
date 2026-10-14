@@ -8,6 +8,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 import chalk from "chalk";
@@ -222,6 +223,47 @@ async function runManagedSelfUpdate(managedRoot: string, version: string): Promi
 	} finally {
 		if (stageDir) rmSync(stageDir, { force: true, recursive: true });
 		await releaseLock();
+	}
+}
+
+// HanniPI standalone Windows installs ship as a bun-compiled binary and are
+// updated by the unified installer (checksum verification, stopping Hanni
+// processes, swapping the binary). Delegate `hanni update` to it instead of
+// reporting that self-update is unsupported.
+// Main first because HanniPI releases currently ship only the binary zip and
+// SHA256SUMS; `releases/latest/download/hanni-setup.ps1` is kept as a fallback
+// for when the script is attached to a release.
+const HANNI_SETUP_SCRIPT_URLS = [
+	"https://raw.githubusercontent.com/AlPeFe/HanniPI/main/hanni-setup.ps1",
+	"https://github.com/AlPeFe/HanniPI/releases/latest/download/hanni-setup.ps1",
+];
+
+async function runWindowsStandaloneSelfUpdate(): Promise<void> {
+	let scriptContent: string | undefined;
+	let downloadError: unknown;
+	for (const url of HANNI_SETUP_SCRIPT_URLS) {
+		try {
+			scriptContent = await fetchInstallerArtifact(url, "hanni-setup.ps1");
+			break;
+		} catch (error: unknown) {
+			downloadError = error;
+		}
+	}
+	if (scriptContent === undefined) {
+		throw downloadError instanceof Error ? downloadError : new Error("Could not download hanni-setup.ps1");
+	}
+
+	const scriptDir = mkdtempSync(join(tmpdir(), "hanni-update-"));
+	const scriptPath = join(scriptDir, "hanni-setup.ps1");
+	writeFileSync(scriptPath, scriptContent);
+	try {
+		const args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, "-Action", "update"];
+		const code = await waitForChildProcess(spawnProcess("powershell", args, { stdio: "inherit" }));
+		if (code !== 0) {
+			throw new Error(`hanni-setup.ps1 exited with code ${code ?? "unknown"}`);
+		}
+	} finally {
+		rmSync(scriptDir, { force: true, recursive: true });
 	}
 }
 
@@ -1061,6 +1103,22 @@ export async function handlePackageCommand(
 					}
 
 					const installMethod = detectInstallMethod();
+					if (process.platform === "win32" && installMethod === "bun-binary") {
+						console.log(chalk.dim(`Updating standalone ${APP_NAME} installation with hanni-setup.ps1...`));
+						try {
+							await runWindowsStandaloneSelfUpdate();
+						} catch (error: unknown) {
+							const message = error instanceof Error ? error.message : "Unknown update error";
+							console.error(chalk.red(`Error: ${message}`));
+							console.error(
+								chalk.dim(`Update ${APP_NAME} manually: https://github.com/AlPeFe/HanniPI/releases/latest`),
+							);
+							process.exitCode = 1;
+							return true;
+						}
+						console.log(chalk.green(`Updated ${APP_NAME} from ${VERSION} to ${selfUpdatePlan.version}`));
+						return true;
+					}
 					if (process.platform === "win32" && installMethod !== "npm" && installMethod !== "pnpm") {
 						console.error(
 							chalk.red(`${APP_NAME} self-update on Windows is only supported for npm and pnpm installs.`),

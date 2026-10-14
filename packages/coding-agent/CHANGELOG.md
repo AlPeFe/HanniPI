@@ -13,6 +13,10 @@
 - HanniPI: the right rail's memory line shows `ON` plus whether records were added (`nuevo`), deleted (`borrado`), or unchanged (`igual`) instead of an observation count. The changed-files list is capped at 3 paths so it does not accumulate and push the rest off the rail.
 - `/arminsayshi` now plays a 3D version in fullscreen mode, with one cube per pixel of Armin. The 3D pi logo easter egg on header logo click is replaced by it.
 
+### Fixed
+
+- HanniPI: `hanni update` on Windows now updates the standalone (bun binary) install by running the unified installer (`hanni-setup.ps1 -Action update`), which verifies the release checksum and stops Hanni processes, instead of failing with "self-update on Windows is only supported for npm and pnpm installs".
+
 ## [1.0.0] - 2026-10-01
 
 ### New Features
