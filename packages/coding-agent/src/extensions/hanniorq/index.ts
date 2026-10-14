@@ -18,7 +18,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Key } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -83,6 +83,8 @@ interface HarnessTodo {
 	status: "pending" | "in_progress" | "completed";
 }
 let harnessTodos: HarnessTodo[] = [];
+/** Hay un turno en curso: sODD esta "working" mientras el agente trabaja. */
+let soddWorking = false;
 let railHidden = false;
 /** Pasos sODD del rail plegados (toggle: tecla RAIL_TASKS_KEY o /hanniorq tasks). */
 let railTasksHidden = false;
@@ -316,8 +318,28 @@ function startFleetTimer(ui: ExtensionUIContext): void {
 // sODD está en uso (slug + progreso). Se oculta cuando no hay ficha.
 // ---------------------------------------------------------------------------
 
+/** Slug de una ficha con `status: active` (fallback si `odd/.active` esta vacio). */
+function sheetWithStatusActive(cwd: string): string | undefined {
+	const dir = join(getOddDir(cwd), "tasks");
+	try {
+		const entries = readdirSync(dir)
+			.filter((name) => name.endsWith(".md"))
+			.map((name) => {
+				const path = join(dir, name);
+				return { slug: name.slice(0, -3), mtime: statSync(path).mtimeMs, text: readFileSync(path, "utf-8") };
+			})
+			.sort((a, b) => b.mtime - a.mtime);
+		for (const entry of entries) {
+			if (entry.text.match(/^status: (.+)$/m)?.[1]?.trim() === "active") return entry.slug;
+		}
+	} catch {
+		// sin odd/tasks o sin fichas
+	}
+	return undefined;
+}
+
 function soddIndicator(cwd: string): { slug: string; done: number; total: number; status: string } | undefined {
-	const slug = getActiveSlug(cwd);
+	const slug = getActiveSlug(cwd) ?? sheetWithStatusActive(cwd);
 	if (!slug) return undefined;
 	const p = join(getOddDir(cwd), "tasks", `${slug}.md`);
 	try {
@@ -477,15 +499,17 @@ function railLines(ui: ExtensionUIContext, cwd: string): string[] {
 	}
 	lines.push(sep);
 
-	// sODD
-	lines.push(theme.fg("accent", "sODD"));
+	// sODD: solo si hay ficha. Sin ficha (p.ej. una pregunta trivial del codigo)
+	// no aplica y no se pinta nada, en vez de un "inactivo" que no significa nada.
+	// Dentro de "activo": working (turno en curso) o not working (en reposo).
 	const ind = soddIndicator(cwd);
 	if (ind) {
-		lines.push(`${theme.fg("success", "●")} activo · ${clip(ind.slug, 14)} (${ind.done}/${ind.total})`);
-	} else {
-		lines.push(`${theme.fg("error", "●")} inactivo`);
+		lines.push(theme.fg("accent", "sODD"));
+		const state = soddWorking ? theme.fg("warning", "working") : theme.fg("muted", "not working");
+		lines.push(`${theme.fg("success", "●")} activo · ${state}`);
+		lines.push(theme.fg("muted", `  ${clip(ind.slug, 16)} (${ind.done}/${ind.total})`));
+		lines.push(sep);
 	}
-	lines.push(sep);
 
 	// Tareas — las define el harness (tool `todo`) para el turno actual; si no,
 	// se muestran los pasos de la ficha sODD. La que está "en curso" va con ▸.
@@ -643,10 +667,12 @@ export function createHanniorqExtension(
 		let turnMemoryWrites = 0;
 		let turnSoddTouched = false;
 
-		pi.on("turn_start", () => {
+		pi.on("turn_start", (_event, ctx) => {
 			turnTools = new Set<string>();
 			turnMemoryWrites = 0;
 			turnSoddTouched = false;
+			soddWorking = true;
+			renderRail(ctx.ui, ctx.cwd ?? process.cwd());
 		});
 
 		pi.on("tool_execution_start", (event, ctx) => {
@@ -775,14 +801,15 @@ export function createHanniorqExtension(
 		// "updated skill" de Hermes.
 		pi.on("turn_end", (_event, ctx) => {
 			const cwd = ctx.cwd ?? process.cwd();
+			soddWorking = false;
 			const ind = soddIndicator(cwd);
 			const parts: string[] = [];
 			if (turnTools.size > 0) parts.push(`tools: ${[...turnTools].join(", ")}`);
-			parts.push(
-				ind ? `sODD: activo (${ind.done}/${ind.total})` : turnSoddTouched ? "sODD: activo" : "sODD: inactivo",
-			);
+			if (ind) parts.push(`sODD: activo (${ind.done}/${ind.total})`);
+			else if (turnSoddTouched) parts.push("sODD: activo");
 			if (turnMemoryWrites > 0) parts.push(`memoria: +${turnMemoryWrites}`);
-			ctx.ui.setWidget("hanniorq-turn", [`▸ ${parts.join(" · ")}`]);
+			if (parts.length > 0) ctx.ui.setWidget("hanniorq-turn", [`▸ ${parts.join(" · ")}`]);
+			else ctx.ui.setWidget("hanniorq-turn", undefined);
 			updateSoddIndicator(ctx.ui, cwd);
 			refreshRail(ctx.ui, cwd);
 			void refreshModifiedFiles(pi, ctx.ui, cwd);
@@ -796,9 +823,10 @@ export function createHanniorqExtension(
 		// que es cuando la ficha se retoma).
 		pi.on("session_start", (_event, ctx) => {
 			const cwd = ctx.cwd ?? process.cwd();
-			// Sesión nueva: la actividad de memoria y las tareas del harness son de la sesión.
+			// Sesion nueva: la actividad de memoria y las tareas del harness son de la sesion.
 			memActivity.length = 0;
 			harnessTodos = [];
+			soddWorking = false;
 			updateSoddIndicator(ctx.ui, cwd);
 			refreshRail(ctx.ui, cwd);
 			void refreshModifiedFiles(pi, ctx.ui, cwd);

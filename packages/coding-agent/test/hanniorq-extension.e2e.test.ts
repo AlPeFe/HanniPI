@@ -176,6 +176,54 @@ describe("extensión hanniorq", () => {
 		}
 	});
 
+	it("muestra sODD activo con una ficha status:active aunque falte odd/.active", async () => {
+		const { listeners, widgets, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHanniorqExtension()(pi);
+		const root = mkdtempSync(join(tmpdir(), "hanniorq-rail-status-"));
+		try {
+			mkdirSync(join(root, "odd", "tasks"), { recursive: true });
+			// Sin odd/.active: el indicador cae a la ficha con status: active.
+			writeFileSync(
+				join(root, "odd", "tasks", "demo.md"),
+				"---\nstatus: active\n---\n# demo\n## Pasos\n- [ ] S1 paso\n",
+			);
+			const ctx = { cwd: root, ui: (pi as any).ui };
+			await emit(pi, "session_start", {}, ctx);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(railText(widgets)).toContain("sODD");
+			expect(railText(widgets)).toContain("activo");
+			expect(railText(widgets)).not.toContain("inactivo");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("sODD activo muestra working durante el turno y not working en reposo", async () => {
+		const { listeners, widgets, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHanniorqExtension()(pi);
+		const root = mkdtempSync(join(tmpdir(), "hanniorq-rail-work-"));
+		try {
+			mkdirSync(join(root, "odd", "tasks"), { recursive: true });
+			writeFileSync(join(root, "odd", ".active"), "demo");
+			writeFileSync(join(root, "odd", "tasks", "demo.md"), "---\nstatus: active\n---\n## Pasos\n- [ ] S1\n");
+			const ctx = { cwd: root, ui: (pi as any).ui };
+			await emit(pi, "session_start", {}, ctx);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(railText(widgets)).toContain("not working");
+
+			await emit(pi, "turn_start", {}, ctx);
+			expect(railText(widgets)).toContain("working");
+			expect(railText(widgets)).not.toContain("not working");
+
+			await emit(pi, "turn_end", {}, ctx);
+			expect(railText(widgets)).toContain("not working");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("la tecla del rail pliega y despliega los pasos", async () => {
 		const { listeners, widgets, shortcuts, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
@@ -247,8 +295,8 @@ describe("extensión hanniorq", () => {
 		const line = (widget as string[])[0];
 		expect(line).toContain("memoria: +1");
 		expect(line).toContain("tools: mem_save, search_files");
-		// sin ficha sODD en disco → inactivo
-		expect(line).toContain("sODD: inactivo");
+		// sin ficha sODD no se pinta nada de sODD (ni "activo" ni "inactivo")
+		expect(line).not.toContain("sODD:");
 	});
 
 	it("marca sODD tocado cuando se usa /task", async () => {
@@ -304,7 +352,7 @@ describe("extensión hanniorq", () => {
 				: "";
 		expect(rail).toContain("decisión ADR"); // escritura
 		expect(rail).toContain("paleta rosa"); // lectura
-		expect(rail).toContain("inactivo"); // sin ficha sODD
+		expect(rail).not.toContain("inactivo"); // sin ficha sODD no se pinta inactivo
 	});
 
 	it("la tool todo pinta las tareas del harness y las marca completadas", async () => {
