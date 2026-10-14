@@ -11,13 +11,13 @@
 
 # HanniPI — Harness de desarrollo con memoria
 
-**HanniPI** es un fork de [pi](https://github.com/earendil-works/pi) (el harness de agente de código de earendil-works) enfocado en **desarrollo de software**: un agente interactivo en terminal con **memoria persistente por proyecto** (HanniGram), un **flujo de trabajo atómico** (sODD) y **gestión de extensiones** integrada.
+**HanniPI** es un harness de desarrollo de software en terminal, con **memoria persistente por proyecto** (HanniGram), un **flujo de trabajo atómico** (sODD) y **gestión de extensiones** integrada. Es un proyecto **standalone** (nace del harness [pi](https://github.com/earendil-works/pi) de earendil-works, del que ya no depende).
 
 La mascota es **Hanni** — la compañera que te acompaña en cada sesión de desarrollo.
 
 ## ¿Por qué HanniPI?
 
-Pi es un harness de agente de código potente y extensible. HanniPI lo adapta para el desarrollo cotidiano de software:
+HanniPI está pensado para el desarrollo cotidiano de software:
 
 - **Memoria que sobrevive a los cortes de contexto.** Cada proyecto guarda observaciones (What/Why/Where/Learned) en una base SQLite local, consultable desde la propia TUI.
 - **Tareas atómicas con evidencia.** El protocolo **sODD** (Small ODD) lleva una ficha por feature que sobrevive a compactaciones, con commits atómicos y evidencia por sha.
@@ -91,7 +91,7 @@ git clone https://github.com/AlPeFe/HanniPI.git
 cd HanniPI
 npm install --ignore-scripts
 npm run build
-npm link          # deja `pi` en tu PATH (punto de entrada a dist/bundle/cli.js)
+npm link          # deja `hanni` en tu PATH (punto de entrada a dist/bundle/cli.js)
 ```
 
 > El binario standalone no necesita Node; el paquete npm (`pi` = `dist/bundle/cli.js`) sí requiere Node 22.19+.

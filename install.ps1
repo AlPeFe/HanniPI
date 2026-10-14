@@ -1,13 +1,13 @@
 # HanniPI installer for Windows
 # Installs the HanniPI binary as `hanni` so it never collides with a
-# pre-existing `pi` (the upstream earendil-works binary). Run `hanni` to start.
+# pre-existing `pi` binary. Run `hanni` to start.
 # Usage: powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/AlPeFe/HanniPI/main/install.ps1 | iex"
 $ErrorActionPreference = "Stop"
 
 $Repo = "AlPeFe/HanniPI"
 $Asset = "pi-windows-x64.zip"
 $InstallDir = Join-Path $env:LOCALAPPDATA "HanniPI"
-$BinName = "hanni.exe"   # installed as `hanni`, not `pi`, to avoid clashing with upstream pi
+$BinName = "hanni.exe"   # installed as `hanni`, not `pi`, to avoid clashing with a pre-existing pi
 
 Write-Host "HanniPI installer" -ForegroundColor Magenta
 Write-Host "==================" -ForegroundColor Magenta

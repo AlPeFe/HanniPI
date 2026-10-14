@@ -547,12 +547,13 @@ export function expandTildePath(path: string): string {
 	return normalizePath(path);
 }
 
-const DEFAULT_SHARE_VIEWER_URL = "https://pi.dev/session/";
+/** Optional viewer for shared sessions; HanniPI has none, so /share falls back to the gist URL. */
+const SHARE_VIEWER_ENV = `${APP_NAME.toUpperCase()}_SHARE_VIEWER_URL`;
 
-/** Get the share viewer URL for a gist ID. */
+/** Get the share URL for a gist ID: the configured viewer, or the gist itself. */
 export function getShareViewerUrl(gistId: string): string {
-	const baseUrl = process.env.PI_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
-	return `${baseUrl}#${gistId}`;
+	const baseUrl = process.env[SHARE_VIEWER_ENV] ?? process.env.PI_SHARE_VIEWER_URL;
+	return baseUrl ? `${baseUrl}#${gistId}` : `https://gist.github.com/${gistId}`;
 }
 
 // =============================================================================
