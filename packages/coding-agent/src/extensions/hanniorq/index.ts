@@ -20,6 +20,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { Key } from "@earendil-works/pi-tui";
 import type { ExtensionFactory, ExtensionUIContext } from "../../core/extensions/types.ts";
 import { ThemedText } from "../../modes/interactive/components/themed-text.ts";
 import { getMcpConnectionStatuses, subscribeMcpConnectionStatuses } from "../mcp/status.ts";
@@ -73,6 +74,12 @@ interface MemActivity {
 }
 const memActivity: MemActivity[] = [];
 let railHidden = false;
+/** Pasos sODD del rail plegados (toggle: tecla RAIL_TASKS_KEY o /hanniorq tasks). */
+let railTasksHidden = false;
+/** Máximo de pasos listados en el rail; el resto se resume con "+N". */
+const MAX_RAIL_TODOS = 8;
+/** Tecla que pliega/despliega los pasos sODD del rail. */
+const RAIL_TASKS_KEY = Key.ctrlAlt("t");
 
 /** Tools mem_* que son LECTURA de memoria (no modifican la BD). */
 const MEM_READ_TOOLS = new Set([
@@ -353,15 +360,29 @@ function projectName(cwd: string): string {
 	return cwd.split(/[\\/]/).filter(Boolean).pop() ?? cwd;
 }
 
-/** Pasos de la ficha sODD activa como lista de TODOs (## Pasos → - [ ] / - [x]). */
-function todoSteps(cwd: string): Array<{ done: boolean; text: string }> {
+/**
+ * Pasos de la ficha sODD activa como lista de TODOs.
+ * Se leen de la sección `## Pasos` (formato canónico); si la ficha usa otra
+ * (p.ej. `## Tasks`, `## P0/P1`), se aceptan los checkboxes de todo el fichero.
+ */
+export function todoSteps(cwd: string): Array<{ done: boolean; text: string }> {
 	const p = getActiveTaskPath(cwd);
 	if (!p) return [];
 	try {
 		const lines = readFileSync(p, "utf-8").split("\n");
-		const out: Array<{ done: boolean; text: string }> = [];
-		let inPasos = false;
-		for (const line of lines) {
+		const pasos = collectTodos(lines, true);
+		return pasos.length > 0 ? pasos : collectTodos(lines, false);
+	} catch {
+		return [];
+	}
+}
+
+/** Checkboxes `- [ ]` / `- [x]`; con `onlyPasos`, solo la sección `## Pasos`. */
+function collectTodos(lines: string[], onlyPasos: boolean): Array<{ done: boolean; text: string }> {
+	const out: Array<{ done: boolean; text: string }> = [];
+	let inPasos = !onlyPasos;
+	for (const line of lines) {
+		if (onlyPasos) {
 			if (line.startsWith("## Pasos")) {
 				inPasos = true;
 				continue;
@@ -370,14 +391,12 @@ function todoSteps(cwd: string): Array<{ done: boolean; text: string }> {
 				inPasos = false;
 				continue;
 			}
-			if (!inPasos) continue;
-			const m = line.match(/^-\s*\[( |x|X)\]\s*(.*)$/);
-			if (m) out.push({ done: m[1] !== " ", text: (m[2] ?? "").trim() });
 		}
-		return out;
-	} catch {
-		return [];
+		if (!inPasos) continue;
+		const m = line.match(/^-\s*\[( |x|X)\]\s*(.*)$/);
+		if (m) out.push({ done: m[1] !== " ", text: (m[2] ?? "").trim() });
 	}
+	return out;
 }
 
 /** Consulta el daemon HanniGram (health + observaciones del proyecto) y refresca la cache. */
@@ -441,19 +460,27 @@ function railLines(ui: ExtensionUIContext, cwd: string): string[] {
 	lines.push(sep);
 
 	// Tareas (TODO) — la primera sin hacer es la que está "en curso".
+	// Se pliegan/despliegan con la tecla del rail o /hanniorq tasks.
 	const todos = todoSteps(cwd);
 	if (todos.length > 0) {
-		lines.push(theme.fg("accent", `tareas (${todos.filter((t) => t.done).length}/${todos.length})`));
-		const current = todos.findIndex((t) => !t.done);
-		todos.slice(0, 8).forEach((t, i) => {
-			const mark = t.done
-				? theme.fg("success", "✓")
-				: i === current
-					? theme.fg("warning", "▸")
-					: theme.fg("muted", "·");
-			lines.push(`${mark} ${clip(t.text, W - 3)}`);
-		});
-		if (todos.length > 8) lines.push(theme.fg("muted", `… +${todos.length - 8}`));
+		const doneTodos = todos.filter((t) => t.done).length;
+		lines.push(theme.fg("accent", `tareas (${doneTodos}/${todos.length})`));
+		if (railTasksHidden) {
+			lines.push(theme.fg("muted", `plegadas · ${RAIL_TASKS_KEY}`));
+		} else {
+			const current = todos.findIndex((t) => !t.done);
+			todos.slice(0, MAX_RAIL_TODOS).forEach((t, i) => {
+				const mark = t.done
+					? theme.fg("success", "✓")
+					: i === current
+						? theme.fg("warning", "▸")
+						: theme.fg("muted", "·");
+				lines.push(`${mark} ${clip(t.text, W - 3)}`);
+			});
+			if (todos.length > MAX_RAIL_TODOS) {
+				lines.push(theme.fg("muted", `… +${todos.length - MAX_RAIL_TODOS}`));
+			}
+		}
 	}
 
 	const mcp = getMcpConnectionStatuses();
@@ -486,6 +513,13 @@ function renderRail(ui: ExtensionUIContext, cwd: string): void {
 	ui.setWidget("hanniorq-rail", () => new ThemedText(() => railLines(ui, cwd).join("\n"), 1, 1), {
 		placement: "rightRail",
 	});
+}
+
+/** Pliega/despliega los pasos sODD del rail y avisa (tecla RAIL_TASKS_KEY o /hanniorq tasks). */
+function toggleRailTasks(ui: ExtensionUIContext, cwd: string): void {
+	railTasksHidden = !railTasksHidden;
+	renderRail(ui, cwd);
+	ui.notify(railTasksHidden ? "Pasos sODD plegados en el rail." : "Pasos sODD desplegados en el rail.", "info");
 }
 
 /** Render inmediato + refresco asíncrono de la memoria (re-render al completar). */
@@ -697,7 +731,7 @@ export function createHanniorqExtension(
 		});
 
 		pi.registerCommand("hanniorq", {
-			description: "Orquestador sODD: help|on|off|status|plan|new|run|watch|close|resume|rail|clear",
+			description: "Orquestador sODD: help|on|off|status|plan|new|run|watch|close|resume|rail|tasks|clear",
 			handler: async (args, ctx) => {
 				const [sub, ...rest] = args.trim().split(/\s+/);
 				const cwd = ctx.cwd ?? process.cwd();
@@ -930,6 +964,10 @@ export function createHanniorqExtension(
 						ctx.ui.notify(railHidden ? "Rail derecho oculto." : "Rail derecho visible.", "info");
 						return;
 					}
+					case "tasks": {
+						toggleRailTasks(ctx.ui, cwd);
+						return;
+					}
 					case "clear": {
 						memActivity.length = 0;
 						renderRail(ctx.ui, cwd);
@@ -938,12 +976,21 @@ export function createHanniorqExtension(
 					}
 					default:
 						ctx.ui.notify(
-							"Uso: /hanniorq on|off|status|plan|new <slug>|run|watch|close|resume|rail|clear",
+							"Uso: /hanniorq on|off|status|plan|new <slug>|run|watch|close|resume|rail|tasks|clear",
 							"warning",
 						);
 				}
 			},
 		});
+
+		// Tecla del rail: pliega/despliega los pasos sODD (igual que /hanniorq tasks).
+		pi.registerShortcut(RAIL_TASKS_KEY, {
+			description: "Plegar/desplegar los pasos sODD del rail derecho",
+			handler: (ctx) => {
+				toggleRailTasks(ctx.ui, ctx.cwd ?? process.cwd());
+			},
+		});
+
 		// =================================================================
 		// /helpme — listado maestro de comandos HanniPI (qué hace cada uno).
 		// =================================================================

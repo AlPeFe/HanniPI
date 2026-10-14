@@ -18,6 +18,8 @@ Constraints: Keep sODD deliberately lighter than ODD. Inline trivial understood 
 - [x] S1 Port HanniGram daemon auto-start behavior to HanniPI with safe runtime/path checks and tests. Route: direct. Evidence: `804f55335` (`feat(coding-agent): auto-start HanniGram daemon`); injected startup probe and Node syntax checks passed; focused Vitest unavailable (dependencies absent).
 - [ ] S2 Revise Context7 default to remain disconnected and absent from prompt context until explicitly enabled; use deferred exposure after opt-in and cover behavior in docs/tests. Reopened after user clarified it must not be mandatory or default prompt content. Route: direct. Prior evidence: `75e02e59b`; current changes pending.
 - [x] S3 Make sODD classification guidance automatic in the assistant context, keep trivial requests inline, show TODOs and current modified files in its rail, and fix task-sheet directory creation. Route: direct. Evidence: Node syntax checks and injected HanniGram/MCP snapshot probes passed; Vitest blocked (missing node_modules/vitest); npm run check blocked (Biome absent).
+- [x] S4 Show the active sheet's steps in the right rail even when the sheet does not use the `## Pasos` section: `todoSteps` falls back to any `- [ ]`/`- [x]` checkbox in the file (covers `## Tasks`, `## P0/P1` layouts). Route: direct. Evidence: focused Vitest (13/13) + `npm run check` exit 0.
+- [x] S5 Add a rail-tasks toggle so the TODO list can be collapsed: `ctrl+alt+t` shortcut and `/hanniorq tasks` (whole rail still toggles with `/hanniorq rail`). Route: direct. Evidence: `hanniorq-extension.e2e.test.ts` covers the no-`## Pasos` fallback and the expand/collapse cycle.
 
 ## Next
 

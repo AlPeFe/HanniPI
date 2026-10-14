@@ -17,6 +17,7 @@ import { publishMcpConnectionStatuses } from "../src/extensions/mcp/status.ts";
 
 function createMockPi() {
 	const registeredCommands = new Map<string, { description: string; handler: (...args: any[]) => any }>();
+	const shortcuts = new Map<string, { description?: string; handler: (...args: any[]) => any }>();
 	const listeners = new Map<string, ((...args: any[]) => any)[]>();
 	const widgets = new Map<string, string[] | ((...args: any[]) => unknown)>();
 	const sentMessages: string[] = [];
@@ -38,6 +39,9 @@ function createMockPi() {
 		registerCommand: (name: string, def: { description: string; handler: (...args: any[]) => any }) => {
 			registeredCommands.set(name, def);
 		},
+		registerShortcut: (shortcut: string, def: { description?: string; handler: (...args: any[]) => any }) => {
+			shortcuts.set(shortcut, def);
+		},
 		exec: async () => ({ stdout: "", stderr: "", code: 0, killed: false }),
 		on: (event: string, handler: (...args: any[]) => any) => {
 			const arr = listeners.get(event) ?? [];
@@ -50,12 +54,20 @@ function createMockPi() {
 		ui,
 	} as unknown as Parameters<ExtensionFactory>[0];
 
-	return { registeredCommands, listeners, widgets, ui, pi, sentMessages };
+	return { registeredCommands, shortcuts, listeners, widgets, ui, pi, sentMessages };
 }
 
 async function emit(pi: ReturnType<typeof createMockPi>["pi"], event: string, payload: any, ctx: any) {
 	const handlers = (pi as any).__listeners?.get(event) ?? [];
 	for (const h of handlers) await h(payload, ctx);
+}
+
+/** Texto del widget del rail derecho (se renderiza con ancho 32 como la TUI). */
+function railText(widgets: Map<string, string[] | ((...args: any[]) => unknown)>): string {
+	const widget = widgets.get("hanniorq-rail");
+	return typeof widget === "function"
+		? (widget as () => { render(width: number): string[] })().render(32).join("\n")
+		: "";
 }
 
 describe("extensión hanniorq", () => {
@@ -133,6 +145,55 @@ describe("extensión hanniorq", () => {
 			expect(exec).toHaveBeenCalledWith("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
 				cwd: root,
 			});
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("lista los pasos aunque la ficha no use la sección ## Pasos", async () => {
+		const { listeners, widgets, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHanniorqExtension()(pi);
+		const root = mkdtempSync(join(tmpdir(), "hanniorq-rail-tasks-"));
+		try {
+			mkdirSync(join(root, "odd", "tasks"), { recursive: true });
+			writeFileSync(join(root, "odd", ".active"), "demo");
+			writeFileSync(
+				join(root, "odd", "tasks", "demo.md"),
+				"---\nstatus: active\n---\n# demo\n## Tasks\n- [x] S1 hecho\n- [ ] S2 pendiente visible\n",
+			);
+			const ctx = { cwd: root, ui: (pi as any).ui };
+			await emit(pi, "session_start", {}, ctx);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(railText(widgets)).toContain("pendiente visible");
+			expect(railText(widgets)).toContain("tareas (1/2)");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("la tecla del rail pliega y despliega los pasos", async () => {
+		const { listeners, widgets, shortcuts, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHanniorqExtension()(pi);
+		const root = mkdtempSync(join(tmpdir(), "hanniorq-rail-toggle-"));
+		try {
+			mkdirSync(join(root, "odd", "tasks"), { recursive: true });
+			writeFileSync(join(root, "odd", ".active"), "demo");
+			writeFileSync(join(root, "odd", "tasks", "demo.md"), "## Pasos\n- [ ] S1 paso visible\n");
+			const ctx = { cwd: root, ui: (pi as any).ui };
+			await emit(pi, "session_start", {}, ctx);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(railText(widgets)).toContain("paso visible");
+
+			const shortcut = shortcuts.get("ctrl+alt+t");
+			expect(shortcut).toBeDefined();
+			await shortcut!.handler(ctx);
+			expect(railText(widgets)).not.toContain("paso visible");
+			expect(railText(widgets)).toContain("plegadas");
+
+			await shortcut!.handler(ctx);
+			expect(railText(widgets)).toContain("paso visible");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
