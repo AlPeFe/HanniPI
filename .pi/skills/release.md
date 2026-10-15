@@ -120,6 +120,9 @@ gh release upload v0.x.y-hannipi -R AlPeFe/HanniPI SHA256SUMS
 
 ## Notas
 
+- `bun` **1.4.x o superior** es obligatorio para compilar el binario: `sodd` y `memory-explorer` usan
+  `node:sqlite`, que bun 1.3.x no resuelve. Con 1.3.x el binario compila pero muere al arrancar con
+  `No such built-in module: node:sqlite`. El workflow `Build Binaries` fija `bun-version: 1.4.2`.
 - El asset del daemon sale de `AlPeFe/HanniGram` (repo aparte, con releases propias): HanniPI copia
   ese mismo artefacto en su release, que es lo que descarga el instalador.
 - Si HanniGram saca una release y el pin se queda atrás, la release de HanniPI sigue saliendo con la
