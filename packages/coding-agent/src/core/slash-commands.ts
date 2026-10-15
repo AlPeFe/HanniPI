@@ -27,6 +27,8 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "share", description: "Share session as a secret GitHub gist" },
 	{ name: "bug", description: "Report a bug to the Hanni developers", argumentHint: "<description>" },
 	{ name: "copy", description: "Copy last agent message to clipboard" },
+	{ name: "mem", description: "Explorar la memoria del proyecto (HanniGram)" },
+	{ name: "packages", description: "Gestor de paquetes: instalar, actualizar, eliminar y buscar en el catálogo" },
 	{ name: "name", description: "Set session display name" },
 	{ name: "session", description: "Show session info and stats" },
 	{ name: "changelog", description: "Show changelog entries" },

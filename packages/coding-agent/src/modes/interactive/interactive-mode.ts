@@ -100,6 +100,7 @@ import {
 	resolveModelScopeFromModels,
 } from "../../core/model-resolver.ts";
 import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
+import { searchPiPackages } from "../../core/package-catalog.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import { RADIUS_MCP_URL, RADIUS_PROVIDER_ID } from "../../core/radius.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
@@ -157,7 +158,7 @@ import {
 	formatAuthSelectorProviderType,
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.ts";
-import { PackageManagerSelector } from "./components/package-manager-selector.ts";
+import { type PackageEntry, PackageManagerSelector } from "./components/package-manager-selector.ts";
 import { createLoginMenuSelector } from "./components/radius-login-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
@@ -5610,22 +5611,25 @@ export class InteractiveMode {
 				settingsManager: this.settingsManager,
 			});
 			const configured = packageManager.listConfiguredPackages();
-			const effective = this.settingsManager.getEffectivePackages();
-			const entries = effective.map((pkg) => {
-				const source = typeof pkg === "string" ? pkg : pkg.source;
-				const isDefault = (this.settingsManager.getConfiguredPackages() ?? []).every(
-					(c) => (typeof c === "string" ? c : c.source) !== source,
-				);
-				const conf = configured.find((c) => c.source === source);
-				return {
-					source,
-					scope: (isDefault ? "default" : (conf?.scope ?? "user")) as "user" | "project" | "default",
-					installed: Boolean(conf?.installedPath),
-					updateAvailable: false,
-				};
-			});
+			const updates = new Set<string>();
+			const buildEntries = (): PackageEntry[] => {
+				const effective = this.settingsManager.getEffectivePackages();
+				return effective.map((pkg) => {
+					const source = typeof pkg === "string" ? pkg : pkg.source;
+					const isDefault = (this.settingsManager.getConfiguredPackages() ?? []).every(
+						(c) => (typeof c === "string" ? c : c.source) !== source,
+					);
+					const conf = configured.find((c) => c.source === source || source.startsWith(`${c.source}@`));
+					return {
+						source,
+						scope: (isDefault ? "default" : (conf?.scope ?? "user")) as "user" | "project" | "default",
+						installed: Boolean(conf?.installedPath),
+						updateAvailable: updates.has(source),
+					};
+				});
+			};
 			const selector = new PackageManagerSelector(
-				entries,
+				buildEntries(),
 				() => {
 					done();
 					this.ui.requestRender();
@@ -5643,7 +5647,16 @@ export class InteractiveMode {
 					await packageManager.removeAndPersist(source);
 					this.showStatus(`Eliminado ${source}. Recarga con /reload.`);
 				},
+				(query, signal) => searchPiPackages(query, { signal, limit: 20 }),
 			);
+			// Los updates se comprueban contra el registro: la lista se refresca cuando llegan.
+			void packageManager
+				.checkForAvailableUpdates()
+				.then((available) => {
+					for (const update of available) updates.add(update.source);
+					selector.setEntries(buildEntries());
+				})
+				.catch(() => {});
 			return { component: selector, focus: selector };
 		});
 	}
