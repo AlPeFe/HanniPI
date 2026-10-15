@@ -109,3 +109,15 @@ Tanda 2 (con mano): `ddaa0a034` + `6f2f164ab` juntos (tools `+name`/`-name`), `d
 
 - `upstream` sigue configurado como remoto (AGENTS.md dice que no existe: desactualizado, corregir cuando se toque).
 - Los `CHANGELOG.md` de upstream son la mejor fuente para priorizar: listan cada arreglo con su issue y separan "Breaking Changes" y "Removed".
+
+## Tanda 2 — **HECHA** (`1868433d0`, 13 commits)
+
+Aplicada con `-x` y conflictos resueltos a mano: `--tools` con `+name`/`-name` y patrones + `--no-mcp`, restaurar tools activas al reanudar, política única de proveedor para `--model`, OpenCode a endpoints de inference, render de llamadas MCP antes de conectar, MCP sin listar recursos al conectar, manager responsivo, tools ocultas fuera del prompt, y el reporte de argumentos finales malformados.
+
+Saltados (dependen de refactors que no tenemos): `f10993bc7` (OAuth de MCP: necesita metadata document + `showMcpManager`), `ee409a85f` (OpenRouter por key), `f11e50f72` (join lineal de codemode: nuestro `execute.ts` no tiene `joinAdjacentText`), `d4d53612b` (Anthropic strict tools: necesita `constrainedSampling`), `67996ab75` (structuredContent cualquiera: necesita `utils/output-files` y el refactor `24382bedd`).
+
+Verificación: `tsc` limpio, biome limpio y suite con los mismos 115 fallos que `main`. Dos casos del test de MCP de upstream quedan `it.skip` por lo mismo.
+
+## Tanda 3 (pendiente, features opcionales)
+
+`3e477eab5` (`PI_CLIPBOARD_OSC52=1`, probado limpio), `f6127a1bf` (clasificadores llama.cpp nativos, probado limpio), `cea257439` (`sessionShareDestination`), `11449730c` ya aplicado.
