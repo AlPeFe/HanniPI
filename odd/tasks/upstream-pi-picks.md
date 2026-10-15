@@ -118,6 +118,17 @@ Saltados (dependen de refactors que no tenemos): `f10993bc7` (OAuth de MCP: nece
 
 Verificación: `tsc` limpio, biome limpio y suite con los mismos 115 fallos que `main`. Dos casos del test de MCP de upstream quedan `it.skip` por lo mismo.
 
-## Tanda 3 (pendiente, features opcionales)
+## Tanda 3 — **HECHA** (`v0.2.12-hannipi`)
 
-`3e477eab5` (`PI_CLIPBOARD_OSC52=1`, probado limpio), `f6127a1bf` (clasificadores llama.cpp nativos, probado limpio), `cea257439` (`sessionShareDestination`), `11449730c` ya aplicado.
+- `3e477eab5` `PI_CLIPBOARD_OSC52=1` (portapapeles remoto via OSC 52).
+- `f6127a1bf` clasificadores de llama.cpp nativos.
+
+Saltado: `cea257439` (`sessionShareDestination`), que necesita fusionar a mano el esquema de ajustes de upstream (`settings-schema.ts` + `schemas/settings.schema.json`).
+
+Verificación: biome limpio, `tsc` igual que `main` (3 errores de datos de modelos) y suite sin fallos nuevos (128 vs 129).
+
+## Estado del fork tras las tres tandas
+
+- Aplicados: **44 commits** de upstream entre v0.2.10, v0.2.11 y v0.2.12.
+- Pendientes con prerrequisito: OAuth de MCP (`f10993bc7`), OpenRouter por key (`ee409a85f`), join lineal de codemode (`f11e50f72`), Anthropic strict tools (`d4d53612b`), `structuredContent` cualquiera (`67996ab75`), `sessionShareDestination` (`cea257439`) y el refactor `24382bedd` (decouple MCP de codemode), que desbloquea los dos últimos de MCP.
+- Para re-sondear cuando interese: `git fetch upstream` y repetir el método de esta ficha (cherry-pick `-x`, resolver solo CHANGELOG con `--ours`, tests con `--theirs` si no los hemos tocado, y verificar con `tsc` + suite comparada con `main`).
