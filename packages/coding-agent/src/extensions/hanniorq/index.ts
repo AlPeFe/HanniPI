@@ -23,7 +23,13 @@ import { join } from "node:path";
 import { Key, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { getAgentDir } from "../../config.ts";
-import type { ExtensionFactory, ExtensionUIContext, ToolDefinition } from "../../core/extensions/types.ts";
+import type {
+	ExtensionContext,
+	ExtensionFactory,
+	ExtensionUIContext,
+	ToolDefinition,
+} from "../../core/extensions/types.ts";
+import type { Settings } from "../../core/settings-manager.ts";
 import { loadMcpConfig } from "../mcp/config.ts";
 import { getMcpConnectionStatuses, subscribeMcpConnectionStatuses } from "../mcp/status.ts";
 import { ensureHanniGramDaemon } from "./hannigram-daemon.ts";
@@ -421,6 +427,74 @@ function wrapLines(text: string, width: number, maxLines: number): string[] {
 /** Patrones `extensions` de los ajustes vigentes; los expone el factory desde `pi.getSettings()`. */
 let readExtensionOverrides: () => string[] = () => [];
 
+/** Ajustes efectivos (incluye compactación); los expone el factory desde `pi.getSettings()`. */
+let readSettings: () => Settings | undefined = () => undefined;
+
+/** Margen con el que se avisa de que la compactación está cerca (tokens y puntos porcentuales). */
+const COMPACT_NEAR_TOKENS = 20_000;
+const COMPACT_NEAR_PERCENT = 8;
+
+/**
+ * Último contexto de extensión visto (el `ctx` de los eventos): el uso de contexto solo está ahí,
+ * no en el `ui` del widget, así que el rail lo recuerda en cada evento de sesión/turno/tool.
+ */
+let latestContext: ExtensionContext | undefined;
+
+/** Recuerda el contexto del evento para que el rail pueda leer el uso de contexto. */
+function trackContext(ctx: ExtensionContext): void {
+	latestContext = ctx;
+}
+
+/**
+ * Aviso de compactación: cuánto contexto queda y a qué umbral se dispara sola.
+ * El umbral es el mismo del motor: `contextWindow - reserveTokens` (16k por defecto).
+ */
+export function contextRailLines(theme: ExtensionUIContext["theme"], width: number): string[] {
+	// El `ctx` de los tests (y de algunos modos) puede no traer el uso de contexto: sin él, no se pinta.
+	const readUsage = latestContext?.getContextUsage;
+	const usage = typeof readUsage === "function" ? latestContext?.getContextUsage() : undefined;
+	if (!usage) return [];
+	const compaction = readSettings()?.compaction;
+	const autoEnabled = compaction?.enabled !== false;
+	const reserve = compaction?.reserveTokens ?? 16_384;
+	const window = usage.contextWindow;
+	const thresholdTokens = Math.max(0, window - reserve);
+	const thresholdPercent = window > 0 ? (thresholdTokens / window) * 100 : 0;
+
+	const lines: string[] = [theme.fg("accent", "contexto")];
+	if (usage.tokens === null) {
+		lines.push(theme.fg("muted", clip("— (se estima tras la próxima respuesta)", width)));
+		return lines;
+	}
+	const tokens = usage.tokens;
+	const percent = usage.percent ?? (window > 0 ? (tokens / window) * 100 : 0);
+	const usageText = `${percent.toFixed(0)}% (${formatTokensShort(tokens)}/${formatTokensShort(window)})`;
+	const reached = autoEnabled && tokens > thresholdTokens;
+	const near =
+		autoEnabled &&
+		!reached &&
+		(tokens >= thresholdTokens - COMPACT_NEAR_TOKENS || percent >= thresholdPercent - COMPACT_NEAR_PERCENT);
+	lines.push(theme.fg(reached ? "error" : near ? "warning" : "text", clip(usageText, width)));
+
+	if (!autoEnabled) {
+		lines.push(theme.fg("warning", clip("auto-compact off", width)));
+	} else if (reached) {
+		lines.push(theme.fg("error", clip("compactación inminente", width)));
+	} else if (near) {
+		lines.push(theme.fg("warning", clip(`▸ compacta a ${formatTokensShort(thresholdTokens)}`, width)));
+	} else {
+		lines.push(theme.fg("muted", clip(`compacta a ${thresholdPercent.toFixed(0)}%`, width)));
+	}
+	return lines;
+}
+
+/** `148000` → `148k` (el rail no tiene sitio para más detalle). */
+function formatTokensShort(count: number): string {
+	if (count < 1000) return `${count}`;
+	if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
+	return `${(count / 1_000_000).toFixed(1)}M`;
+}
+
 /**
  * ¿Sigue activada la extensión built-in `id`? Misma semántica que el resource loader para los casos
  * documentados: `-builtin:<id>` y `!builtin:<id>` la desactivan, `+builtin:<id>` la fuerza.
@@ -599,6 +673,11 @@ function railLines(ui: ExtensionUIContext, cwd: string, width: number = RAIL_WID
 		}
 	}
 	lines.push(sep);
+
+	// Contexto y compactacion: cuanto queda y cuando se dispara sola. Va junto a la memoria
+	// (estado de la sesion) para no perderse entre las tareas.
+	const contextLines = contextRailLines(theme, W);
+	if (contextLines.length > 0) lines.push(...contextLines, sep);
 
 	// sODD: solo si hay ficha. Sin ficha (p.ej. una pregunta trivial del codigo)
 	// no aplica y no se pinta nada, en vez de un "inactivo" que no significa nada.
@@ -800,6 +879,7 @@ export function createHanniorqExtension(
 ): ExtensionFactory {
 	return (pi) => {
 		readExtensionOverrides = () => pi.getSettings().extensions ?? [];
+		readSettings = () => pi.getSettings();
 		let unsubscribeMcpStatus: (() => void) | undefined;
 		// Estado del turno actual: tools usadas, escrituras de memoria, si se
 		// tocó sODD. Se resetea en turn_start y se resume en turn_end como un
@@ -809,6 +889,7 @@ export function createHanniorqExtension(
 		let turnSoddTouched = false;
 
 		pi.on("turn_start", (_event, ctx) => {
+			trackContext(ctx);
 			turnTools = new Set<string>();
 			turnMemoryWrites = 0;
 			turnSoddTouched = false;
@@ -817,6 +898,7 @@ export function createHanniorqExtension(
 		});
 
 		pi.on("tool_execution_start", (event, ctx) => {
+			trackContext(ctx);
 			turnTools.add(event.toolName);
 			if (
 				event.toolName === "mem_save" ||
@@ -941,6 +1023,7 @@ export function createHanniorqExtension(
 		// si sODD se usó y si se escribió en memoria de HanniGram — estilo
 		// "updated skill" de Hermes.
 		pi.on("turn_end", (_event, ctx) => {
+			trackContext(ctx);
 			const cwd = ctx.cwd ?? process.cwd();
 			soddWorking = false;
 			const ind = soddIndicator(cwd);
@@ -963,6 +1046,7 @@ export function createHanniorqExtension(
 		// Indicador sODD: pinta si hay ficha activa (al iniciar la sesión,
 		// que es cuando la ficha se retoma).
 		pi.on("session_start", (_event, ctx) => {
+			trackContext(ctx);
 			const cwd = ctx.cwd ?? process.cwd();
 			// Sesion nueva: la actividad de memoria y las tareas del harness son de la sesion.
 			memActivity.length = 0;

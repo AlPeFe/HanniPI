@@ -42,6 +42,7 @@ function createMockPi() {
 			railWidth = Math.max(20, Math.min(100, Math.round(width)));
 			return railWidth;
 		},
+		getContextUsage: () => undefined,
 		theme: {
 			fg: (_color: string, text: string) => text,
 			bold: (text: string) => text,
@@ -202,6 +203,26 @@ describe("extensión hanniorq", () => {
 			else process.env.HANNI_CODING_AGENT_DIR = previousAgentDir;
 			rmSync(agentDir, { recursive: true, force: true });
 		}
+	});
+
+	it("el rail avisa del contexto y de la compactación inminente", async () => {
+		const { listeners, widgets, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHanniorqExtension()(pi);
+		await emit(
+			pi,
+			"session_start",
+			{},
+			{
+				cwd: "C:/x",
+				ui: (pi as any).ui,
+				getContextUsage: () => ({ tokens: 190_000, contextWindow: 200_000, percent: 95 }),
+			},
+		);
+		const rail = railText(widgets, 40);
+		expect(rail).toContain("contexto");
+		expect(rail).toContain("95% (190k/200k)");
+		expect(rail).toContain("compactación inminente");
 	});
 
 	it("builtinExtensionEnabled respeta -builtin, !builtin y +builtin", () => {
