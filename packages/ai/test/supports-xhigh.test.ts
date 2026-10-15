@@ -111,9 +111,9 @@ describe("getSupportedThinkingLevels", () => {
 
 	// OpenAI and Codex reject reasoning.effort "none" for GPT-6.1 Sol.
 	it("does not support off for GPT-6.1 Sol", () => {
+		// HanniPI no tiene el provider "azure" (usa azure-openai-responses): se omite.
 		const expected = {
 			openai: ["low", "medium", "high", "xhigh", "max"],
-			azure: ["low", "medium", "high", "xhigh", "max"],
 			"openai-codex": ["minimal", "low", "medium", "high", "xhigh", "max"],
 		} as const;
 		for (const [provider, levels] of Object.entries(expected)) {
