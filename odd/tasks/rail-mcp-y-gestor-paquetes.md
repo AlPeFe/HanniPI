@@ -20,7 +20,8 @@ Verify: rail con MCP desactivado/`sin servidores`/servidores configurados; `/pac
 - [ ] S3 `interactive-mode`: cablear la búsqueda del catálogo y refrescar updates al abrir `/packages`.
 - [ ] S4 Rail MCP: leer servidores configurados (`mcp.json` global/proyecto) + estado vivo, y avisar si `builtin:mcp` está excluido en ajustes o si no hay servidores.
 - [ ] S5 `/packages` y `/mem` en `BUILTIN_SLASH_COMMANDS` (autocompletado y ayuda) + README.
-- [ ] S6 Tests (catálogo, selector, rail), checks y commits atómicos.
+- [x] S6 Tests (catálogo, selector, rail), checks y commits atómicos.
+- [x] S7 Rail: contexto y compactación — porcentaje de ventana, umbral real (`contextWindow - reserveTokens`) y aviso en `warning` cuando está cerca (≤20k o ≤8pp) o `error` cuando ya pasó, más `auto-compact off` si está desactivada. El uso de contexto solo está en el `ctx` de los eventos, así que el rail lo recuerda en session/turn/tool.
 
 ## Siguiente
 
