@@ -10,6 +10,9 @@
 # el binario de HanniPI (compilado con bun), el daemon HanniGram y cualquier
 # bun/node/dotnet con "hanni" en su linea de comandos. Sin esto, Windows
 # bloquea los ficheros y la instalacion/desinstalacion falla.
+#
+# HanniGram (la memoria) es obligatorio: la release TIENE que traer
+# hannigram-windows-x64.zip. Si falta, el script aborta antes de tocar nada.
 
 param(
     [ValidateSet("menu", "install", "update", "uninstall")]
@@ -180,45 +183,40 @@ function Expand-Flattened($zip, $dest) {
     }
 }
 
-function Install-HanniPI($release, $shaMap) {
-    $zip = Download-Asset $release $Asset (Join-Path $env:TEMP $Asset)
-    Verify-Asset $zip $Asset $shaMap
-
-    [void](Stop-HanniProcesses)
-
-    if (Test-Path $InstallDir) { Remove-Item $InstallDir -Recurse -Force }
-    Write-Host "Instalando HanniPI en $InstallDir ..." -ForegroundColor Cyan
-    Expand-Flattened $zip $InstallDir
-
-    if (Test-Path (Join-Path $InstallDir "pi.exe")) {
-        Move-Item (Join-Path $InstallDir "pi.exe") (Join-Path $InstallDir $BinName) -Force
-    }
-    if (-not (Test-Path (Join-Path $InstallDir $BinName))) {
-        throw "No encuentro $BinName tras extraer $Asset"
-    }
-    Add-UserPath $InstallDir
+# Descarga, verifica el checksum y extrae un asset en un directorio de staging.
+function Stage-Asset($release, $shaMap, $assetName, $destDir) {
+    $zip = Download-Asset $release $assetName (Join-Path $env:TEMP $assetName)
+    Verify-Asset $zip $assetName $shaMap
+    Expand-Flattened $zip $destDir
+    return $destDir
 }
 
-function Install-HanniGram($release, $shaMap) {
-    if (-not $shaMap.ContainsKey($HgmAsset)) {
-        Write-Warn "La release no trae $HgmAsset; me salto HanniGram (lo instalara HanniPI cuando pueda)."
-        return $false
+# Reemplaza $dest por el contenido ya validado de $source.
+function Install-Staged($source, $dest) {
+    if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+    New-Item -ItemType Directory -Path $dest -Force | Out-Null
+    Get-ChildItem $source -Force | Move-Item -Destination $dest -Force
+    Remove-Item $source -Recurse -Force
+}
+
+# Arranca el daemon si no responde ya y espera a /health. Devuelve $true/$false.
+function Test-HanniGramDaemon($server, $timeoutSeconds = 45) {
+    $url = $env:HANNIGRAM_URLS
+    if (-not $url) { $url = "http://127.0.0.1:8765" }
+    try {
+        $health = Invoke-RestMethod -Uri "$url/health" -TimeoutSec 3
+        if ($health.status -eq "ok") { return $true }
+    } catch { }
+    try { Start-Process -FilePath $server -WindowStyle Hidden | Out-Null } catch { return $false }
+    $deadline = (Get-Date).AddSeconds($timeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $health = Invoke-RestMethod -Uri "$url/health" -TimeoutSec 3
+            if ($health.status -eq "ok") { return $true }
+        } catch { }
+        Start-Sleep -Milliseconds 500
     }
-    $zip = Download-Asset $release $HgmAsset (Join-Path $env:TEMP $HgmAsset)
-    Verify-Asset $zip $HgmAsset $shaMap
-
-    if (Test-Path $HgmDir) { Remove-Item $HgmDir -Recurse -Force }
-    Write-Host "Instalando HanniGram en $HgmDir ..." -ForegroundColor Cyan
-    Expand-Flattened $zip $HgmDir
-
-    $server = Join-Path $HgmDir "HanniGram.Server.exe"
-    if (-not (Test-Path $server)) { throw "No encuentro HanniGram.Server.exe en $HgmDir" }
-    # HanniPI descubre el daemon por HANNIGRAM_DAEMON y el CLI por PATH.
-    [Environment]::SetEnvironmentVariable("HANNIGRAM_DAEMON", $server, "User")
-    $env:HANNIGRAM_DAEMON = $server
-    Add-UserPath $HgmDir
-    Write-Ok "HanniGram daemon: $server"
-    return $true
+    return $false
 }
 
 function Install-All([bool]$isUpdate) {
@@ -228,17 +226,51 @@ function Install-All([bool]$isUpdate) {
     $release = Get-LatestRelease
     $shaMap = Get-ShaMap $release
 
-    Install-HanniPI $release $shaMap
-    $hgmOk = Install-HanniGram $release $shaMap
+    # HanniPI sin HanniGram no tiene memoria, asi que el daemon es obligatorio. Se
+    # descarga y valida TODO antes de tocar la instalacion actual: si falta el asset
+    # o un checksum no cuadra, no se borra nada de lo que ya funcionaba.
+    if (-not $shaMap.ContainsKey($HgmAsset)) {
+        throw "La release $($release.tag_name) no incluye $HgmAsset, asi que no puedo instalar HanniGram. HanniPI sin memoria no sirve: arregla la release (scripts/pack-hannigram.ps1) y reintenta."
+    }
+
+    $piStage = Join-Path $env:TEMP "hanni-pi-staging"
+    Stage-Asset $release $shaMap $Asset $piStage
+    if (Test-Path (Join-Path $piStage "pi.exe")) {
+        Move-Item (Join-Path $piStage "pi.exe") (Join-Path $piStage $BinName) -Force
+    }
+    if (-not (Test-Path (Join-Path $piStage $BinName))) {
+        throw "No encuentro $BinName tras extraer $Asset"
+    }
+
+    $hgmStage = Join-Path $env:TEMP "hannigram-staging"
+    Stage-Asset $release $shaMap $HgmAsset $hgmStage
+    if (-not (Test-Path (Join-Path $hgmStage "HanniGram.Server.exe"))) {
+        throw "No encuentro HanniGram.Server.exe tras extraer $HgmAsset"
+    }
+
+    [void](Stop-HanniProcesses)
+
+    Write-Host "Instalando HanniPI en $InstallDir ..." -ForegroundColor Cyan
+    Install-Staged $piStage $InstallDir
+    Write-Host "Instalando HanniGram en $HgmDir ..." -ForegroundColor Cyan
+    Install-Staged $hgmStage $HgmDir
+
+    # HanniPI descubre el daemon por HANNIGRAM_DAEMON y el CLI por PATH.
+    $server = Join-Path $HgmDir "HanniGram.Server.exe"
+    [Environment]::SetEnvironmentVariable("HANNIGRAM_DAEMON", $server, "User")
+    $env:HANNIGRAM_DAEMON = $server
+    Add-UserPath $InstallDir
+    Add-UserPath $HgmDir
 
     $ver = $null
     try { $ver = & (Join-Path $InstallDir $BinName) --version 2>$null } catch { }
     Write-Title "Listo"
     Write-Ok "HanniPI instalado: hanni --version = $ver"
-    if ($hgmOk) {
-        Write-Ok "HanniGram instalado en $HgmDir (daemon: HANNIGRAM_DAEMON)"
+    Write-Ok "HanniGram instalado en $HgmDir (daemon: HANNIGRAM_DAEMON)"
+    if (Test-HanniGramDaemon $server) {
+        Write-Ok "daemon de memoria respondiendo en /health"
     } else {
-        Write-Warn "HanniGram NO instalado (falta el asset en la release)"
+        Write-Warn "el daemon no respondio /health; HanniPI lo arrancara cuando lo use"
     }
     Write-Host "  Abre una terminal NUEVA y escribe:  hanni" -ForegroundColor Magenta
 }
