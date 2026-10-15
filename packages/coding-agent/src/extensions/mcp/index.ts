@@ -65,12 +65,7 @@ import { loadMcpRuntime } from "./runtime.lazy.ts";
 import type * as McpRuntime from "./runtime.ts";
 import type { McpServerConnection, McpServerLog, McpTransportFactory } from "./runtime.ts";
 import { publishMcpConnectionStatuses } from "./status.ts";
-import {
-	createMcpToolDefinition,
-	createMcpToolName,
-	createMcpToolRenderers,
-	type McpToolDetails,
-} from "./tools.ts";
+import { createMcpToolDefinition, createMcpToolName, createMcpToolRenderers, type McpToolDetails } from "./tools.ts";
 import { type McpMenu, type McpUi, showMcpManager } from "./ui.ts";
 
 const MCP_STATUS_EXTENSION_ID = fileURLToPath(import.meta.url);
