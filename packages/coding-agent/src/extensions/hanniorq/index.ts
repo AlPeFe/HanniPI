@@ -22,7 +22,9 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "
 import { join } from "node:path";
 import { Key, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { getAgentDir } from "../../config.ts";
 import type { ExtensionFactory, ExtensionUIContext, ToolDefinition } from "../../core/extensions/types.ts";
+import { loadMcpConfig } from "../mcp/config.ts";
 import { getMcpConnectionStatuses, subscribeMcpConnectionStatuses } from "../mcp/status.ts";
 import { ensureHanniGramDaemon } from "./hannigram-daemon.ts";
 
@@ -416,6 +418,67 @@ function wrapLines(text: string, width: number, maxLines: number): string[] {
 	return kept;
 }
 
+/** Patrones `extensions` de los ajustes vigentes; los expone el factory desde `pi.getSettings()`. */
+let readExtensionOverrides: () => string[] = () => [];
+
+/**
+ * ¿Sigue activada la extensión built-in `id`? Misma semántica que el resource loader para los casos
+ * documentados: `-builtin:<id>` y `!builtin:<id>` la desactivan, `+builtin:<id>` la fuerza.
+ */
+export function builtinExtensionEnabled(patterns: readonly string[], id: string): boolean {
+	const target = `builtin:${id}`;
+	let enabled = true;
+	for (const raw of patterns) {
+		const pattern = raw.trim();
+		if (pattern === `-${target}` || pattern === `!${target}`) enabled = false;
+		else if (pattern === `+${target}`) enabled = true;
+	}
+	return enabled;
+}
+
+/** Presentación (icono, color y etiqueta) de un estado MCP. */
+function mcpStatePresentation(state: string): {
+	icon: string;
+	color: "success" | "warning" | "error" | "muted";
+	label: string;
+} {
+	switch (state) {
+		case "connected":
+			return { icon: "✓", color: "success", label: "conectado" };
+		case "connecting":
+		case "starting":
+			return { icon: "◌", color: "muted", label: "conectando" };
+		case "needs-auth":
+			return { icon: "!", color: "warning", label: "login pendiente" };
+		case "failed":
+		case "closed":
+			return { icon: "✗", color: "error", label: "caído" };
+		case "disabled":
+			return { icon: "·", color: "muted", label: "desactivado" };
+		default:
+			return { icon: "·", color: "muted", label: "sin conectar" };
+	}
+}
+
+/**
+ * Servidores MCP a pintar: los configurados en `mcp.json` (global + proyecto) con su estado vivo si
+ * la extensión MCP los ha conectado, más los que haya registrado una extensión sin estar en el JSON.
+ */
+export function mcpRailServers(cwd: string): Array<{ name: string; state: string }> {
+	const live = new Map(getMcpConnectionStatuses().map((status) => [status.name, status.state as string]));
+	const seen = new Set<string>();
+	const out: Array<{ name: string; state: string }> = [];
+	for (const server of loadMcpConfig({ agentDir: getAgentDir(), cwd, projectTrusted: false }).servers) {
+		const state = live.get(server.name) ?? (server.config.enabled === false ? "disabled" : "unavailable");
+		out.push({ name: server.name, state });
+		seen.add(server.name);
+	}
+	for (const [name, state] of live) {
+		if (!seen.has(name)) out.push({ name, state });
+	}
+	return out;
+}
+
 /** Nombre del proyecto: owner/repo del git remote, o nombre del directorio. */
 function projectName(cwd: string): string {
 	const r = git(cwd, ["config", "--get", "remote.origin.url"]);
@@ -468,8 +531,7 @@ function collectTodos(lines: string[], onlyPasos: boolean): Array<{ done: boolea
 	return out;
 }
 
-/** Consulta el daemon HanniGram (health) y refresca la cache. */
-async function checkMemory(): Promise<void> {
+/** Consulta el daemon HanniGram (health) y refresca la cache. */ async function checkMemory(): Promise<void> {
 	try {
 		const health = await hannigram<{ status?: string }>("/health");
 		memoryCache = { up: health?.status === "ok", checked: true };
@@ -478,8 +540,10 @@ async function checkMemory(): Promise<void> {
 	}
 }
 
-/** Estado de la memoria de la sesión: si se añadió algo, se borró, o quedó igual. */
-function memoryDelta(): { label: string; color: "muted" | "success" | "error" | "warning" } {
+/** Estado de la memoria de la sesión: si se añadió algo, se borró, o quedó igual. */ function memoryDelta(): {
+	label: string;
+	color: "muted" | "success" | "error" | "warning";
+} {
 	const added = memActivity.some((m) => m.op === "add");
 	const deleted = memActivity.some((m) => m.op === "del");
 	if (added && deleted) return { label: "nuevo + borrado", color: "warning" };
@@ -574,17 +638,24 @@ function railLines(ui: ExtensionUIContext, cwd: string, width: number = RAIL_WID
 		}
 	}
 
-	const mcp = getMcpConnectionStatuses();
-	if (mcp.length > 0) {
-		lines.push(sep, theme.fg("accent", "MCP"));
-		for (const server of mcp.slice(0, 6)) {
-			const icon = server.state === "connected" ? "✓" : server.state === "disabled" ? "·" : "!";
-			const color = server.state === "connected" ? "success" : server.state === "disabled" ? "muted" : "warning";
+	// MCP: siempre se pinta algo útil. Los estados vivos los publica la extensión MCP; si no corre
+	// (desactivada o aún sin conectar) se muestran los servidores del mcp.json. Así el rail explica
+	// por qué no hay nada, en vez de desaparecer en silencio.
+	const mcpServers = mcpRailServers(cwd);
+	const mcpEnabled = builtinExtensionEnabled(readExtensionOverrides(), "mcp");
+	lines.push(sep, theme.fg("accent", "MCP"));
+	if (mcpServers.length === 0) {
+		lines.push(theme.fg("muted", mcpEnabled ? "sin servidores" : "desactivado (-builtin:mcp)"));
+		if (mcpEnabled) lines.push(theme.fg("dim", clip("  hanni mcp add <nombre>", W - 2)));
+	} else {
+		if (!mcpEnabled) lines.push(theme.fg("warning", "built-in mcp desactivado"));
+		for (const server of mcpServers.slice(0, 6)) {
+			const presented = mcpStatePresentation(server.state);
 			lines.push(
-				`${theme.fg(color, icon)} ${clip(server.name, W - 15)} ${theme.fg("muted", clip(server.state, 10))}`,
+				`${theme.fg(presented.color, presented.icon)} ${clip(server.name, W - 16)} ${theme.fg("muted", clip(presented.label, W - 8))}`,
 			);
 		}
-		if (mcp.length > 6) lines.push(theme.fg("muted", `… +${mcp.length - 6} MCP`));
+		if (mcpServers.length > 6) lines.push(theme.fg("muted", `… +${mcpServers.length - 6} MCP`));
 	}
 
 	// Cambios: compacto (máx. 3 rutas) para que no se acumule y empuje al resto.
@@ -728,6 +799,7 @@ export function createHanniorqExtension(
 	options: { ensureDaemon?: typeof ensureHanniGramDaemon } = {},
 ): ExtensionFactory {
 	return (pi) => {
+		readExtensionOverrides = () => pi.getSettings().extensions ?? [];
 		let unsubscribeMcpStatus: (() => void) | undefined;
 		// Estado del turno actual: tools usadas, escrituras de memoria, si se
 		// tocó sODD. Se resetea en turn_start y se resume en turn_end como un

@@ -12,7 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionFactory } from "../src/core/extensions/types.ts";
-import { createHanniorqExtension, parseGitStatusPaths } from "../src/extensions/hanniorq/index.ts";
+import {
+	builtinExtensionEnabled,
+	createHanniorqExtension,
+	parseGitStatusPaths,
+} from "../src/extensions/hanniorq/index.ts";
 import { publishMcpConnectionStatuses } from "../src/extensions/mcp/status.ts";
 
 function createMockPi() {
@@ -23,6 +27,8 @@ function createMockPi() {
 	const widgets = new Map<string, string[] | ((...args: any[]) => unknown)>();
 	const sentMessages: string[] = [];
 	let railWidth = 34;
+	/** Patrones del ajuste `extensions` que ve la extensión (tests de MCP desactivado). */
+	const extensionOverrides: string[] = [];
 
 	const ui = {
 		notify: () => {},
@@ -58,13 +64,14 @@ function createMockPi() {
 			arr.push(handler);
 			listeners.set(event, arr);
 		},
+		getSettings: () => ({ extensions: extensionOverrides }),
 		sendUserMessage: (content: string) => {
 			sentMessages.push(content);
 		},
 		ui,
 	} as unknown as Parameters<ExtensionFactory>[0];
 
-	return { registeredCommands, shortcuts, tools, listeners, widgets, ui, pi, sentMessages };
+	return { registeredCommands, shortcuts, tools, listeners, widgets, ui, pi, sentMessages, extensionOverrides };
 }
 
 async function emit(pi: ReturnType<typeof createMockPi>["pi"], event: string, payload: any, ctx: any) {
@@ -126,8 +133,83 @@ describe("extensión hanniorq", () => {
 				: "";
 		expect(rail).toContain("MCP");
 		expect(rail).toContain("context7");
-		expect(rail).toContain("connected");
+		expect(rail).toContain("conectado");
 		expect(rail).toContain("local");
+		expect(rail).toContain("caído");
+	});
+
+	it("muestra los servidores de mcp.json aunque la extensión MCP no haya conectado", async () => {
+		const { listeners, widgets, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHanniorqExtension()(pi);
+		const agentDir = mkdtempSync(join(tmpdir(), "hanniorq-mcp-agent-"));
+		const cwd = mkdtempSync(join(tmpdir(), "hanniorq-mcp-cwd-"));
+		const previousAgentDir = process.env.HANNI_CODING_AGENT_DIR;
+		process.env.HANNI_CODING_AGENT_DIR = agentDir;
+		// Los estados MCP son estado de módulo: se limpian para no arrastrar el test anterior.
+		publishMcpConnectionStatuses("test", []);
+		try {
+			writeFileSync(
+				join(agentDir, "mcp.json"),
+				JSON.stringify({
+					mcpServers: {
+						context7: { url: "https://mcp.context7.com/mcp" },
+						exa: { command: "npx", args: ["-y", "exa-mcp"], enabled: false },
+					},
+				}),
+			);
+			await emit(pi, "session_start", {}, { cwd, ui: (pi as any).ui });
+			const rail = railText(widgets, 44);
+			expect(rail).toContain("MCP");
+			expect(rail).toContain("context7");
+			expect(rail).toContain("sin conectar");
+			expect(rail).toContain("exa");
+			expect(rail).toContain("desactivado");
+		} finally {
+			if (previousAgentDir === undefined) delete process.env.HANNI_CODING_AGENT_DIR;
+			else process.env.HANNI_CODING_AGENT_DIR = previousAgentDir;
+			rmSync(agentDir, { recursive: true, force: true });
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("el rail avisa cuando el built-in mcp está desactivado en los ajustes", async () => {
+		const { listeners, widgets, pi, extensionOverrides } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHanniorqExtension()(pi);
+		const agentDir = mkdtempSync(join(tmpdir(), "hanniorq-mcp-off-"));
+		const previousAgentDir = process.env.HANNI_CODING_AGENT_DIR;
+		process.env.HANNI_CODING_AGENT_DIR = agentDir;
+		publishMcpConnectionStatuses("test", []);
+		try {
+			// Sin servidores y con el built-in excluido: el rail lo dice en vez de quedarse mudo.
+			extensionOverrides.push("-builtin:mcp");
+			await emit(pi, "session_start", {}, { cwd: agentDir, ui: (pi as any).ui });
+			expect(railText(widgets, 44)).toContain("desactivado (-builtin:mcp)");
+
+			// Con servidores configurados pero sin extensión MCP, avisa y los lista.
+			writeFileSync(
+				join(agentDir, "mcp.json"),
+				JSON.stringify({ mcpServers: { local: { command: "mcp-server" } } }),
+			);
+			await emit(pi, "session_start", {}, { cwd: agentDir, ui: (pi as any).ui });
+			const rail = railText(widgets, 44);
+			expect(rail).toContain("built-in mcp desactivado");
+			expect(rail).toContain("local");
+		} finally {
+			extensionOverrides.length = 0;
+			if (previousAgentDir === undefined) delete process.env.HANNI_CODING_AGENT_DIR;
+			else process.env.HANNI_CODING_AGENT_DIR = previousAgentDir;
+			rmSync(agentDir, { recursive: true, force: true });
+		}
+	});
+
+	it("builtinExtensionEnabled respeta -builtin, !builtin y +builtin", () => {
+		expect(builtinExtensionEnabled([], "mcp")).toBe(true);
+		expect(builtinExtensionEnabled(["-builtin:mcp"], "mcp")).toBe(false);
+		expect(builtinExtensionEnabled(["!builtin:mcp"], "mcp")).toBe(false);
+		expect(builtinExtensionEnabled(["-builtin:mcp", "+builtin:mcp"], "mcp")).toBe(true);
+		expect(builtinExtensionEnabled(["-builtin:sodd"], "mcp")).toBe(true);
 	});
 
 	it("renders the active sheet TODOs and current modified-file snapshot", async () => {
