@@ -89,6 +89,8 @@ interface HarnessTodo {
 	text: string;
 	status: "pending" | "in_progress" | "completed";
 }
+/** Uso de memoria del turno en curso (se resetea en cada turn_start). */
+let memTurn: MemTurnSummary = emptyMemTurnSummary();
 let harnessTodos: HarnessTodo[] = [];
 /** Hay un turno en curso: sODD esta "working" mientras el agente trabaja. */
 let soddWorking = false;
@@ -116,6 +118,59 @@ const MEM_READ_TOOLS = new Set([
 
 /** Tools mem_* que ESCRIBEN en memoria. */
 const MEM_WRITE_TOOLS = new Set(["mem_save", "mem_delete", "mem_session_summary"]);
+
+/** Resumen del uso de memoria en el turno, para la línea de fin de turno. */
+export interface MemTurnSummary {
+	/** `mem_save` que creó una observación. */
+	created: number;
+	/** `mem_save` que actualizó una existente (mismo topic_key). */
+	updated: number;
+	deleted: number;
+	summaries: number;
+	reads: number;
+}
+
+export function emptyMemTurnSummary(): MemTurnSummary {
+	return { created: 0, updated: 0, deleted: 0, summaries: 0, reads: 0 };
+}
+
+/**
+ * Línea de memoria de fin de turno: `hannigram → memory: +1 nuevo · ≫2 leído`.
+ * Solo con lo que pasó de verdad (nada de ceros) y `undefined` si la memoria no se tocó.
+ */
+export function formatMemoryLine(stats: MemTurnSummary): string | undefined {
+	const parts: string[] = [];
+	if (stats.created > 0) parts.push(`+${stats.created} nuevo`);
+	if (stats.updated > 0) parts.push(`~${stats.updated} update`);
+	if (stats.summaries > 0) parts.push(`+${stats.summaries} resumen`);
+	if (stats.deleted > 0) parts.push(`-${stats.deleted} borrado`);
+	if (stats.reads > 0) parts.push(`≫${stats.reads} leído`);
+	if (parts.length === 0) return undefined;
+	return `hannigram → memory: ${parts.join(" · ")}`;
+}
+
+/**
+ * Texto plano del resultado de una tool, venga como `{ content: [{ text }] }` (lo normal),
+ * un array de partes o un string. Se usa para saber si `mem_save` creó o actualizó.
+ */
+function toolResultText(result: unknown): string {
+	const parts: string[] = [];
+	const pushText = (value: unknown) => {
+		if (typeof value === "string") parts.push(value);
+		else if (isPlainObject(value) && typeof value.text === "string") parts.push(value.text);
+	};
+	if (Array.isArray(result)) {
+		for (const item of result) pushText(item);
+	} else if (isPlainObject(result)) {
+		pushText(result);
+		if (Array.isArray(result.content)) for (const item of result.content) pushText(item);
+	}
+	return parts.join(" ");
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 /** Detalle legible de una llamada mem_* para el log de actividad del rail. */
 function memDetail(toolName: string, args: Record<string, unknown> | undefined): string {
@@ -885,13 +940,12 @@ export function createHanniorqExtension(
 		// tocó sODD. Se resetea en turn_start y se resume en turn_end como un
 		// widget pequeñito (abajo), estilo "updated skill" de Hermes.
 		let turnTools = new Set<string>();
-		let turnMemoryWrites = 0;
 		let turnSoddTouched = false;
 
 		pi.on("turn_start", (_event, ctx) => {
 			trackContext(ctx);
 			turnTools = new Set<string>();
-			turnMemoryWrites = 0;
+			memTurn = emptyMemTurnSummary();
 			turnSoddTouched = false;
 			soddWorking = true;
 			renderRail(ctx.ui, ctx.cwd ?? process.cwd());
@@ -900,16 +954,10 @@ export function createHanniorqExtension(
 		pi.on("tool_execution_start", (event, ctx) => {
 			trackContext(ctx);
 			turnTools.add(event.toolName);
-			if (
-				event.toolName === "mem_save" ||
-				event.toolName === "mem_session_summary" ||
-				event.toolName === "mem_delete"
-			) {
-				turnMemoryWrites++;
-			}
 			if (event.toolName === "task" || event.toolName === "hanniorq" || event.toolName === "hannigram") {
 				turnSoddTouched = true;
 			}
+			if (MEM_READ_TOOLS.has(event.toolName)) memTurn.reads++;
 			// Actividad de memoria: registra lecturas y escrituras para el rail.
 			if (MEM_READ_TOOLS.has(event.toolName) || MEM_WRITE_TOOLS.has(event.toolName)) {
 				const op: MemActivity["op"] =
@@ -934,6 +982,14 @@ export function createHanniorqExtension(
 		});
 
 		pi.on("tool_execution_end", (event, ctx) => {
+			// Contadores del turno: nuevo vs update se distinguen por el resultado de `mem_save`
+			// ("Saved observation …" / "Updated observation …").
+			if (MEM_WRITE_TOOLS.has(event.toolName) && !event.isError) {
+				if (event.toolName === "mem_delete") memTurn.deleted++;
+				else if (event.toolName === "mem_session_summary") memTurn.summaries++;
+				else if (/\bUpdated observation\b/i.test(toolResultText(event.result))) memTurn.updated++;
+				else memTurn.created++;
+			}
 			// Refresca el rail derecho cuando cambia estado relevante (memoria/sODD/tareas).
 			if (
 				event.toolName === "mem_save" ||
@@ -1031,9 +1087,13 @@ export function createHanniorqExtension(
 			if (turnTools.size > 0) parts.push(`tools: ${[...turnTools].join(", ")}`);
 			if (ind) parts.push(`sODD: activo (${ind.done}/${ind.total})`);
 			else if (turnSoddTouched) parts.push("sODD: activo");
-			if (turnMemoryWrites > 0) parts.push(`memoria: +${turnMemoryWrites}`);
-			if (parts.length > 0) ctx.ui.setWidget("hanniorq-turn", [`▸ ${parts.join(" · ")}`]);
-			else ctx.ui.setWidget("hanniorq-turn", undefined);
+			// Cierre del turno: tools + sODD en una línea y el resumen de memoria en la última,
+			// para ver de un vistazo si se usó la memoria y qué cambió.
+			const lines: string[] = [];
+			if (parts.length > 0) lines.push(`▸ ${parts.join(" · ")}`);
+			const memoryLine = formatMemoryLine(memTurn);
+			if (memoryLine) lines.push(`  ${memoryLine}`);
+			ctx.ui.setWidget("hanniorq-turn", lines.length > 0 ? lines : undefined);
 			updateSoddIndicator(ctx.ui, cwd);
 			refreshRail(ctx.ui, cwd);
 			void refreshModifiedFiles(pi, ctx.ui, cwd);

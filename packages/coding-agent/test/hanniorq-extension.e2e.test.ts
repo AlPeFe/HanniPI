@@ -205,6 +205,44 @@ describe("extensión hanniorq", () => {
 		}
 	});
 
+	it("cierra el turno con la línea hannigram → memory de lo que cambió", async () => {
+		const { listeners, widgets, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHanniorqExtension()(pi);
+		const ctx = { cwd: "C:/x", ui: (pi as any).ui };
+		await emit(pi, "turn_start", {}, ctx);
+
+		// Una lectura, un mem_save que crea, otro que actualiza y un borrado.
+		for (const [toolName, result, isError] of [
+			["mem_search", { content: [{ type: "text", text: "2 resultados" }] }, false],
+			["mem_save", { content: [{ type: "text", text: "Saved observation #12: rail" }] }, false],
+			["mem_save", { content: [{ type: "text", text: "Updated observation #9: memoria" }] }, false],
+			["mem_delete", { content: [{ type: "text", text: "Deleted observation #3" }] }, false],
+		] as const) {
+			await emit(pi, "tool_execution_start", { toolName, toolCallId: `${toolName}-1`, args: {} }, ctx);
+			await emit(pi, "tool_execution_end", { toolName, toolCallId: `${toolName}-1`, result, isError }, ctx);
+		}
+		await emit(pi, "turn_end", {}, ctx);
+
+		const widget = widgets.get("hanniorq-turn");
+		const lines = Array.isArray(widget) ? widget : [];
+		expect(lines.join("\n")).toContain("hannigram → memory: +1 nuevo · ~1 update · -1 borrado · ≫1 leído");
+	});
+
+	it("no pinta la línea de memoria cuando el turno no la toca", async () => {
+		const { listeners, widgets, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHanniorqExtension()(pi);
+		const ctx = { cwd: "C:/x", ui: (pi as any).ui };
+		await emit(pi, "turn_start", {}, ctx);
+		await emit(pi, "tool_execution_start", { toolName: "read", toolCallId: "r1", args: {} }, ctx);
+		await emit(pi, "turn_execution_end", {}, ctx);
+		await emit(pi, "turn_end", {}, ctx);
+		const widget = widgets.get("hanniorq-turn");
+		const lines = Array.isArray(widget) ? widget : [];
+		expect(lines.join("\n")).not.toContain("hannigram → memory");
+	});
+
 	it("el rail avisa del contexto y de la compactación inminente", async () => {
 		const { listeners, widgets, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
@@ -445,17 +483,29 @@ describe("extensión hanniorq", () => {
 		await emit(pi, "turn_start", {}, ctx);
 		// el agente usa herramientas: una de memoria + una normal
 		await emit(pi, "tool_execution_start", { toolName: "mem_save", toolCallId: "t1", args: {} }, ctx);
+		await emit(
+			pi,
+			"tool_execution_end",
+			{
+				toolName: "mem_save",
+				toolCallId: "t1",
+				result: { content: [{ type: "text", text: "Saved observation #1: rail" }] },
+				isError: false,
+			},
+			ctx,
+		);
 		await emit(pi, "tool_execution_start", { toolName: "search_files", toolCallId: "t2", args: {} }, ctx);
 		// fin de turno → widget
 		await emit(pi, "turn_end", {}, ctx);
 
 		const widget = widgets.get("hanniorq-turn");
 		expect(widget).toBeDefined();
-		const line = (widget as string[])[0];
-		expect(line).toContain("memoria: +1");
-		expect(line).toContain("tools: mem_save, search_files");
+		const lines = widget as string[];
+		expect(lines[0]).toContain("tools: mem_save, search_files");
+		// La última línea del turno resume la memoria: qué cambió, muy corto.
+		expect(lines[lines.length - 1]).toContain("hannigram → memory: +1 nuevo");
 		// sin ficha sODD no se pinta nada de sODD (ni "activo" ni "inactivo")
-		expect(line).not.toContain("sODD:");
+		expect(lines[0]).not.toContain("sODD:");
 	});
 
 	it("marca sODD tocado cuando se usa /task", async () => {

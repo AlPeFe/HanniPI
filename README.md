@@ -69,6 +69,8 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 /hanniorq resume [<slug>]          # recupera contexto: mem_context → mem_search → ficha
 ```
 
+- **Línea de memoria al cerrar el turno:** si el turno usó HanniGram, la última línea del output lo resume — `hannigram → memory: +1 nuevo · ~2 update · -1 borrado · ≫3 leído` (solo lo que pasó; `nuevo` vs `update` sale del resultado de `mem_save`). Si el turno no tocó la memoria, no se pinta nada.
+
 **El resumen de `/hanniorq close`** incluye una sección **Memoria (HanniGram)** que refleja cómo se ha trabajado la memoria en la sesión: observaciones leídas, espejo de la ficha (topic `odd/<slug>/tasks`) y resumen de sesión. Si el daemon de HanniGram no está disponible, se marca `PENDIENTE` en vez de inventar el guardado.
 
 ### 🔌 Gestión de extensiones
