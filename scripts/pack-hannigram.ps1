@@ -99,7 +99,7 @@ function Get-HanniGramRelease($tag) {
         return @{
             tag = if ($tag) { $tag } elseif ($info.version) { $info.version } else { "local" }
             sums = Get-ShaMapFromText (Get-Content $sumsPath -Raw)
-            download = { param($name) Join-Path $MirrorDir $name }
+            dir = $MirrorDir
             versionInfo = $info
         }
     }
@@ -115,13 +115,20 @@ function Get-HanniGramRelease($tag) {
     return @{
         tag = $release.tag_name
         sums = $null
-        download = { param($name) $assets[$name] }
         assets = $assets
+        versionInfo = $null
     }
 }
 
+# Ruta local (mirror) o URL del asset. Se resuelve aqui, no en una clausura: un scriptblock
+# de PowerShell no conserva las variables locales de la funcion que lo creo.
+function Get-ReleaseAssetSource($release, $name) {
+    if ($release.dir) { return (Join-Path $release.dir $name) }
+    return $release.assets[$name]
+}
+
 function Get-ReleaseAssetBytes($release, $name) {
-    $source = & $release.download $name
+    $source = Get-ReleaseAssetSource $release $name
     if (-not $source) { throw "La release $($release.tag) no trae $name" }
     if ($MirrorDir) { return (Get-Content -Path $source -Raw) }
     $content = (Invoke-WebRequest -Uri $source -UseBasicParsing -Headers @{ "User-Agent" = "hannipi-pack-hannigram" }).Content
@@ -130,7 +137,7 @@ function Get-ReleaseAssetBytes($release, $name) {
 }
 
 function Save-ReleaseAsset($release, $name, $dest) {
-    $source = & $release.download $name
+    $source = Get-ReleaseAssetSource $release $name
     if (-not $source) { throw "La release $($release.tag) no trae $name" }
     if ($MirrorDir) {
         Copy-Item $source $dest -Force
@@ -149,8 +156,8 @@ if ($Check) {
     Write-Step "Pin actual de HanniGram"
     Write-Ok "$($pin.tag) ($($pin.sha256)) commit $($pin.commit)"
     $latest = Get-HanniGramRelease $null
-    $latestSha = (& $latest.download $AssetName)
-    if (-not $latestSha) { throw "La ultima release de $Repo no trae $AssetName" }
+    $latestSource = Get-ReleaseAssetSource $latest $AssetName
+    if (-not $latestSource) { throw "La ultima release de $Repo no trae $AssetName" }
     if ($latest.tag -eq $pin.tag) {
         Write-Ok "al dia: la ultima release de HanniGram es $($latest.tag)"
         return
