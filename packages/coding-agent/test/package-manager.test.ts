@@ -214,8 +214,11 @@ Content`,
 		});
 
 		it("should resolve symlinked user and project resources once", async () => {
+			// homedir() usa HOME en POSIX y USERPROFILE en Windows: se fijan los dos.
 			const previousHome = process.env.HOME;
+			const previousUserProfile = process.env.USERPROFILE;
 			process.env.HOME = tempDir;
+			process.env.USERPROFILE = tempDir;
 
 			try {
 				const sharedDir = join(tempDir, "shared-resources");
@@ -277,6 +280,11 @@ Content`,
 					delete process.env.HOME;
 				} else {
 					process.env.HOME = previousHome;
+				}
+				if (previousUserProfile === undefined) {
+					delete process.env.USERPROFILE;
+				} else {
+					process.env.USERPROFILE = previousUserProfile;
 				}
 			}
 		});
@@ -357,8 +365,11 @@ Content`,
 		});
 
 		it("should use ~/.agents as baseDir for user .agents skills", async () => {
+			// homedir() usa HOME en POSIX y USERPROFILE en Windows: se fijan los dos.
 			const previousHome = process.env.HOME;
+			const previousUserProfile = process.env.USERPROFILE;
 			process.env.HOME = tempDir;
+			process.env.USERPROFILE = tempDir;
 
 			try {
 				const agentsBaseDir = join(tempDir, ".agents");
@@ -377,6 +388,11 @@ Content`,
 					delete process.env.HOME;
 				} else {
 					process.env.HOME = previousHome;
+				}
+				if (previousUserProfile === undefined) {
+					delete process.env.USERPROFILE;
+				} else {
+					process.env.USERPROFILE = previousUserProfile;
 				}
 			}
 		});
@@ -500,8 +516,11 @@ Content`,
 		});
 
 		it("should keep ~/.agents/skills user-scoped when cwd is under home in a non-git directory", async () => {
+			// homedir() usa HOME en POSIX y USERPROFILE en Windows: se fijan los dos.
 			const previousHome = process.env.HOME;
+			const previousUserProfile = process.env.USERPROFILE;
 			process.env.HOME = tempDir;
+			process.env.USERPROFILE = tempDir;
 
 			try {
 				const cwd = join(tempDir, "scratch", "nested");
@@ -532,12 +551,20 @@ Content`,
 				} else {
 					process.env.HOME = previousHome;
 				}
+				if (previousUserProfile === undefined) {
+					delete process.env.USERPROFILE;
+				} else {
+					process.env.USERPROFILE = previousUserProfile;
+				}
 			}
 		});
 
 		it("should dedupe user skill entries when ~/.pi/agent/skills is a symlink to ~/.agents/skills", async () => {
+			// homedir() usa HOME en POSIX y USERPROFILE en Windows: se fijan los dos.
 			const previousHome = process.env.HOME;
+			const previousUserProfile = process.env.USERPROFILE;
 			process.env.HOME = tempDir;
+			process.env.USERPROFILE = tempDir;
 
 			try {
 				const agentSkillsDir = join(agentDir, "skills");
@@ -560,6 +587,11 @@ Content`,
 					delete process.env.HOME;
 				} else {
 					process.env.HOME = previousHome;
+				}
+				if (previousUserProfile === undefined) {
+					delete process.env.USERPROFILE;
+				} else {
+					process.env.USERPROFILE = previousUserProfile;
 				}
 			}
 		});
@@ -1614,8 +1646,11 @@ Content`,
 	describe("pattern filtering in top-level arrays", () => {
 		// #10765
 		it("should expand ~ in exclusion and exact patterns", async () => {
+			// homedir() usa HOME en POSIX y USERPROFILE en Windows: se fijan los dos.
 			const previousHome = process.env.HOME;
+			const previousUserProfile = process.env.USERPROFILE;
 			process.env.HOME = tempDir;
+			process.env.USERPROFILE = tempDir;
 
 			try {
 				const skillsDir = join(tempDir, "extra", "skills");
@@ -1639,6 +1674,11 @@ Content`,
 					delete process.env.HOME;
 				} else {
 					process.env.HOME = previousHome;
+				}
+				if (previousUserProfile === undefined) {
+					delete process.env.USERPROFILE;
+				} else {
+					process.env.USERPROFILE = previousUserProfile;
 				}
 			}
 		});
