@@ -55,7 +55,7 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 - El **resumen** (con la sección de memoria HanniGram) solo se genera en `/hanniorq close` y solo si hubo ficha.
 - **Delegación CONDICIONAL:** sODD decide: si la ficha activa es grande y **spliteable** (pasos independientes), cada parte se delega con la tool `subagent` (ficha recortada + paso como contexto). Un solo bloque se ejecuta inline. **Opciones de forzado**: escribe "delega" en tu petición para forzar delegación, o "no delegues" para prohibirla.
 - **Widget de flota:** mientras hay subagentes trabajando, el widget `hanniorq-fleet` se muestra en la TUI con un spinner por worker y la tarea que está haciendo (adaptación del fleet widget de pi-subagents a sODD: la ficha `odd/tasks/` es la fuente de verdad).
-- **Rail derecho:** la columna derecha muestra proyecto, memoria HanniGram, sODD, **las tareas** (la tool `todo`, o los pasos de la ficha) y los cambios del worktree. Las tareas largas se envuelven en varias líneas y el ancho de la columna se ajusta con `ctrl+alt+→` / `ctrl+alt+←` o `/hanniorq rail <n>` (20-100 columnas, se recuerda en `settings.json`); `ctrl+alt+t` pliega/despliega las tareas.
+- **Rail derecho:** la columna derecha muestra proyecto, memoria HanniGram, sODD, **las tareas** (la tool `todo`, o los pasos de la ficha), **MCP** (servidores configurados y su estado, o por qué no hay ninguno) y los cambios del worktree. Las tareas largas se envuelven en varias líneas y el ancho de la columna se ajusta con `ctrl+alt+→` / `ctrl+alt+←` o `/hanniorq rail <n>` (20-100 columnas, se recuerda en `settings.json`); `ctrl+alt+t` pliega/despliega las tareas.
 
 **Comandos:**
 
@@ -74,7 +74,12 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 ### 🔌 Gestión de extensiones
 
 - **Paquetes por defecto** (activos siempre): `pi-mcp-adapter`, `pi-subagents`, `pi-web-access`.
-- **`/packages`** — lista los paquetes con su estado, instala, actualiza (uno o todos) y elimina desde la TUI.
+- **`/packages`** — lista los paquetes con su estado (ámbito, instalado, updates disponibles), instala/actualiza/elimina y **busca en el catálogo** (`c`): los paquetes nativos de Pi publicados en npm con el keyword `pi-package` (la misma galería que [pi.dev/packages](https://pi.dev/packages)). Elegir un resultado instala `npm:<nombre>`.
+
+### 🔗 MCP
+
+- Configuración en `~/.pi/agent/mcp.json` (global) y `.pi/mcp.json` (proyecto), con la forma `mcpServers`; también hay CLI: `hanni mcp add|remove|list`.
+- El rail derecho muestra los servidores MCP configurados con su estado (`conectado`, `sin conectar`, `desactivado`, `login pendiente`, `caído`) y avisa si la extensión MCP está desactivada en `settings.json` (por ejemplo `"-builtin:mcp"`).
 
 ## Instalación
 
