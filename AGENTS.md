@@ -3,7 +3,7 @@
 ## Repository
 
 - HanniPI is standalone: `origin` is `AlPeFe/HanniPI`; there is no `upstream` remote and pi is not synced.
-- Releases are manual (lockstep bump + Windows x64 binary + GitHub release). See `.pi/skills/release.md`.
+- Releases are manual (lockstep bump + Windows x64 binary + HanniGram daemon asset + GitHub release). See `.pi/skills/release.md`.
 
 ## Conversational Style
 
