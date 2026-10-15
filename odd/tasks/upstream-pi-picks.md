@@ -28,7 +28,15 @@ Verify: cada tanda aplica con `git cherry-pick -n`, el árbol compila (`tsc --no
 4. Verificación: `npx vitest run <ficheros tocados>`, suite completa comparada con `origin/main`, `npx tsc --noEmit`, `npx biome check`, y build del binario con **bun 1.4.2**.
 5. Release (patch) si la tanda es visible para el usuario.
 
-## Tanda 1 (sondada limpia, alto valor) — pendiente de OK
+## Tanda 1 (sondada limpia, alto valor) — **HECHA** (`192e0a2c2`, 29 commits)
+
+Aplicada con `git cherry-pick -x` (procedencia en cada commit) + un commit de adaptación de tests a Windows. Verificado: `tsc` sin errores nuevos, biome limpio, suite con los **mismos 115 fallos que `main`** (entorno Windows/datos de modelos), binario compilado con bun 1.4.2 y arranca (`pi.exe --version`).
+
+Saltado y movido a la tanda 2: `6f2f164ab` (restaurar tools activas al reanudar) depende de `ddaa0a034` (`+name`/`-name` en `--tools`), que necesita resolución manual.
+
+Recuperado a mano: `550f1f3ec` (retry "The service is temporarily unavailable") solo con el cambio de código; su test choca con el nuestro.
+
+Lista aplicada:
 
 Windows / standalone / automatización:
 - `1ffb6bd62` **.env autoload off en el binario standalone** (bun carga el `.env` del cwd en `process.env`): 1 línea en `scripts/build-binaries.sh`.
@@ -95,7 +103,7 @@ Codemode:
 
 ## Siguiente
 
-Esperar OK para la tanda 1 (≈28 commits, sondada limpia). Después: tests + `npm run check` + binario, y release patch.
+Tanda 2 (con mano): `ddaa0a034` + `6f2f164ab` juntos (tools `+name`/`-name`), `d7f7e0dfe` (política de proveedor para `--model`), `195120a91` (OpenCode a endpoints de inference), los 6 de MCP, `c30840c2e` (tools ocultas al prompt), `d4d53612b` (fallback Anthropic), `87f9a3641` y los de codemode.
 
 ## Notas
 
