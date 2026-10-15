@@ -1,6 +1,6 @@
 ---
 topic_key: odd/hannigram-fuente-del-asset/tasks
-status: active
+status: done
 base: 4dd21c769
 ---
 # HanniGram es la fuente del asset (pinneado)
@@ -26,7 +26,7 @@ Verify: mirror local de `HanniGram/artifacts` → el script resuelve el pin, ver
 
 ## Siguiente
 
-Nada pendiente en este frente. El asset lo publica HanniGram en cada tag `v*` y HanniPI lo adopta con `-Tag <nueva> -WritePin` cuando `-Check` avise. La instalación completa (`hanni-setup.ps1`) se probará de verdad en el próximo `hanni update` del usuario.
+Nada pendiente en este frente: la release `v0.1.0` de HanniGram está publicada, el pin vive en `hannigram-version.json` y el instalador instala la extensión. El asset va dentro de la release de HanniPI v0.2.8 (`odd/tasks/release-0.2.8-hannipi.md`). Cuando HanniGram saque otra release, `-Check` avisará (exit 1) y se adopta con `-Tag <nueva> -WritePin`.
 
 ## Verificación funcional
 

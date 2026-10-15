@@ -20,11 +20,11 @@ Verify: `settings.railWidth` se clampa y persiste; el layout acepta anchos nuevo
 - [x] S3 Teclas `app.rail.wider` / `app.rail.narrower` (ctrl+alt+→ / ctrl+alt+←) + wiring en `interactive-mode` (settings → layout → invalidar el widget → repaint) y `/hotkeys`.
 - [x] S4 `ExtensionUIContext.getRailWidth()/setRailWidth()` (runner, TUI interactiva, RPC) y `/hanniorq rail <n>`.
 - [x] S5 `hanniorq`: `RailText` reconstruye el contenido al cambiar el ancho y las tareas se envuelven (máx. 3 líneas, "…" solo si aún no cabe).
-- [x] S6 Docs (`README`), ficha y commits atómicos.
+- [x] S6 Docs (`README`), ficha y commits atómicos. Publicado en la release v0.2.8-hannipi.
 
 ## Siguiente
 
-Cerrada salvo prueba manual en una terminal real (la TUI no se puede manejar desde la sesión del agente).
+Prueba manual en una terminal real: abrir `hanni`, `/hanniorq rail 60`, comprobar que las tareas se ven enteras y que `ctrl+alt+←/→` ajustan el ancho (persistido en `settings.json`). Requiere `hanni update` a v0.2.8 (`odd/tasks/release-0.2.8-hannipi.md`): el binario instalado era 0.2.7.
 
 ## Verificación funcional
 
