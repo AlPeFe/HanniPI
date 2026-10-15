@@ -477,6 +477,7 @@ function buildSessionOptions(
 			cliProvider: parsed.provider,
 			cliModel: parsed.model,
 			cliThinking: parsed.thinking,
+			inlineApiKey: Boolean(parsed.apiKey),
 			modelRuntime,
 		});
 		if (resolved.warning) {
@@ -782,6 +783,7 @@ export async function main(args: string[], options?: MainOptions) {
 				additionalPromptTemplatePaths: resolvedPromptTemplatePaths,
 				additionalThemePaths: resolvedThemePaths,
 				noExtensions: parsed.noExtensions,
+				disabledBuiltinExtensions: parsed.noMcp ? ["mcp"] : undefined,
 				noSkills: parsed.noSkills,
 				noPromptTemplates: parsed.noPromptTemplates,
 				noThemes: parsed.noThemes,

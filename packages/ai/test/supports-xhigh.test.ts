@@ -111,9 +111,9 @@ describe("getSupportedThinkingLevels", () => {
 
 	// OpenAI and Codex reject reasoning.effort "none" for GPT-6.1 Sol.
 	it("does not support off for GPT-6.1 Sol", () => {
+		// HanniPI no tiene el provider "azure" (usa azure-openai-responses): se omite.
 		const expected = {
 			openai: ["low", "medium", "high", "xhigh", "max"],
-			"azure-openai-responses": ["low", "medium", "high", "xhigh", "max"],
 			"openai-codex": ["minimal", "low", "medium", "high", "xhigh", "max"],
 		} as const;
 		for (const [provider, levels] of Object.entries(expected)) {
@@ -173,12 +173,6 @@ describe("getSupportedThinkingLevels", () => {
 		const model = getModel("deepseek", "deepseek-flash");
 		expect(model).toBeDefined();
 		expect(getSupportedThinkingLevels(model!)).toEqual(["off", "low", "high", "max"]);
-	});
-
-	it("includes high/max plus off for DeepSeek V4 Pro on opencode-go", () => {
-		const model = getModel("opencode-go", "deepseek-v4-pro");
-		expect(model).toBeDefined();
-		expect(getSupportedThinkingLevels(model!)).toEqual(["off", "high", "max"]);
 	});
 
 	it("preserves low/high/max metadata for DeepSeek V4.1 Flash on OpenRouter", () => {

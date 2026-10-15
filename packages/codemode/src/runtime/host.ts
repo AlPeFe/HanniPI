@@ -198,6 +198,13 @@ class Execution {
 		}
 		this.worker = worker;
 		worker.on("message", (message: unknown) => {
+			// Node 24/26 --watch leaks dependency reports onto the worker channel (nodejs/node#65044).
+			if (
+				typeof message === "object" &&
+				message !== null &&
+				("watch:import" in message || "watch:require" in message)
+			)
+				return;
 			// An exception here would be uncaught in the host process and leave the execution unsettled.
 			try {
 				this.handleMessage(message);
