@@ -4,6 +4,7 @@
 # Uso (doble clic en HANNI.bat, o directo):
 #   powershell -ExecutionPolicy Bypass -File hanni-setup.ps1
 #   powershell -ExecutionPolicy Bypass -File hanni-setup.ps1 -Action install -Yes
+#   powershell -ExecutionPolicy Bypass -File hanni-setup.ps1 -Action update -HannigramSource latest
 #   powershell -ExecutionPolicy Bypass -File hanni-setup.ps1 -Action uninstall
 #
 # Antes de instalar/actualizar/desinstalar se PARAN todos los procesos de Hanni:
@@ -13,22 +14,34 @@
 #
 # HanniGram (la memoria) es obligatorio: la release TIENE que traer
 # hannigram-windows-x64.zip. Si falta, el script aborta antes de tocar nada.
+# El asset incluye el daemon, el CLI y la extension de las tools mem_*; con
+# -HannigramSource latest se toma el asset de la ultima release de AlPeFe/HanniGram
+# en vez del pinneado en la release de HanniPI.
 
 param(
     [ValidateSet("menu", "install", "update", "uninstall")]
     [string]$Action = "menu",
     [switch]$Yes,
-    [switch]$SkipStop
+    [switch]$SkipStop,
+    # pinned = daemon pinneado en la release de HanniPI (una sola descarga
+    # atomica, recomendado); latest = ultima release de AlPeFe/HanniGram.
+    [ValidateSet("pinned", "latest")]
+    [string]$HannigramSource = "pinned"
 )
 
 $ErrorActionPreference = "Stop"
 
 $Repo = "AlPeFe/HanniPI"
+$HgmRepo = "AlPeFe/HanniGram"
 $Asset = "pi-windows-x64.zip"
 $HgmAsset = "hannigram-windows-x64.zip"
 $InstallDir = Join-Path $env:LOCALAPPDATA "HanniPI"
 $HgmDir = Join-Path $InstallDir "hannigram"
 $BinName = "hanni.exe"
+# El harness descubre extensiones en <agentDir>/extensions (por defecto ~/.pi/agent).
+$AgentDir = $env:HANNI_CODING_AGENT_DIR
+if (-not $AgentDir) { $AgentDir = Join-Path $env:USERPROFILE ".pi\agent" }
+$ExtDir = Join-Path $AgentDir "extensions\hannigram"
 
 function Write-Title($text) {
     Write-Host ""
@@ -134,6 +147,10 @@ function Get-ShaMap($release) {
     $sumsPath = Join-Path $env:TEMP "hanni-SHA256SUMS"
     $url = "https://github.com/$Repo/releases/download/$($release.tag_name)/SHA256SUMS"
     Invoke-WebRequest -Uri $url -OutFile $sumsPath -UseBasicParsing
+    return Get-ShaMapFromPath $sumsPath
+}
+
+function Get-ShaMapFromPath($sumsPath) {
     $map = @{}
     foreach ($line in Get-Content $sumsPath) {
         if (-not $line.Trim()) { continue }
@@ -219,6 +236,47 @@ function Test-HanniGramDaemon($server, $timeoutSeconds = 45) {
     return $false
 }
 
+# Stage del asset de HanniGram: o el pinneado en la release de HanniPI, o la
+# ultima release de HanniGram (daemon + CLI + extension). Devuelve el staging.
+function Stage-HanniGram($release, $shaMap) {
+    if ($HannigramSource -eq "latest") {
+        Write-Host "Buscando la ultima release de $HgmRepo (HannigramSource=latest) ..." -ForegroundColor Cyan
+        $hgmRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/$HgmRepo/releases/latest" `
+            -Headers @{ "User-Agent" = "hanni-setup" }
+        Write-Ok "release $($hgmRelease.tag_name)"
+        $sumsPath = Join-Path $env:TEMP "hannigram-SHA256SUMS"
+        Invoke-WebRequest -Uri "https://github.com/$HgmRepo/releases/download/$($hgmRelease.tag_name)/SHA256SUMS" -OutFile $sumsPath -UseBasicParsing
+        $zip = Join-Path $env:TEMP $HgmAsset
+        Invoke-WebRequest -Uri "https://github.com/$HgmRepo/releases/download/$($hgmRelease.tag_name)/$HgmAsset" -OutFile $zip -UseBasicParsing
+        Verify-Asset $zip $HgmAsset (Get-ShaMapFromPath $sumsPath)
+    } else {
+        $zip = Download-Asset $release $HgmAsset (Join-Path $env:TEMP $HgmAsset)
+        Verify-Asset $zip $HgmAsset $shaMap
+    }
+
+    $stage = Join-Path $env:TEMP "hannigram-staging"
+    Expand-Flattened $zip $stage
+    if (-not (Test-Path (Join-Path $stage "HanniGram.Server.exe"))) {
+        throw "No encuentro HanniGram.Server.exe tras extraer $HgmAsset"
+    }
+    return $stage
+}
+
+# Las tools mem_* llegan como extension del harness dentro del asset; el harness
+# las descubre sola en <agentDir>/extensions.
+function Install-HanniGramExtension($hgmSource) {
+    $source = Join-Path $hgmSource "pi-extension"
+    if (-not (Test-Path (Join-Path $source "package.json"))) {
+        Write-Warn "El asset de HanniGram no trae pi-extension; las tools mem_* quedan sin instalar (la memoria sigue funcionando)."
+        return $false
+    }
+    if (Test-Path $ExtDir) { Remove-Item $ExtDir -Recurse -Force }
+    New-Item -ItemType Directory -Path $ExtDir -Force | Out-Null
+    Get-ChildItem $source -Force | Copy-Item -Destination $ExtDir -Recurse -Force
+    Write-Ok "extension mem_* instalada en $ExtDir"
+    return $true
+}
+
 function Install-All([bool]$isUpdate) {
     if ($isUpdate) { Write-Title "Actualizar HanniPI + HanniGram" }
     else { Write-Title "Instalar HanniPI + HanniGram" }
@@ -229,8 +287,8 @@ function Install-All([bool]$isUpdate) {
     # HanniPI sin HanniGram no tiene memoria, asi que el daemon es obligatorio. Se
     # descarga y valida TODO antes de tocar la instalacion actual: si falta el asset
     # o un checksum no cuadra, no se borra nada de lo que ya funcionaba.
-    if (-not $shaMap.ContainsKey($HgmAsset)) {
-        throw "La release $($release.tag_name) no incluye $HgmAsset, asi que no puedo instalar HanniGram. HanniPI sin memoria no sirve: arregla la release (scripts/pack-hannigram.ps1) y reintenta."
+    if ($HannigramSource -eq "pinned" -and -not $shaMap.ContainsKey($HgmAsset)) {
+        throw "La release $($release.tag_name) no incluye $HgmAsset, asi que no puedo instalar HanniGram. HanniPI sin memoria no sirve: arregla la release (scripts/pack-hannigram.ps1) o instala con -HannigramSource latest."
     }
 
     $piStage = Join-Path $env:TEMP "hanni-pi-staging"
@@ -242,11 +300,7 @@ function Install-All([bool]$isUpdate) {
         throw "No encuentro $BinName tras extraer $Asset"
     }
 
-    $hgmStage = Join-Path $env:TEMP "hannigram-staging"
-    Stage-Asset $release $shaMap $HgmAsset $hgmStage
-    if (-not (Test-Path (Join-Path $hgmStage "HanniGram.Server.exe"))) {
-        throw "No encuentro HanniGram.Server.exe tras extraer $HgmAsset"
-    }
+    $hgmStage = Stage-HanniGram $release $shaMap
 
     [void](Stop-HanniProcesses)
 
@@ -261,6 +315,7 @@ function Install-All([bool]$isUpdate) {
     $env:HANNIGRAM_DAEMON = $server
     Add-UserPath $InstallDir
     Add-UserPath $HgmDir
+    [void](Install-HanniGramExtension $HgmDir)
 
     $ver = $null
     try { $ver = & (Join-Path $InstallDir $BinName) --version 2>$null } catch { }
@@ -294,6 +349,14 @@ function Uninstall-All {
     Remove-UserPath $InstallDir
     Remove-UserPathLike "*\HanniPI\hannigram*"
     Remove-UserPath $HgmDir
+    if (Test-Path $ExtDir) {
+        try {
+            Remove-Item $ExtDir -Recurse -Force
+            Write-Ok "borrada la extension mem_* $ExtDir"
+        } catch {
+            Write-Warn "no pude borrar $ExtDir : $($_.Exception.Message)"
+        }
+    }
     [Environment]::SetEnvironmentVariable("HANNIGRAM_DAEMON", $null, "User")
     if ($env:HANNIGRAM_DAEMON) { Remove-Item Env:\HANNIGRAM_DAEMON -ErrorAction SilentlyContinue }
     Write-Ok "PATH y HANNIGRAM_DAEMON limpiados"
