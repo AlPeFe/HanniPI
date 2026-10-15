@@ -207,6 +207,15 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			// Component factories are not supported in RPC mode - would need TUI access
 		},
 
+		getRailWidth(): number {
+			// The RPC host owns the layout, so there is no rail to measure or resize here.
+			return 0;
+		},
+
+		setRailWidth(_width: number): number {
+			return 0;
+		},
+
 		setFooter(_factory: unknown): void {
 			// Custom footer not supported in RPC mode - requires TUI access
 		},

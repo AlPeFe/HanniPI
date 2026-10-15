@@ -3,7 +3,13 @@ import { homedir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS } from "../src/core/http-dispatcher.ts";
-import { type Settings, SettingsManager } from "../src/core/settings-manager.ts";
+import {
+	DEFAULT_RAIL_WIDTH,
+	RAIL_MAX_WIDTH,
+	RAIL_MIN_WIDTH,
+	type Settings,
+	SettingsManager,
+} from "../src/core/settings-manager.ts";
 
 describe("SettingsManager", () => {
 	const testDir = join(process.cwd(), "test-settings-tmp");
@@ -531,6 +537,22 @@ describe("SettingsManager", () => {
 		expect(reloadedManager.getFullscreenExitOutput()).toBe("transcript");
 		expect(reloadedManager.getFullscreenScrollbar()).toBe("auto");
 		expect(reloadedManager.getFullscreenCopyOnSelect()).toBe(true);
+	});
+
+	// El ancho del rail derecho se clampa y persiste: fuera de rango cae al valor válido más cercano.
+	it("clamps and persists the right rail width", async () => {
+		const manager = SettingsManager.create(projectDir, agentDir);
+		expect(manager.getRailWidth()).toBe(DEFAULT_RAIL_WIDTH);
+
+		expect(manager.setRailWidth(48)).toBe(48);
+		await manager.flush();
+		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).railWidth).toBe(48);
+
+		expect(manager.setRailWidth(2)).toBe(RAIL_MIN_WIDTH);
+		expect(manager.setRailWidth(500)).toBe(RAIL_MAX_WIDTH);
+
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ railWidth: "ancho" }));
+		expect(SettingsManager.create(projectDir, agentDir).getRailWidth()).toBe(DEFAULT_RAIL_WIDTH);
 	});
 
 	// #9758: wheel scrolling defaults to auto, persists line counts, and ignores invalid values.

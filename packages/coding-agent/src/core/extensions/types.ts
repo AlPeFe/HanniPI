@@ -192,6 +192,12 @@ export interface ExtensionUIContext {
 		options?: ExtensionWidgetOptions,
 	): void;
 
+	/** Current right rail column width in columns (0 when the TUI has no rail or it is hidden). */
+	getRailWidth(): number;
+
+	/** Resize the right rail (clamped) and repaint it; returns the applied width. */
+	setRailWidth(width: number): number;
+
 	/** Set a custom footer component, or undefined to restore the built-in footer.
 	 *
 	 * The factory receives a FooterDataProvider for data not otherwise accessible:

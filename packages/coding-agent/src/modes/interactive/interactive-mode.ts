@@ -441,6 +441,7 @@ export class InteractiveMode {
 	private documentContainer: Container;
 	private transcriptScrollView: TuiLayouts.ScrollView | undefined;
 	private fullscreenLayoutRoot: Component | undefined;
+	private resizeRailWidth: ((width: number) => void) | undefined;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
 	private defaultEditor: CustomEditor;
@@ -918,6 +919,7 @@ export class InteractiveMode {
 			widgetsBelow: this.widgetContainerBelow,
 			footer: this.footerContainer,
 			rightRail: this.widgetContainerRight,
+			rightRailWidth: this.settingsManager.getRailWidth(),
 			rightRailVisible: () => this.extensionWidgetsRight.size > 0,
 			scrollbar: this.settingsManager.getFullscreenScrollbar(),
 			scrollbarTrackStyle: (text) => theme.fg("scrollbarTrack", text),
@@ -925,6 +927,7 @@ export class InteractiveMode {
 		});
 		this.transcriptScrollView = viewport.transcript;
 		this.fullscreenLayoutRoot = viewport.root;
+		this.resizeRailWidth = viewport.setRightRailWidth;
 		this.mountInteractiveTui(this.renderer, [
 			this.documentContainer,
 			this.pendingMessagesContainer,
@@ -2253,6 +2256,22 @@ export class InteractiveMode {
 	}
 
 	/**
+	 * Resize the right rail by `delta` columns (clamped) and repaint it. Rail widgets cache their
+	 * content per width, so they are invalidated to rebuild at the new width.
+	 */
+	private adjustRailWidth(delta: number, options: { announce?: boolean } = {}): number {
+		const applied = this.settingsManager.setRailWidth(this.settingsManager.getRailWidth() + delta);
+		this.resizeRailWidth?.(applied);
+		for (const widget of this.extensionWidgetsRight.values()) widget.invalidate?.();
+		this.ui.requestRender();
+		if (options.announce !== false) {
+			const chat = Math.max(0, this.ui.terminal.columns - applied);
+			this.showExtensionNotify(`Rail derecho: ${applied} columnas (chat ${chat}).`, "info");
+		}
+		return applied;
+	}
+
+	/**
 	 * Set an extension widget (string array or custom component).
 	 */
 	private setExtensionWidget(
@@ -2521,6 +2540,8 @@ export class InteractiveMode {
 			setWorkingIndicator: (options) => this.setWorkingIndicator(options),
 			setHiddenThinkingLabel: (label) => this.setHiddenThinkingLabel(label),
 			setWidget: (key, content, options) => this.setExtensionWidget(key, content, options),
+			getRailWidth: () => this.settingsManager.getRailWidth(),
+			setRailWidth: (width) => this.adjustRailWidth(width - this.settingsManager.getRailWidth()),
 			setFooter: (factory) => this.setExtensionFooter(factory),
 			setHeader: (factory) => this.setExtensionHeader(factory),
 			setTitle: (title) => this.ui.terminal.setTitle(title),
@@ -2970,6 +2991,8 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.model.select", () => this.showModelSelector());
 		this.defaultEditor.onAction("app.tools.expand", () => this.toggleToolOutputExpansion());
 		this.defaultEditor.onAction("app.thinking.toggle", () => this.toggleThinkingBlockVisibility());
+		this.defaultEditor.onAction("app.rail.wider", () => this.adjustRailWidth(4));
+		this.defaultEditor.onAction("app.rail.narrower", () => this.adjustRailWidth(-4));
 		this.defaultEditor.onAction("app.editor.external", () => void this.handleOpenExternalEditor());
 		this.defaultEditor.onAction(
 			"app.message.copy",
@@ -6758,6 +6781,8 @@ export class InteractiveMode {
 		const selectModel = this.getAppKeyDisplay("app.model.select");
 		const expandTools = this.getAppKeyDisplay("app.tools.expand");
 		const toggleThinking = this.getAppKeyDisplay("app.thinking.toggle");
+		const railWider = this.getAppKeyDisplay("app.rail.wider");
+		const railNarrower = this.getAppKeyDisplay("app.rail.narrower");
 		const externalEditor = this.getAppKeyDisplay("app.editor.external");
 		const cycleModelBackward = this.getAppKeyDisplay("app.model.cycleBackward");
 		const copyMessage = this.getAppKeyDisplay("app.message.copy");
@@ -6803,6 +6828,7 @@ export class InteractiveMode {
 | \`${selectModel}\` | Open model selector |
 | \`${expandTools}\` | Toggle tool output expansion |
 | \`${toggleThinking}\` | Toggle thinking block visibility |
+| \`${railWider}\` / \`${railNarrower}\` | Widen / narrow the right rail (tasks and memory) |
 | \`${externalEditor}\` | Edit message in external editor |
 | \`${copyMessage}\` | Copy selection or last assistant message |
 | \`${followUp}\` | Queue follow-up message |

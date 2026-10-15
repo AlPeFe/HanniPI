@@ -15,6 +15,11 @@ describe("Windows keybinding defaults", () => {
 		expect(useWindowsKeybindings("linux", { WT_SESSION: "session" })).toBe(false);
 	});
 
+	it("binds the right rail resize on both sides of the keyboard", () => {
+		expect(KEYBINDINGS["app.rail.wider"].defaultKeys).toBe("ctrl+alt+right");
+		expect(KEYBINDINGS["app.rail.narrower"].defaultKeys).toBe("ctrl+alt+left");
+	});
+
 	it("keeps non-Windows defaults on other platforms", () => {
 		expect(useWindowsKeybindings("linux", {})).toBe(false);
 		expect(useWindowsKeybindings("darwin", {})).toBe(false);

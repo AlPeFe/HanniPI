@@ -24,6 +24,19 @@ export interface ChatViewportOptions {
 export interface ChatViewport {
 	readonly root: Component;
 	readonly transcript: ScrollView;
+	/** Resize the right rail column (no-op when the viewport has no rail), e.g. when the user resizes it. */
+	readonly setRightRailWidth: (width: number) => void;
+}
+
+/**
+ * HStack whose rail column width can be changed without rebuilding the tree.
+ * `Stack` keeps the entry objects it lays out, so mutating `basis` applies on the next render.
+ */
+class ResizableHStack extends HStack {
+	setBasis(component: Component, basis: number): void {
+		const entry = this.entries.find((candidate) => candidate.component === component);
+		if (entry) entry.basis = basis;
+	}
 }
 
 /** Shared fullscreen transcript and fixed input-dock layout. */
@@ -50,7 +63,7 @@ export function createChatViewport(options: ChatViewportOptions): ChatViewport {
 	]);
 
 	if (options.rightRail === undefined) {
-		return { transcript, root: main };
+		return { transcript, root: main, setRightRailWidth: () => {} };
 	}
 
 	const rightRailWidth = options.rightRailWidth ?? 34;
@@ -58,18 +71,21 @@ export function createChatViewport(options: ChatViewportOptions): ChatViewport {
 	const rightRailVisible = options.rightRailVisible ?? (() => true);
 	const rightRail = options.rightRail;
 
+	const root = new ResizableHStack([
+		{ component: main, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+		{
+			component: rightRail,
+			basis: rightRailWidth,
+			grow: 0,
+			shrink: 0,
+			minSize: 0,
+			visible: (viewport) => viewport.width >= rightRailMinTerminalWidth && rightRailVisible(),
+		},
+	]);
+
 	return {
 		transcript,
-		root: new HStack([
-			{ component: main, basis: 0, grow: 1, shrink: 1, minSize: 1 },
-			{
-				component: rightRail,
-				basis: rightRailWidth,
-				grow: 0,
-				shrink: 0,
-				minSize: 0,
-				visible: (viewport) => viewport.width >= rightRailMinTerminalWidth && rightRailVisible(),
-			},
-		]),
+		root,
+		setRightRailWidth: (width: number) => root.setBasis(rightRail, Math.max(0, Math.floor(width))),
 	};
 }

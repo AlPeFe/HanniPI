@@ -23,6 +23,8 @@ export interface AppKeybindings {
 	"app.model.select": true;
 	"app.tools.expand": true;
 	"app.thinking.toggle": true;
+	"app.rail.wider": true;
+	"app.rail.narrower": true;
 	"app.session.toggleNamedFilter": true;
 	"app.editor.external": true;
 	"app.message.copy": true;
@@ -118,6 +120,14 @@ export const KEYBINDINGS = {
 	"app.thinking.toggle": {
 		defaultKeys: "ctrl+t",
 		description: "Toggle thinking blocks",
+	},
+	"app.rail.wider": {
+		defaultKeys: "ctrl+alt+right",
+		description: "Widen the right rail",
+	},
+	"app.rail.narrower": {
+		defaultKeys: "ctrl+alt+left",
+		description: "Narrow the right rail",
 	},
 	"app.session.toggleNamedFilter": {
 		defaultKeys: "ctrl+n",

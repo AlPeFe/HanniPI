@@ -26,6 +26,15 @@ const DEFAULT_COMPACTION_TOKEN_SETTINGS: Required<CompactionModelOverride> = {
 	keepRecentTokens: 20000,
 };
 
+/** Right rail column width in the fullscreen TUI (columns), clamped so chat keeps usable room. */
+export const DEFAULT_RAIL_WIDTH = 34;
+export const RAIL_MIN_WIDTH = 20;
+export const RAIL_MAX_WIDTH = 100;
+
+export function clampRailWidth(width: number): number {
+	return Math.max(RAIL_MIN_WIDTH, Math.min(RAIL_MAX_WIDTH, Math.round(width)));
+}
+
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
 	reserveTokens?: number; // default: 16384
@@ -185,6 +194,7 @@ export interface Settings {
 	tuiMode?: TuiMode; // default: "fullscreen"
 	fullscreenExitOutput?: FullscreenExitOutput; // default: "transcript"; no effect in regular TUI mode
 	fullscreenScrollbar?: ScrollViewScrollbar; // default: "auto"; no effect in regular TUI mode
+	railWidth?: number; // right rail column width in the fullscreen TUI (default 34, clamped to [20, 100])
 	fullscreenCopyOnSelect?: boolean; // default: true; no effect in regular TUI mode
 	fullscreenWheelScrollLines?: WheelScrollLines; // default: "auto"; lines per wheel event, 1-100
 }
@@ -1389,6 +1399,22 @@ export class SettingsManager {
 	getFullscreenScrollbar(): ScrollViewScrollbar {
 		const mode = this.settings.fullscreenScrollbar;
 		return mode === "always" || mode === "hidden" ? mode : "auto";
+	}
+
+	/** Right rail column width in the fullscreen TUI; ignores out-of-range values from settings.json. */
+	getRailWidth(): number {
+		const width = this.settings.railWidth;
+		if (typeof width !== "number" || !Number.isFinite(width)) return DEFAULT_RAIL_WIDTH;
+		return clampRailWidth(width);
+	}
+
+	/** Set the right rail width and return the applied (clamped) value. */
+	setRailWidth(width: number): number {
+		const applied = clampRailWidth(width);
+		this.globalSettings.railWidth = applied;
+		this.markModified("railWidth");
+		this.save();
+		return applied;
 	}
 
 	setFullscreenScrollbar(mode: ScrollViewScrollbar): void {
