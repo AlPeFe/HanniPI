@@ -30,7 +30,10 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
 const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	// Generic provider load, HTTP status, and server-side transient failures.
 	"overloaded",
+	"server_busy",
+	"servers are currently busy",
 	"currently experiencing high demand",
+	"model is at capacity",
 	"rate.?limit",
 	"too many requests",
 	"429",
@@ -40,7 +43,8 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"504",
 	"520",
 	"524",
-	"service.?unavailable",
+	// Also matches "The service is temporarily unavailable" (#10965).
+	"service.?(?:is.?)?(?:temporarily.?)?unavailable",
 	"server.?error",
 	"internal.?error",
 
@@ -48,6 +52,9 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	// "Provider returned error" responses (#2264).
 	"provider.?returned.?error",
 	"exceeded request buffer limit while retrying upstream",
+	// Gateway failure relaying the upstream response stream, sent as an OpenAI
+	// Responses `response.failed` event without an error code (#10920).
+	"unable to forward upstream",
 
 	// Network, proxy, and fetch transport failures. This includes OpenAI Codex
 	// raw-fetch failures such as "upstream connect", "connection refused", and

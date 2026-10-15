@@ -312,6 +312,12 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		return this.copyTextToClipboard(text);
 	}
 
+	/** Drop the text selection and multi-click history, e.g. before the host replaces the transcript. */
+	resetTextSelection(): void {
+		this.clearTextSelection();
+		this.lastClick = undefined;
+	}
+
 	/** The lines of the last rendered frame, one per terminal row, as written to the terminal. */
 	getScreenLines(): string[] {
 		return [...this.previousScreen];
@@ -706,7 +712,6 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 				if (this.applyMouseDispatchResult(event, result)) this.requestRender();
 				return { consume: true };
 			}
-			if (this.shouldDeferViewportInputToOverlay()) return undefined;
 			this.routeWheel(wheelEvent, wheelDelta);
 			return { consume: true };
 		}
