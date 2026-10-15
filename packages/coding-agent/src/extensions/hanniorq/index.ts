@@ -20,10 +20,9 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Key } from "@earendil-works/pi-tui";
+import { Key, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { ExtensionFactory, ExtensionUIContext, ToolDefinition } from "../../core/extensions/types.ts";
-import { ThemedText } from "../../modes/interactive/components/themed-text.ts";
 import { getMcpConnectionStatuses, subscribeMcpConnectionStatuses } from "../mcp/status.ts";
 import { ensureHanniGramDaemon } from "./hannigram-daemon.ts";
 
@@ -90,6 +89,10 @@ let railHidden = false;
 let railTasksHidden = false;
 /** Máximo de pasos listados en el rail; el resto se resume con "+N". */
 const MAX_RAIL_TODOS = 8;
+/** Ancho por defecto de la columna del rail; el usuario lo cambia con ctrl+alt+←/→ o /hanniorq rail <n>. */
+export const RAIL_WIDTH = 34;
+/** Líneas máximas por tarea: se envuelve el texto en varias líneas en vez de recortarlo. */
+const MAX_TODO_LINES = 3;
 /** Tecla que pliega/despliega los pasos sODD del rail. */
 const RAIL_TASKS_KEY = Key.ctrlAlt("t");
 
@@ -368,7 +371,6 @@ function updateSoddIndicator(ui: ExtensionUIContext, cwd: string): void {
 // TUI (placement "rightRail") y se refresca en cada evento de sesión/turno.
 // ---------------------------------------------------------------------------
 
-const RAIL_WIDTH = 32;
 const modifiedFilesCache = new Map<string, string[]>();
 const modifiedFilesRefresh = new Map<string, Promise<void>>();
 
@@ -377,6 +379,41 @@ let memoryCache: { up: boolean; checked: boolean } = { up: false, checked: false
 
 function clip(s: string, n: number): string {
 	return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+
+/**
+ * Envuelve el texto en líneas de `width` columnas (corte por palabras) con un máximo de
+ * `maxLines`; si no cabe, la última línea termina en "…". Así una tarea larga se lee entera
+ * en varias líneas en vez de recortarse a una sola.
+ */
+function wrapLines(text: string, width: number, maxLines: number): string[] {
+	const limit = Math.max(4, width);
+	const words = text.split(/\s+/).filter(Boolean);
+	const all: string[] = [];
+	let current = "";
+	for (const word of words) {
+		let candidate = current ? `${current} ${word}` : word;
+		if (candidate.length <= limit) {
+			current = candidate;
+			continue;
+		}
+		if (current) {
+			all.push(current);
+			candidate = word;
+		}
+		// Palabra sola más larga que la columna (una URL, un hash): se parte.
+		while (candidate.length > limit) {
+			all.push(candidate.slice(0, limit));
+			candidate = candidate.slice(limit);
+		}
+		current = candidate;
+	}
+	if (current) all.push(current);
+	if (all.length === 0) return [""];
+	if (all.length <= maxLines) return all;
+	const kept = all.slice(0, maxLines);
+	kept[maxLines - 1] = clip(kept[maxLines - 1]!, limit);
+	return kept;
 }
 
 /** Nombre del proyecto: owner/repo del git remote, o nombre del directorio. */
@@ -467,10 +504,10 @@ function railTodos(cwd: string): Array<{ done: boolean; text: string; current: b
 	return steps.map((t, i) => ({ done: t.done, text: t.text, current: i === current }));
 }
 
-/** Líneas del rail derecho (coloreadas con el tema vivo vía ui.theme). */
-function railLines(ui: ExtensionUIContext, cwd: string): string[] {
+/** Líneas del rail derecho (coloreadas con el tema vivo vía ui.theme) al ancho dado. */
+function railLines(ui: ExtensionUIContext, cwd: string, width: number = RAIL_WIDTH): string[] {
 	const theme = ui.theme;
-	const W = RAIL_WIDTH;
+	const W = Math.max(16, width);
 	const sep = theme.fg("border", "─".repeat(W));
 	const lines: string[] = [];
 
@@ -527,7 +564,9 @@ function railLines(ui: ExtensionUIContext, cwd: string): string[] {
 					: t.current
 						? theme.fg("warning", "▸")
 						: theme.fg("muted", "·");
-				lines.push(`${mark} ${clip(t.text, W - 3)}`);
+				wrapLines(t.text, W - 2, MAX_TODO_LINES).forEach((line, index) => {
+					lines.push(`${index === 0 ? `${mark} ` : "  "}${line}`);
+				});
 			});
 			if (todos.length > MAX_RAIL_TODOS) {
 				lines.push(theme.fg("muted", `… +${todos.length - MAX_RAIL_TODOS}`));
@@ -561,13 +600,43 @@ function railLines(ui: ExtensionUIContext, cwd: string): string[] {
 	return lines;
 }
 
+/**
+ * Texto del rail que se reconstruye cuando cambia el ancho de la columna: las tareas se
+ * envuelven al ancho real, así que un rail más ancho muestra más texto por línea.
+ */
+class RailText extends Text {
+	private readonly build: (contentWidth: number) => string;
+	private readonly minWidth: number;
+	private builtWidth = -1;
+
+	constructor(build: (contentWidth: number) => string, minWidth = 16) {
+		super("", 1, 1);
+		this.build = build;
+		this.minWidth = minWidth;
+	}
+
+	override invalidate(): void {
+		this.builtWidth = -1;
+		super.invalidate();
+	}
+
+	override render(width: number): string[] {
+		const contentWidth = Math.max(this.minWidth, width - 2);
+		if (contentWidth !== this.builtWidth) {
+			this.builtWidth = contentWidth;
+			this.setText(this.build(contentWidth));
+		}
+		return super.render(width);
+	}
+}
+
 /** Renderiza el rail derecho (widget "hanniorq-rail", placement rightRail). */
 function renderRail(ui: ExtensionUIContext, cwd: string): void {
 	if (railHidden) {
 		ui.setWidget("hanniorq-rail", undefined);
 		return;
 	}
-	ui.setWidget("hanniorq-rail", () => new ThemedText(() => railLines(ui, cwd).join("\n"), 1, 1), {
+	ui.setWidget("hanniorq-rail", () => new RailText((contentWidth) => railLines(ui, cwd, contentWidth).join("\n")), {
 		placement: "rightRail",
 	});
 }
@@ -895,6 +964,10 @@ export function createHanniorqExtension(
 								desc: "Reanuda el contexto de un proyecto: ¿hay memoria? (HanniGram) → índice ligero de decisiones + ficha activa. Sin releer todos los ficheros.",
 							},
 							{
+								cmd: "/hanniorq rail [n]",
+								desc: "Muestra u oculta el rail derecho; con un número fija su ancho en columnas (20-100) para leer las tareas enteras. También con ctrl+alt+←/→.",
+							},
+							{
 								cmd: "/hannigram init",
 								desc: "Instancia la memoria del proyecto: crea el proyecto en la BD de HanniGram + exporta .hannigram/memory.md local (para otros harness). Manual o cuando sODD lo considere (proyecto grande).",
 							},
@@ -1071,9 +1144,24 @@ export function createHanniorqExtension(
 						return;
 					}
 					case "rail": {
+						// /hanniorq rail        → oculta/muestra el rail
+						// /hanniorq rail <n>    → fija el ancho (columnas, 20-100) para leer mejor las tareas
+						const requested = rest[0] ? Number.parseInt(rest[0], 10) : Number.NaN;
+						if (Number.isFinite(requested)) {
+							const applied = ctx.ui.setRailWidth(requested);
+							railHidden = false;
+							renderRail(ctx.ui, cwd);
+							ctx.ui.notify(`Rail derecho: ${applied} columnas.`, "info");
+							return;
+						}
 						railHidden = !railHidden;
 						renderRail(ctx.ui, cwd);
-						ctx.ui.notify(railHidden ? "Rail derecho oculto." : "Rail derecho visible.", "info");
+						ctx.ui.notify(
+							railHidden
+								? "Rail derecho oculto."
+								: `Rail derecho visible (${ctx.ui.getRailWidth()} columnas). Cambia el ancho con ctrl+alt+←/→ o /hanniorq rail <n>.`,
+							"info",
+						);
 						return;
 					}
 					case "tasks": {

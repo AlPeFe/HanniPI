@@ -22,6 +22,7 @@ function createMockPi() {
 	const listeners = new Map<string, ((...args: any[]) => any)[]>();
 	const widgets = new Map<string, string[] | ((...args: any[]) => unknown)>();
 	const sentMessages: string[] = [];
+	let railWidth = 34;
 
 	const ui = {
 		notify: () => {},
@@ -29,6 +30,11 @@ function createMockPi() {
 		setWidget: (name: string, lines?: string[] | ((...args: any[]) => unknown)) => {
 			if (lines === undefined) widgets.delete(name);
 			else widgets.set(name, lines);
+		},
+		getRailWidth: () => railWidth,
+		setRailWidth: (width: number) => {
+			railWidth = Math.max(20, Math.min(100, Math.round(width)));
+			return railWidth;
 		},
 		theme: {
 			fg: (_color: string, text: string) => text,
@@ -66,11 +72,11 @@ async function emit(pi: ReturnType<typeof createMockPi>["pi"], event: string, pa
 	for (const h of handlers) await h(payload, ctx);
 }
 
-/** Texto del widget del rail derecho (se renderiza con ancho 32 como la TUI). */
-function railText(widgets: Map<string, string[] | ((...args: any[]) => unknown)>): string {
+/** Texto del widget del rail derecho, renderizado al ancho dado (por defecto, el de la TUI). */
+function railText(widgets: Map<string, string[] | ((...args: any[]) => unknown)>, width = 32): string {
 	const widget = widgets.get("hanniorq-rail");
 	return typeof widget === "function"
-		? (widget as () => { render(width: number): string[] })().render(32).join("\n")
+		? (widget as () => { render(width: number): string[] })().render(width).join("\n")
 		: "";
 }
 
@@ -171,6 +177,56 @@ describe("extensión hanniorq", () => {
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			expect(railText(widgets)).toContain("pendiente visible");
 			expect(railText(widgets)).toContain("tareas (1/2)");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("envuelve las tareas largas y las muestra enteras al ensanchar el rail", async () => {
+		const { listeners, widgets, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHanniorqExtension()(pi);
+		const root = mkdtempSync(join(tmpdir(), "hanniorq-rail-wrap-"));
+		try {
+			mkdirSync(join(root, "odd", "tasks"), { recursive: true });
+			writeFileSync(join(root, "odd", ".active"), "demo");
+			const long = "S1 redimensionar el rail derecho desde la TUI con atajos de teclado y un comando";
+			writeFileSync(join(root, "odd", "tasks", "demo.md"), `---\nstatus: active\n---\n## Pasos\n- [ ] ${long}\n`);
+			const ctx = { cwd: root, ui: (pi as any).ui };
+			await emit(pi, "session_start", {}, ctx);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+
+			// Ancho estrecho: el texto se reparte en varias líneas, no se corta a la primera.
+			const narrow = railText(widgets, 34).split("\n");
+			expect(narrow.some((line) => line.includes("comando"))).toBe(true);
+
+			// Más ancho: cabe en menos líneas.
+			const wide = railText(widgets, 100).split("\n");
+			expect(wide.find((line) => line.includes("redimensionar"))).toContain("comando");
+			expect(wide.length).toBeLessThan(narrow.length);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("/hanniorq rail <n> fija el ancho del rail", async () => {
+		const { registeredCommands, widgets, pi } = createMockPi();
+		createHanniorqExtension()(pi);
+		const root = mkdtempSync(join(tmpdir(), "hanniorq-rail-width-"));
+		try {
+			const ui = (pi as any).ui;
+			const ctx = { cwd: root, ui };
+			await registeredCommands.get("hanniorq")!.handler("rail 60", ctx);
+			expect(ui.getRailWidth()).toBe(60);
+			expect(widgets.has("hanniorq-rail")).toBe(true);
+
+			await registeredCommands.get("hanniorq")!.handler("rail", ctx);
+			expect(ui.getRailWidth()).toBe(60);
+			expect(widgets.has("hanniorq-rail")).toBe(false);
+
+			// Deja el rail visible otra vez: el estado es de módulo y afectaría a los tests siguientes.
+			await registeredCommands.get("hanniorq")!.handler("rail", ctx);
+			expect(widgets.has("hanniorq-rail")).toBe(true);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
