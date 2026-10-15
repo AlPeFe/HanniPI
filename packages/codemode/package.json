@@ -1,6 +1,6 @@
 {
   "name": "@earendil-works/pi-codemode",
-  "version": "0.2.9-hannipi",
+  "version": "0.2.10-hannipi",
   "description": "Sandboxed JavaScript execution where the only capability is calling injected tools",
   "type": "module",
   "main": "./dist/index.js",
