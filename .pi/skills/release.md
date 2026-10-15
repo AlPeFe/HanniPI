@@ -14,6 +14,11 @@ obligatorio: `hanni-setup.ps1` aborta sin él) + `SHA256SUMS` + los scripts `han
 `HANNI.bat`, y se marca como **latest**: el instalador `install.ps1` resuelve `releases/latest`
 (incluido `releases/latest/download/hanni-setup.ps1`).
 
+El asset de HanniGram lo construye y publica **el repo HanniGram** (tag `v*` → workflow
+`.github/workflows/release.yml` → `hannigram-windows-x64.zip` + `SHA256SUMS` + `VERSION.txt`). HanniPI
+no lo compila: copia ese artefacto **pinneado** por tag + sha256 en `hannigram-version.json`, así
+instalar HanniPI + memoria sigue siendo una sola descarga verificada.
+
 ## 1. Bump lockstep
 
 ```bash
@@ -57,16 +62,27 @@ Comprueba `windows-x64/pi.exe --version` → `0.x.y-hannipi`.
 ## 3. Daemon HanniGram (obligatorio)
 
 ```bash
+# ¿HanniGram ha sacado release nueva desde el pin? (exit 1 = desfasado)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-hannigram.ps1 -Check
+
+# Copia el asset pinneado de esa release a ~/release-staging/hannigram (+ .sha256)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-hannigram.ps1
 ```
 
-Hace `dotnet publish` self-contained single-file `win-x64` de `HanniGram.Server` + `HanniGram.Cli`
-desde `AlPeFe/HanniGram`, comprueba que el daemon responde `/health` y deja
+Descarga el asset de la release de HanniGram que fija `hannigram-version.json`, valida el sha256
+contra el `SHA256SUMS` de esa release, comprueba que el daemon responde `/health` y deja
 `~/release-staging/hannigram/hannigram-windows-x64.zip` (+ `.sha256`). HanniPI sin HanniGram no tiene
 memoria, así que **la release no se publica sin este asset**.
 
-Si cambia el motor, apunta a un checkout/ref concreto:
-`-RepoDir C:\src\HanniGram -Ref main`.
+Adoptar una release nueva de HanniGram (release gate `-Check` en verde):
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-hannigram.ps1 -Tag v0.1.1 -WritePin
+git add hannigram-version.json && git commit -m "chore(hannipi): pin de HanniGram v0.1.1"
+```
+
+Si HanniGram tiene cambios sin publicar y los necesitas ya (dev/offline), compila desde fuente:
+`-Build -RepoDir C:\src\HanniGram -Ref main` (no toca el pin).
 
 ## 4. Checksum y release
 
@@ -104,9 +120,11 @@ gh release upload v0.x.y-hannipi -R AlPeFe/HanniPI SHA256SUMS
 
 ## Notas
 
-- El asset del daemon sale de `AlPeFe/HanniGram` (repo aparte, sin releases propias): el binario vive
-  en la release de HanniPI, que es lo que descarga el instalador.
-- El `dotnet publish` fija `--source https://api.nuget.org/v3/index.json` porque HanniGram solo usa
+- El asset del daemon sale de `AlPeFe/HanniGram` (repo aparte, con releases propias): HanniPI copia
+  ese mismo artefacto en su release, que es lo que descarga el instalador.
+- Si HanniGram saca una release y el pin se queda atrás, la release de HanniPI sigue saliendo con la
+  versión pinneada (reproducible). El gate `-Check` es para no olvidarlo.
+- `-Build` (desde fuente) fija `--source https://api.nuget.org/v3/index.json` porque HanniGram solo usa
   paquetes de nuget.org; así el build no depende de feeds privados de la máquina.
 - El tag lo crea `gh release create` (vía API), así que **no** dispara el workflow `Build Binaries`
   (solo corre con `git push` de tags `v*`). Por eso las releases del fork son manuales.

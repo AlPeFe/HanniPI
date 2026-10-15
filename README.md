@@ -55,11 +55,13 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 - El **resumen** (con la sección de memoria HanniGram) solo se genera en `/hanniorq close` y solo si hubo ficha.
 - **Delegación CONDICIONAL:** sODD decide: si la ficha activa es grande y **spliteable** (pasos independientes), cada parte se delega con la tool `subagent` (ficha recortada + paso como contexto). Un solo bloque se ejecuta inline. **Opciones de forzado**: escribe "delega" en tu petición para forzar delegación, o "no delegues" para prohibirla.
 - **Widget de flota:** mientras hay subagentes trabajando, el widget `hanniorq-fleet` se muestra en la TUI con un spinner por worker y la tarea que está haciendo (adaptación del fleet widget de pi-subagents a sODD: la ficha `odd/tasks/` es la fuente de verdad).
+- **Rail derecho:** la columna derecha muestra proyecto, memoria HanniGram, sODD, **las tareas** (la tool `todo`, o los pasos de la ficha) y los cambios del worktree. Las tareas largas se envuelven en varias líneas y el ancho de la columna se ajusta con `ctrl+alt+→` / `ctrl+alt+←` o `/hanniorq rail <n>` (20-100 columnas, se recuerda en `settings.json`); `ctrl+alt+t` pliega/despliega las tareas.
 
 **Comandos:**
 
 ```
 /hanniorq on | off | status        # activa/desactiva el modo orquestador
+/hanniorq rail [<n>]               # muestra/oculta el rail derecho, o fija su ancho en columnas
 /hanniorq plan "<petición>"        # clasifica: trivial → inline; sustancial → ficha
 /hanniorq run [Tn]                 # ejecuta la siguiente tarea; si es grande y spliteable, delega partes con subagent
 /hanniorq watch                    # muestra en qué se trabaja: fichas activas + subagentes en vuelo
@@ -87,7 +89,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/AlP
 ```
 
 > Se instala como **`hanni`** (no `pi`) para no chocar con el pi de earendil-works si ya lo tienes instalado. Después de instalar, abre una terminal nueva y escribe `hanni`.
-> **HanniGram es obligatorio**: cada release trae `hannigram-windows-x64.zip` (daemon + CLI self-contained, sin necesidad de .NET instalado) y el instalador aborta sin instalar nada si no lo encuentra, en vez de dejar un HanniPI sin memoria. El daemon se instala en `%LOCALAPPDATA%\HanniPI\hannigram` y HanniPI lo descubre por `HANNIGRAM_DAEMON`.
+> **HanniGram es obligatorio**: cada release trae `hannigram-windows-x64.zip` (daemon + CLI self-contained, sin necesidad de .NET instalado, + la extensión `mem_*`) y el instalador aborta sin instalar nada si no lo encuentra, en vez de dejar un HanniPI sin memoria. El daemon se instala en `%LOCALAPPDATA%\HanniPI\hannigram`, la extensión `mem_*` en `~/.pi/agent/extensions/hannigram` y HanniPI descubre el daemon por `HANNIGRAM_DAEMON`. El asset lo publica el propio HanniGram y HanniPI lo copia **pinneado** (`hannigram-version.json`: tag + sha256); con `-HannigramSource latest` el instalador coge la última release de HanniGram en vez del pin.
 > Al instalar, actualizar o desinstalar, el script **para antes todos los procesos de Hanni** (el binario compilado con bun y el daemon HanniGram) para poder reemplazar o borrar los ficheros sin bloqueos de Windows.
 
 **Desde el repo (desarrollo):**

@@ -1,6 +1,6 @@
 ---
 topic_key: odd/hannigram-obligatorio-en-release/tasks
-status: active
+status: superseded
 base: f81ddcdca
 ---
 # hannigram obligatorio en la release
@@ -20,11 +20,11 @@ Verify: `powershell -File scripts/pack-hannigram.ps1` produce el asset con `Hann
 - [x] S3 `hanni-setup.ps1`: valida PI+daemon antes de borrar, aborta si falta el asset, stage-then-swap y `/health` — c5edb2e4b
 - [x] S4 Runbook `release.md` + `README.md` + `AGENTS.md` — af6544063, 1d4bc21ea
 - [x] S5 Daemon reparado en esta máquina (`%LOCALAPPDATA%\HanniPI\hannigram`, `/health` ok con la BD real).
-- [ ] S6 Publicar el asset en la release (o sacar v0.2.8) — pendiente de OK.
+- [~] S6 Publicar el asset en la release: **sustituido** por `odd/tasks/hannigram-fuente-del-asset.md` (el asset lo publica HanniGram y HanniPI lo copia pinneado). No se sube nada a v0.2.7-hannipi.
 
 ## Siguiente
 
-S6: con OK del usuario, `gh release upload v0.2.7-hannipi -R AlPeFe/HanniPI hannigram-windows-x64.zip` + regenerar `SHA256SUMS` (incluye también `hanni-setup.ps1`/`HANNI.bat`); o bump a v0.2.8 y release completa con `pack-hannigram.ps1`.
+Nada: cerrada como superseded. El asset del daemon va dentro de la release de HanniGram (pin en `hannigram-version.json`) y el instalador lo baja con `-HannigramSource pinned|latest`. La instalación real de `hanni.exe` + daemon + extensión `mem_*` se verifica en el primer `hanni-setup.ps1` posterior al pin.
 
 ## Verificación funcional
 
@@ -33,6 +33,6 @@ S6: con OK del usuario, `gh release upload v0.2.7-hannipi -R AlPeFe/HanniPI hann
 
 ## Notas
 
-- Fuente del daemon: repo público `AlPeFe/HanniGram` (sin releases propias); el asset vive en la release de HanniPI.
+- Fuente del daemon: repo público `AlPeFe/HanniGram`. Ver `odd/tasks/hannigram-fuente-del-asset.md`.
 - El smoke test usa `HANNIGRAM_URLS` (el daemon no lee `--urls`) y el CLI funciona standalone en el stage.
 - `dotnet publish` fija `--source https://api.nuget.org/v3/index.json`: el feed privado de esta máquina tiene el certificado caducado.
