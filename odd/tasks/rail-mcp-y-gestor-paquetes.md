@@ -1,6 +1,6 @@
 ---
 topic_key: odd/rail-mcp-y-gestor-paquetes/tasks
-status: active
+status: done
 base: e4eb55978
 ---
 # MCP en el rail y gestor de paquetes con catálogo
@@ -19,7 +19,7 @@ Verify: rail con MCP desactivado/`sin servidores`/servidores configurados; `/pac
 - [ ] S2 `PackageManagerSelector`: modo catálogo (escribir → buscar con debounce, ↑↓, enter instala) y `updateAvailable` real vía `checkForAvailableUpdates`.
 - [ ] S3 `interactive-mode`: cablear la búsqueda del catálogo y refrescar updates al abrir `/packages`.
 - [ ] S4 Rail MCP: leer servidores configurados (`mcp.json` global/proyecto) + estado vivo, y avisar si `builtin:mcp` está excluido en ajustes o si no hay servidores.
-- [ ] S5 `/packages` y `/mem` en `BUILTIN_SLASH_COMMANDS` (autocompletado y ayuda) + README.
+- [x] S5 `/packages` y `/mem` en `BUILTIN_SLASH_COMMANDS` (autocompletado y ayuda) + README.
 - [x] S6 Tests (catálogo, selector, rail), checks y commits atómicos.
 - [x] S7 Rail: contexto y compactación — porcentaje de ventana, umbral real (`contextWindow - reserveTokens`) y aviso en `warning` cuando está cerca (≤20k o ≤8pp) o `error` cuando ya pasó, más `auto-compact off` si está desactivada. El uso de contexto solo está en el `ctx` de los eventos, así que el rail lo recuerda en session/turn/tool.
 
@@ -29,8 +29,10 @@ S1: crear el módulo de catálogo y usarlo desde el selector.
 
 ## Verificación funcional
 
-- `npx vitest run test/package-catalog.test.ts test/package-manager-selector.test.ts test/hanniorq-extension.e2e.test.ts`.
-- A mano: `/packages` → catálogo → buscar "mcp" → instalar; y el rail mostrando `MCP desactivado (-builtin:mcp)` hasta reactivarlo.
+- `npx vitest run test/package-catalog.test.ts test/package-manager-selector.test.ts test/hanniorq-context-rail.test.ts test/hanniorq-extension.e2e.test.ts` → verde.
+- Suite completa del coding-agent: mismos 116 fallos que `origin/main` (entorno de datos de modelos), sin regresiones.
+- Publicado en la release v0.2.9-hannipi (`odd/tasks/release-0.2.9-hannipi.md`).
+- A mano (pendiente): `/packages` → catálogo → buscar "mcp" → instalar; y el rail con MCP reactivado + aviso de compactación.
 
 ## Notas
 
