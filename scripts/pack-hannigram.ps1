@@ -30,6 +30,8 @@ param(
     [string]$NuGetSource = "https://api.nuget.org/v3/index.json",
     # Copy the result into %LOCALAPPDATA%\HanniPI\hannigram (dev/repair shortcut).
     [switch]$InstallLocal,
+    # Keep the temp clone/publish dirs (debug).
+    [switch]$KeepWork,
     # Start the packaged daemon and check /health before declaring success.
     [switch]$SkipSmokeTest
 )
@@ -199,3 +201,5 @@ if ($InstallLocal) {
 
 Write-Step "Listo"
 Write-Ok "asset: $zip"
+
+if (-not $KeepWork) { Remove-Item $workRoot -Recurse -Force -ErrorAction SilentlyContinue }
