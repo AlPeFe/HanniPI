@@ -18,23 +18,27 @@ Verify: mirror local de `HanniGram/artifacts` → el script resuelve el pin, ver
 - [x] S1 `scripts/pack-hannigram.ps1`: modo pinneado (descarga el asset de la release de HanniGram, valida sha256 contra su `SHA256SUMS`), `-Check` de drift, `-WritePin` y `-Build` como fallback desde fuente. Verificado con `-MirrorDir` sobre `HanniGram/artifacts`.
 - [x] S2 `hanni-setup.ps1`: `-HannigramSource pinned|latest` + instalación de la `pi-extension` en `<agentDir>/extensions/hannigram` (y limpieza al desinstalar).
 - [x] S3 HanniGram: `scripts/pack-asset.ps1` + `.github/workflows/release.yml` (tag `v*` → release con asset + `SHA256SUMS` + `VERSION.txt`), commit `373cc7d` local.
-- [ ] S4 Publicar la release de HanniGram (push `373cc7d` + tag `v0.1.0`) — pendiente de OK del usuario.
-- [ ] S5 `hannigram-version.json` con el pin real (`pack-hannigram.ps1 -Tag v0.1.0 -WritePin`) — depende de S4.
+- [x] S4 Publicar la release de HanniGram: `373cc7d` empujado + tag `v0.1.0` → workflow `Release HanniGram` OK (1m16s); release con `hannigram-windows-x64.zip` (81,7 MB) + `SHA256SUMS` + `VERSION.txt`.
+- [x] S5 `hannigram-version.json` pinneado a `v0.1.0` (`sha256 a6f2c28a…`, commit `373cc7d`), verificado contra el `SHA256SUMS` de la release y con `/health` del daemon del asset.
 - [x] S6 Docs (`release.md`, `README.md`, `AGENTS.md`) al flujo pinneado.
+- [x] S7 Arreglado un fallo real del modo pinneado que el mirror no cubría: el scriptblock de `Get-HanniGramRelease` no conservaba las variables locales, así que contra GitHub no resolvía el asset (`fix` en `ab1273ffd`).
+- [x] S8 Extensión `mem_*` instalada en `~/.pi/agent/extensions/hannigram` desde el asset pinneado; descubierta y cargada por el harness con las 9 tools (`mem_search`, `mem_context`, `mem_timeline`, …) y 0 errores.
 
 ## Siguiente
 
-S4: `git -C ../HanniGram push origin main && git tag v0.1.0 && git push origin v0.1.0`; el workflow publica el asset. Después S5 y S6.
+Nada pendiente en este frente. El asset lo publica HanniGram en cada tag `v*` y HanniPI lo adopta con `-Tag <nueva> -WritePin` cuando `-Check` avise. La instalación completa (`hanni-setup.ps1`) se probará de verdad en el próximo `hanni update` del usuario.
 
 ## Verificación funcional
 
-- Mirror local: `pack-hannigram.ps1 -Tag v0.1.0 -MirrorDir <HanniGram>/artifacts` → checksum OK, `VERSION.txt` parseado, daemon `/health` OK.
-- `-Check` con pin desfasado → exit 1; con pin al día → exit 0.
-- Tras S4: `hannigram-version.json` (`-WritePin`) e instalar de verdad con `hanni-setup.ps1 -Action update -HannigramSource pinned` → `/health` + tools `mem_*` en `~/.pi/agent/extensions/hannigram`.
+- Mirror local (`gh release download v0.1.0 -D <tmp>`): checksum OK, `VERSION.txt` parseado, smoke test del daemon OK y `-Check` al día (exit 0).
+- `-Check` contra GitHub con el pin puesto: exit 0; con la release desfasada: exit 1.
+- El guard del pin detecta un asset que no cuadra (probado con los `artifacts/` locales, sha distinto).
+- Extensión del asset instalada y cargada de verdad por el harness (9 tools `mem_*`, 0 errores) usando el agent dir real del usuario.
 
 ## Notas
 
 - `pi-extension` no necesita `node_modules`: el harness resuelve `typebox` y `@earendil-works/pi-coding-agent` como módulos virtuales.
 - `<agentDir>/extensions/<dir>/package.json` con campo `pi.extensions` es una de las reglas de descubrimiento del harness (`loader.ts`).
 - La env var correcta es `HANNI_CODING_AGENT_DIR` (APP_NAME=`hanni`); por defecto `~/.pi/agent`.
-- HanniGram no tenía releases ni tags: el workflow solo publica al empujar un tag `v*`.
+- El daemon instalado en la máquina se compiló desde `99968f0`; el asset de `v0.1.0` sale de `373cc7d`, y `git diff 99968f0..373cc7d -- src pi-extension` está vacío: mismo código.
+- En este checkout hacen falta los datos de modelos generados (`npm run hydrate-model-data` en `packages/ai`, `src/providers/data/` está en `.gitignore`) para que `tsc` y las extensiones carguen; sin ellos fallan ~88 tests por entorno, igual que en `origin/main`.
