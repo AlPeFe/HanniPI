@@ -6,9 +6,13 @@
 
 - HanniPI: added `/helpme` (lists every HanniPI command and what it does), `/hannidump [ruta]` (writes an `agents.md` context+ADR dump for harnesses that do not use HanniGram, summarized by the model), and `/explore` (reads the project's md files/README and builds initial HanniGram memory on first run).
 - HanniPI: added the `todo` tool, which the harness uses to declare/update the current request's task list. The right rail shows it with `✓`/`▸`/`·` marks; a new list replaces the previous one (so new tasks in the next prompt clear the old ones), and without a list the rail falls back to the active sODD sheet's steps.
+- HanniPI: the right rail can be resized by dragging its left border (one-column strip between chat and rail) with the mouse; the drag applies live and persists on release.
+- HanniPI: the rail-right visibility toggle (`/hanniorq rail`) and the task-list collapse (`/hanniorq tasks`, ctrl+alt+t) now persist across sessions via the new `railHidden` and `railTasksCollapsed` settings, exposed to extensions as `get/setRailHidden` and `get/setRailTasksCollapsed`.
+- HanniPI: the right rail content is scrollable (wheel over the rail scrolls it, with a transient scrollbar); the widget keeps its scroll position across rail refreshes.
 
 ### Changed
 
+- The Xiaomi MiMo default model now points at `mimo-v2.6-pro` (v2.5 was removed from the live catalog) and the NVIDIA default at `nemotron-3.5-super-vl-120b-a12b`.
 - HanniPI: Hanni's identity in the system prompt is now female (feminine grammatical forms in gendered languages) and the assistant uses light kaomoji in replies. The startup help refers to her in feminine terms.
 - HanniPI: the right rail's memory line shows `ON` plus whether records were added (`nuevo`), deleted (`borrado`), or unchanged (`igual`) instead of an observation count. The changed-files list is capped at 3 paths so it does not accumulate and push the rest off the rail.
 - `/arminsayshi` now plays a 3D version in fullscreen mode, with one cube per pixel of Armin. The 3D pi logo easter egg on header logo click is replaced by it.

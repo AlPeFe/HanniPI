@@ -20,7 +20,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Key, Text } from "@earendil-works/pi-tui";
+import { Key, ScrollView, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { getAgentDir } from "../../config.ts";
 import type {
@@ -94,9 +94,6 @@ let memTurn: MemTurnSummary = emptyMemTurnSummary();
 let harnessTodos: HarnessTodo[] = [];
 /** Hay un turno en curso: sODD esta "working" mientras el agente trabaja. */
 let soddWorking = false;
-let railHidden = false;
-/** Pasos sODD del rail plegados (toggle: tecla RAIL_TASKS_KEY o /hanniorq tasks). */
-let railTasksHidden = false;
 /** Máximo de pasos listados en el rail; el resto se resume con "+N". */
 const MAX_RAIL_TODOS = 8;
 /** Ancho por defecto de la columna del rail; el usuario lo cambia con ctrl+alt+←/→ o /hanniorq rail <n>. */
@@ -753,7 +750,7 @@ function railLines(ui: ExtensionUIContext, cwd: string, width: number = RAIL_WID
 	if (todos.length > 0) {
 		const doneTodos = todos.filter((t) => t.done).length;
 		lines.push(theme.fg("accent", `tareas (${doneTodos}/${todos.length})`));
-		if (railTasksHidden) {
+		if (ui.getRailTasksCollapsed()) {
 			lines.push(theme.fg("muted", `plegadas · ${RAIL_TASKS_KEY}`));
 		} else {
 			todos.slice(0, MAX_RAIL_TODOS).forEach((t) => {
@@ -835,22 +832,50 @@ class RailText extends Text {
 	}
 }
 
+/** Widget del rail por instancia de ui (WeakMap): persiste el scroll entre refrescos sin
+ *  contaminar otras sesiones (p.ej. un refresco asíncrono diferido de otra ui). */
+interface RailWidget {
+	cwd: string;
+	text: RailText;
+	scroll: ScrollView;
+}
+const railWidgets = new WeakMap<ExtensionUIContext, RailWidget>();
+
 /** Renderiza el rail derecho (widget "hanniorq-rail", placement rightRail). */
 function renderRail(ui: ExtensionUIContext, cwd: string): void {
-	if (railHidden) {
-		ui.setWidget("hanniorq-rail", undefined);
-		return;
+	// El componente del rail se crea una vez por (ui, cwd): si `setWidget` recreara el widget en
+	// cada refresco (memoria, MCP, git…), el ScrollView reiniciaría su posición de scroll.
+	let widget = railWidgets.get(ui);
+	if (widget === undefined || widget.cwd !== cwd) {
+		const text = new RailText((contentWidth) => railLines(ui, cwd, contentWidth).join("\n"));
+		const scroll = new ScrollView(text, {
+			follow: "end",
+			overscroll: "contain",
+			scrollbar: "auto",
+			scrollbarTrackStyle: (line) => ui.theme.fg("scrollbarTrack", line),
+			scrollbarThumbStyle: (line) => ui.theme.fg("scrollbarThumb", line),
+		});
+		widget = { cwd, text, scroll };
+		railWidgets.set(ui, widget);
+		ui.setWidget(
+			"hanniorq-rail",
+			() => {
+				return scroll;
+			},
+			{ placement: "rightRail" },
+		);
+	} else {
+		// Contenido nuevo con el mismo componente: fuerza la reconstrucción en el próximo frame.
+		widget.text.invalidate();
 	}
-	ui.setWidget("hanniorq-rail", () => new RailText((contentWidth) => railLines(ui, cwd, contentWidth).join("\n")), {
-		placement: "rightRail",
-	});
 }
 
 /** Pliega/despliega los pasos sODD del rail y avisa (tecla RAIL_TASKS_KEY o /hanniorq tasks). */
 function toggleRailTasks(ui: ExtensionUIContext, cwd: string): void {
-	railTasksHidden = !railTasksHidden;
+	const collapsed = !ui.getRailTasksCollapsed();
+	ui.setRailTasksCollapsed(collapsed);
 	renderRail(ui, cwd);
-	ui.notify(railTasksHidden ? "Pasos sODD plegados en el rail." : "Pasos sODD desplegados en el rail.", "info");
+	ui.notify(collapsed ? "Pasos sODD plegados en el rail." : "Pasos sODD desplegados en el rail.", "info");
 }
 
 /** Render inmediato + refresco asíncrono de la memoria (re-render al completar). */
@@ -1360,22 +1385,22 @@ export function createHanniorqExtension(
 						return;
 					}
 					case "rail": {
-						// /hanniorq rail        → oculta/muestra el rail
+						// /hanniorq rail        → oculta/muestra el rail (persistido en settings)
 						// /hanniorq rail <n>    → fija el ancho (columnas, 20-100) para leer mejor las tareas
 						const requested = rest[0] ? Number.parseInt(rest[0], 10) : Number.NaN;
 						if (Number.isFinite(requested)) {
 							const applied = ctx.ui.setRailWidth(requested);
-							railHidden = false;
+							ctx.ui.setRailHidden(false);
 							renderRail(ctx.ui, cwd);
 							ctx.ui.notify(`Rail derecho: ${applied} columnas.`, "info");
 							return;
 						}
-						railHidden = !railHidden;
-						renderRail(ctx.ui, cwd);
+						const hidden = !ctx.ui.getRailHidden();
+						ctx.ui.setRailHidden(hidden);
 						ctx.ui.notify(
-							railHidden
+							hidden
 								? "Rail derecho oculto."
-								: `Rail derecho visible (${ctx.ui.getRailWidth()} columnas). Cambia el ancho con ctrl+alt+←/→ o /hanniorq rail <n>.`,
+								: `Rail derecho visible (${ctx.ui.getRailWidth()} columnas). Cambia el ancho con ctrl+alt+←/→ o /hanniorq rail <n>, y arrastra su borde con el ratón.`,
 							"info",
 						);
 						return;

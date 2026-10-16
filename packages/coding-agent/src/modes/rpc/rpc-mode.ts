@@ -216,6 +216,22 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			return 0;
 		},
 
+		getRailHidden(): boolean {
+			return false;
+		},
+
+		setRailHidden(_hidden: boolean): void {
+			// No rail in RPC mode.
+		},
+
+		getRailTasksCollapsed(): boolean {
+			return false;
+		},
+
+		setRailTasksCollapsed(_collapsed: boolean): void {
+			// No rail in RPC mode.
+		},
+
 		setFooter(_factory: unknown): void {
 			// Custom footer not supported in RPC mode - requires TUI access
 		},

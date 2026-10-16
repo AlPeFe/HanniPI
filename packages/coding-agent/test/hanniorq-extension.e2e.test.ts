@@ -27,6 +27,8 @@ function createMockPi() {
 	const widgets = new Map<string, string[] | ((...args: any[]) => unknown)>();
 	const sentMessages: string[] = [];
 	let railWidth = 34;
+	let railHidden = false;
+	let railTasksCollapsed = false;
 	/** Patrones del ajuste `extensions` que ve la extensión (tests de MCP desactivado). */
 	const extensionOverrides: string[] = [];
 
@@ -41,6 +43,14 @@ function createMockPi() {
 		setRailWidth: (width: number) => {
 			railWidth = Math.max(20, Math.min(100, Math.round(width)));
 			return railWidth;
+		},
+		getRailHidden: () => railHidden,
+		setRailHidden: (hidden: boolean) => {
+			railHidden = hidden;
+		},
+		getRailTasksCollapsed: () => railTasksCollapsed,
+		setRailTasksCollapsed: (collapsed: boolean) => {
+			railTasksCollapsed = collapsed;
 		},
 		getContextUsage: () => undefined,
 		theme: {
@@ -350,7 +360,7 @@ describe("extensión hanniorq", () => {
 		}
 	});
 
-	it("/hanniorq rail <n> fija el ancho del rail", async () => {
+	it("/hanniorq rail <n> fija el ancho del rail y el toggle lo oculta/muestra", async () => {
 		const { registeredCommands, widgets, pi } = createMockPi();
 		createHanniorqExtension()(pi);
 		const root = mkdtempSync(join(tmpdir(), "hanniorq-rail-width-"));
@@ -360,14 +370,16 @@ describe("extensión hanniorq", () => {
 			await registeredCommands.get("hanniorq")!.handler("rail 60", ctx);
 			expect(ui.getRailWidth()).toBe(60);
 			expect(widgets.has("hanniorq-rail")).toBe(true);
+			expect(ui.getRailHidden()).toBe(false);
 
+			// El toggle persiste el estado en el ui context (settings); el widget sigue
+			// publicado y la TUI lo oculta con la gate rightRailVisible.
 			await registeredCommands.get("hanniorq")!.handler("rail", ctx);
 			expect(ui.getRailWidth()).toBe(60);
-			expect(widgets.has("hanniorq-rail")).toBe(false);
+			expect(ui.getRailHidden()).toBe(true);
 
-			// Deja el rail visible otra vez: el estado es de módulo y afectaría a los tests siguientes.
 			await registeredCommands.get("hanniorq")!.handler("rail", ctx);
-			expect(widgets.has("hanniorq-rail")).toBe(true);
+			expect(ui.getRailHidden()).toBe(false);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

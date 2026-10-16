@@ -198,6 +198,18 @@ export interface ExtensionUIContext {
 	/** Resize the right rail (clamped) and repaint it; returns the applied width. */
 	setRailWidth(width: number): number;
 
+	/** Whether the right rail is hidden (persisted in settings). */
+	getRailHidden(): boolean;
+
+	/** Show or hide the right rail (persisted in settings) and repaint it. */
+	setRailHidden(hidden: boolean): void;
+
+	/** Whether the right rail task list is collapsed (persisted in settings). */
+	getRailTasksCollapsed(): boolean;
+
+	/** Collapse or expand the right rail task list (persisted in settings) and repaint it. */
+	setRailTasksCollapsed(collapsed: boolean): void;
+
 	/** Set a custom footer component, or undefined to restore the built-in footer.
 	 *
 	 * The factory receives a FooterDataProvider for data not otherwise accessible:

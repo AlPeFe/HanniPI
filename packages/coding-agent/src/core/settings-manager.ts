@@ -195,6 +195,8 @@ export interface Settings {
 	fullscreenExitOutput?: FullscreenExitOutput; // default: "transcript"; no effect in regular TUI mode
 	fullscreenScrollbar?: ScrollViewScrollbar; // default: "auto"; no effect in regular TUI mode
 	railWidth?: number; // right rail column width in the fullscreen TUI (default 34, clamped to [20, 100])
+	railHidden?: boolean; // hide the right rail in the fullscreen TUI (default false)
+	railTasksCollapsed?: boolean; // collapse the right rail task list (default false)
 	fullscreenCopyOnSelect?: boolean; // default: true; no effect in regular TUI mode
 	fullscreenWheelScrollLines?: WheelScrollLines; // default: "auto"; lines per wheel event, 1-100
 }
@@ -1438,6 +1440,30 @@ export class SettingsManager {
 		this.markModified("railWidth");
 		this.save();
 		return applied;
+	}
+
+	/** Whether the right rail is hidden in the fullscreen TUI (persists across sessions). */
+	getRailHidden(): boolean {
+		return this.settings.railHidden === true;
+	}
+
+	/** Show or hide the right rail in the fullscreen TUI. */
+	setRailHidden(hidden: boolean): void {
+		this.globalSettings.railHidden = hidden;
+		this.markModified("railHidden");
+		this.save();
+	}
+
+	/** Whether the right rail task list is collapsed (persists across sessions). */
+	getRailTasksCollapsed(): boolean {
+		return this.settings.railTasksCollapsed === true;
+	}
+
+	/** Collapse or expand the right rail task list. */
+	setRailTasksCollapsed(collapsed: boolean): void {
+		this.globalSettings.railTasksCollapsed = collapsed;
+		this.markModified("railTasksCollapsed");
+		this.save();
 	}
 
 	setFullscreenScrollbar(mode: ScrollViewScrollbar): void {

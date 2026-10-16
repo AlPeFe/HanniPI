@@ -555,6 +555,30 @@ describe("SettingsManager", () => {
 		expect(SettingsManager.create(projectDir, agentDir).getRailWidth()).toBe(DEFAULT_RAIL_WIDTH);
 	});
 
+	// Rail oculto y tareas plegadas del rail derecho persisten; booleanos invalidos caen al defecto.
+	it("persists the rail visibility and task collapse toggles", async () => {
+		const manager = SettingsManager.create(projectDir, agentDir);
+		expect(manager.getRailHidden()).toBe(false);
+		expect(manager.getRailTasksCollapsed()).toBe(false);
+
+		manager.setRailHidden(true);
+		manager.setRailTasksCollapsed(true);
+		await manager.flush();
+		const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+		expect(saved.railHidden).toBe(true);
+		expect(saved.railTasksCollapsed).toBe(true);
+
+		manager.setRailHidden(false);
+		manager.setRailTasksCollapsed(false);
+		expect(manager.getRailHidden()).toBe(false);
+		expect(manager.getRailTasksCollapsed()).toBe(false);
+
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ railHidden: "si", railTasksCollapsed: 1 }));
+		const reloaded = SettingsManager.create(projectDir, agentDir);
+		expect(reloaded.getRailHidden()).toBe(false);
+		expect(reloaded.getRailTasksCollapsed()).toBe(false);
+	});
+
 	// #9758: wheel scrolling defaults to auto, persists line counts, and ignores invalid values.
 	it("persists fullscreen wheel scroll lines", async () => {
 		const manager = SettingsManager.create(projectDir, agentDir);

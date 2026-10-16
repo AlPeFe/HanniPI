@@ -111,7 +111,12 @@ import {
 	sessionEntryToContextMessages,
 	type UsageEntry,
 } from "../../core/session-manager.ts";
-import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
+import {
+	type FullscreenExitOutput,
+	RAIL_MAX_WIDTH,
+	RAIL_MIN_WIDTH,
+	type TuiMode,
+} from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
@@ -921,7 +926,17 @@ export class InteractiveMode {
 			footer: this.footerContainer,
 			rightRail: this.widgetContainerRight,
 			rightRailWidth: this.settingsManager.getRailWidth(),
-			rightRailVisible: () => this.extensionWidgetsRight.size > 0,
+			rightRailVisible: () => this.extensionWidgetsRight.size > 0 && !this.settingsManager.getRailHidden(),
+			railResize: {
+				getRailWidth: () => this.settingsManager.getRailWidth(),
+				onResize: (width) => {
+					this.applyRailWidth(width, { persist: false });
+				},
+				onResizeEnd: (width) => {
+					this.applyRailWidth(width);
+				},
+				renderLine: () => theme.fg("border", "│"),
+			},
 			scrollbar: this.settingsManager.getFullscreenScrollbar(),
 			scrollbarTrackStyle: (text) => theme.fg("scrollbarTrack", text),
 			scrollbarThumbStyle: (text) => theme.fg("scrollbarThumb", text),
@@ -2259,19 +2274,31 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * Resize the right rail by `delta` columns (clamped) and repaint it. Rail widgets cache their
-	 * content per width, so they are invalidated to rebuild at the new width.
+	 * Apply a rail width proposal. With `persist` the settings manager clamps and saves the value;
+	 * during a drag the width is applied to the layout only, so settings.json is written once at
+	 * the end of the gesture. Rail widgets cache their content per width, so they are
+	 * invalidated to rebuild at the new width.
 	 */
-	private adjustRailWidth(delta: number, options: { announce?: boolean } = {}): number {
-		const applied = this.settingsManager.setRailWidth(this.settingsManager.getRailWidth() + delta);
+	private applyRailWidth(width: number, options: { persist?: boolean; announce?: boolean } = {}): number {
+		const applied =
+			options.persist === false
+				? Math.round(Math.max(RAIL_MIN_WIDTH, Math.min(RAIL_MAX_WIDTH, width)))
+				: this.settingsManager.setRailWidth(width);
 		this.resizeRailWidth?.(applied);
 		for (const widget of this.extensionWidgetsRight.values()) widget.invalidate?.();
 		this.ui.requestRender();
-		if (options.announce !== false) {
+		if (options.announce) {
 			const chat = Math.max(0, this.ui.terminal.columns - applied);
 			this.showExtensionNotify(`Rail derecho: ${applied} columnas (chat ${chat}).`, "info");
 		}
 		return applied;
+	}
+
+	/**
+	 * Resize the right rail by `delta` columns (clamped) and repaint it.
+	 */
+	private adjustRailWidth(delta: number, options: { announce?: boolean } = {}): number {
+		return this.applyRailWidth(this.settingsManager.getRailWidth() + delta, { ...options, announce: true });
 	}
 
 	/**
@@ -2545,6 +2572,16 @@ export class InteractiveMode {
 			setWidget: (key, content, options) => this.setExtensionWidget(key, content, options),
 			getRailWidth: () => this.settingsManager.getRailWidth(),
 			setRailWidth: (width) => this.adjustRailWidth(width - this.settingsManager.getRailWidth()),
+			getRailHidden: () => this.settingsManager.getRailHidden(),
+			setRailHidden: (hidden) => {
+				this.settingsManager.setRailHidden(hidden);
+				this.ui.requestRender();
+			},
+			getRailTasksCollapsed: () => this.settingsManager.getRailTasksCollapsed(),
+			setRailTasksCollapsed: (collapsed) => {
+				this.settingsManager.setRailTasksCollapsed(collapsed);
+				this.ui.requestRender();
+			},
 			setFooter: (factory) => this.setExtensionFooter(factory),
 			setHeader: (factory) => this.setExtensionHeader(factory),
 			setTitle: (title) => this.ui.terminal.setTitle(title),
