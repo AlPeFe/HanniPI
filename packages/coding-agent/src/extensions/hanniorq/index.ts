@@ -20,7 +20,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Key, ScrollView, Text } from "@earendil-works/pi-tui";
+import { type Component, Key, Panel, ScrollView, Spacer, type StackChild, Text, VStack } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { getAgentDir } from "../../config.ts";
 import type {
@@ -98,8 +98,10 @@ let soddWorking = false;
 const MAX_RAIL_TODOS = 8;
 /** Ancho por defecto de la columna del rail; el usuario lo cambia con ctrl+alt+←/→ o /hanniorq rail <n>. */
 export const RAIL_WIDTH = 34;
-/** Líneas máximas por tarea: se envuelve el texto en varias líneas en vez de recortarlo. */
-const MAX_TODO_LINES = 3;
+/** Líneas máximas por tarea: se envuelve el texto en varias líneas en vez de recortarlo. Con los
+ *  paneles del rail el ancho de contenido baja ~4 columnas, así que una tarea larga necesita una
+ *  línea más para verse entera. */
+const MAX_TODO_LINES = 4;
 /** Tecla que pliega/despliega los pasos sODD del rail. */
 const RAIL_TASKS_KEY = Key.ctrlAlt("t");
 
@@ -694,64 +696,74 @@ function railTodos(cwd: string): Array<{ done: boolean; text: string; current: b
 	return steps.map((t, i) => ({ done: t.done, text: t.text, current: i === current }));
 }
 
-/** Líneas del rail derecho (coloreadas con el tema vivo vía ui.theme) al ancho dado. */
-function railLines(ui: ExtensionUIContext, cwd: string, width: number = RAIL_WIDTH): string[] {
+/** Una sección del rail: el título vive en el borde del panel y estas líneas dentro. */
+interface RailSection {
+	title: string;
+	lines: string[];
+}
+
+/**
+ * Secciones del rail derecho (coloreadas con el tema vivo vía ui.theme) al ancho de contenido dado.
+ * Cada sección es un panel propio: el rail deja de ser una lista corrida de bloques y cada concepto
+ * (proyecto, memoria, contexto, sODD, tareas, MCP, cambios) se lee como una tarjeta.
+ */
+function railSections(ui: ExtensionUIContext, cwd: string, width: number = RAIL_WIDTH): RailSection[] {
 	const theme = ui.theme;
 	const W = Math.max(16, width);
-	const sep = theme.fg("border", "─".repeat(W));
-	const lines: string[] = [];
+	const sections: RailSection[] = [];
 
 	// Proyecto
-	const project = projectName(cwd);
-	lines.push(theme.bold(theme.fg("accent", clip(project, W))));
-	lines.push(theme.fg("dim", `rama ${clip(currentBranch(cwd), W - 5)}`));
-	lines.push(sep);
+	sections.push({
+		title: "proyecto",
+		lines: [
+			theme.bold(theme.fg("text", clip(projectName(cwd), W))),
+			theme.fg("dim", `rama ${clip(currentBranch(cwd), W - 5)}`),
+		],
+	});
 
 	// Memoria HanniGram: ON/OFF + si en la sesión se añadió o borró algo.
-	lines.push(theme.fg("accent", "memoria"));
+	const memoryLines: string[] = [];
 	if (!memoryCache.checked) {
-		lines.push(theme.fg("muted", "comprobando…"));
+		memoryLines.push(theme.fg("muted", "comprobando…"));
 	} else if (memoryCache.up) {
 		const delta = memoryDelta();
-		lines.push(`${theme.fg("success", "✓")} ${theme.fg("text", "ON")} · ${theme.fg(delta.color, delta.label)}`);
+		memoryLines.push(`${theme.fg("success", "✓")} ${theme.fg("text", "ON")} · ${theme.fg(delta.color, delta.label)}`);
 	} else {
-		lines.push(`${theme.fg("error", "✗")} ${theme.fg("text", "OFF")} (daemon caído)`);
+		memoryLines.push(`${theme.fg("error", "✗")} ${theme.fg("text", "OFF")} (daemon caído)`);
 	}
 	// Actividad de la sesión: qué se leyó (≫) o guardó (✎) en la memoria.
-	if (memActivity.length > 0) {
-		for (const m of memActivity.slice(-4).reverse()) {
-			const icon = m.kind === "write" ? theme.fg("success", "✎") : theme.fg("muted", "≫");
-			lines.push(`${icon} ${clip(m.detail, W - 4)}`);
-		}
+	for (const m of memActivity.slice(-4).reverse()) {
+		const icon = m.kind === "write" ? theme.fg("success", "✎") : theme.fg("muted", "≫");
+		memoryLines.push(`${icon} ${clip(m.detail, W - 4)}`);
 	}
-	lines.push(sep);
+	sections.push({ title: "memoria", lines: memoryLines });
 
-	// Contexto y compactacion: cuanto queda y cuando se dispara sola. Va junto a la memoria
-	// (estado de la sesion) para no perderse entre las tareas.
+	// Contexto y compactación: cuánto queda y cuándo se dispara sola.
 	const contextLines = contextRailLines(theme, W);
-	if (contextLines.length > 0) lines.push(...contextLines, sep);
+	if (contextLines.length > 0) sections.push({ title: "contexto", lines: contextLines });
 
-	// sODD: solo si hay ficha. Sin ficha (p.ej. una pregunta trivial del codigo)
-	// no aplica y no se pinta nada, en vez de un "inactivo" que no significa nada.
-	// Dentro de "activo": working (turno en curso) o not working (en reposo).
+	// sODD: solo si hay ficha. Sin ficha (p.ej. una pregunta trivial del código) no aplica y no se
+	// pinta nada, en vez de un "inactivo" que no significa nada.
 	const ind = soddIndicator(cwd);
 	if (ind) {
-		lines.push(theme.fg("accent", "sODD"));
 		const state = soddWorking ? theme.fg("warning", "working") : theme.fg("muted", "not working");
-		lines.push(`${theme.fg("success", "●")} activo · ${state}`);
-		lines.push(theme.fg("muted", `  ${clip(ind.slug, 16)} (${ind.done}/${ind.total})`));
-		lines.push(sep);
+		sections.push({
+			title: "sODD",
+			lines: [
+				`${theme.fg("success", "●")} activo · ${state}`,
+				theme.fg("muted", `${clip(ind.slug, 16)} (${ind.done}/${ind.total})`),
+			],
+		});
 	}
 
-	// Tareas — las define el harness (tool `todo`) para el turno actual; si no,
-	// se muestran los pasos de la ficha sODD. La que está "en curso" va con ▸.
-	// Se pliegan/despliegan con la tecla del rail o /hanniorq tasks.
+	// Tareas — las define el harness (tool `todo`) para el turno actual; si no, se muestran los pasos
+	// de la ficha sODD. La que está "en curso" va con ▸. Se pliegan con la tecla del rail o /hanniorq tasks.
 	const todos = railTodos(cwd);
 	if (todos.length > 0) {
 		const doneTodos = todos.filter((t) => t.done).length;
-		lines.push(theme.fg("accent", `tareas (${doneTodos}/${todos.length})`));
+		const taskLines: string[] = [];
 		if (ui.getRailTasksCollapsed()) {
-			lines.push(theme.fg("muted", `plegadas · ${RAIL_TASKS_KEY}`));
+			taskLines.push(theme.fg("muted", `plegadas · ${RAIL_TASKS_KEY}`));
 		} else {
 			todos.slice(0, MAX_RAIL_TODOS).forEach((t) => {
 				const mark = t.done
@@ -760,13 +772,14 @@ function railLines(ui: ExtensionUIContext, cwd: string, width: number = RAIL_WID
 						? theme.fg("warning", "▸")
 						: theme.fg("muted", "·");
 				wrapLines(t.text, W - 2, MAX_TODO_LINES).forEach((line, index) => {
-					lines.push(`${index === 0 ? `${mark} ` : "  "}${line}`);
+					taskLines.push(`${index === 0 ? `${mark} ` : "  "}${line}`);
 				});
 			});
 			if (todos.length > MAX_RAIL_TODOS) {
-				lines.push(theme.fg("muted", `… +${todos.length - MAX_RAIL_TODOS}`));
+				taskLines.push(theme.fg("muted", `… +${todos.length - MAX_RAIL_TODOS}`));
 			}
 		}
+		sections.push({ title: `tareas (${doneTodos}/${todos.length})`, lines: taskLines });
 	}
 
 	// MCP: siempre se pinta algo útil. Los estados vivos los publica la extensión MCP; si no corre
@@ -774,61 +787,85 @@ function railLines(ui: ExtensionUIContext, cwd: string, width: number = RAIL_WID
 	// por qué no hay nada, en vez de desaparecer en silencio.
 	const mcpServers = mcpRailServers(cwd);
 	const mcpEnabled = builtinExtensionEnabled(readExtensionOverrides(), "mcp");
-	lines.push(sep, theme.fg("accent", "MCP"));
+	const mcpLines: string[] = [];
 	if (mcpServers.length === 0) {
-		lines.push(theme.fg("muted", mcpEnabled ? "sin servidores" : "desactivado (-builtin:mcp)"));
-		if (mcpEnabled) lines.push(theme.fg("dim", clip("  hanni mcp add <nombre>", W - 2)));
+		mcpLines.push(theme.fg("muted", mcpEnabled ? "sin servidores" : "desactivado (-builtin:mcp)"));
+		if (mcpEnabled) mcpLines.push(theme.fg("dim", clip("hanni mcp add <nombre>", W - 2)));
 	} else {
-		if (!mcpEnabled) lines.push(theme.fg("warning", "built-in mcp desactivado"));
+		if (!mcpEnabled) mcpLines.push(theme.fg("warning", "built-in mcp desactivado"));
 		for (const server of mcpServers.slice(0, 6)) {
 			const presented = mcpStatePresentation(server.state);
-			lines.push(
+			mcpLines.push(
 				`${theme.fg(presented.color, presented.icon)} ${clip(server.name, W - 16)} ${theme.fg("muted", clip(presented.label, W - 8))}`,
 			);
 		}
-		if (mcpServers.length > 6) lines.push(theme.fg("muted", `… +${mcpServers.length - 6} MCP`));
+		if (mcpServers.length > 6) mcpLines.push(theme.fg("muted", `… +${mcpServers.length - 6} MCP`));
 	}
+	sections.push({ title: "MCP", lines: mcpLines });
 
 	// Cambios: compacto (máx. 3 rutas) para que no se acumule y empuje al resto.
 	const files = visibleWorktreeFiles(cwd, modifiedFilesCache.get(cwd) ?? []);
-	lines.push(sep, theme.fg("accent", `cambios (${files.length})`));
-	if (files.length === 0) {
-		lines.push(theme.fg("muted", "sin cambios"));
-	} else {
-		for (const file of files.slice(0, 3)) lines.push(`${theme.fg("muted", "·")} ${clip(file, W - 2)}`);
-		if (files.length > 3) lines.push(theme.fg("muted", `… +${files.length - 3}`));
-	}
+	const changeLines: string[] = [];
+	for (const file of files.slice(0, 3)) changeLines.push(`${theme.fg("muted", "·")} ${clip(file, W - 2)}`);
+	if (files.length > 3) changeLines.push(theme.fg("muted", `… +${files.length - 3}`));
+	if (changeLines.length === 0) changeLines.push(theme.fg("muted", "sin cambios"));
+	sections.push({ title: `cambios (${files.length})`, lines: changeLines });
 
-	return lines;
+	return sections;
 }
 
+/** Ancho que los bordes y el padding de cada panel le quitan al rail (2 bordes + 1 de padding por lado). */
+const RAIL_PANEL_CHROME = 4;
+
 /**
- * Texto del rail que se reconstruye cuando cambia el ancho de la columna: las tareas se
- * envuelven al ancho real, así que un rail más ancho muestra más texto por línea.
+ * Componente del rail: apila un panel por sección. Rehace el árbol cuando cambia el ancho (las tareas
+ * se envuelven al ancho real) o cuando el harness lo invalida por contenido nuevo.
  */
-class RailText extends Text {
-	private readonly build: (contentWidth: number) => string;
+class RailContent implements Component {
+	private readonly build: (contentWidth: number) => RailSection[];
+	private readonly getTheme: () => ExtensionUIContext["theme"];
 	private readonly minWidth: number;
 	private builtWidth = -1;
+	private dirty = true;
+	private stack: VStack = new VStack([]);
 
-	constructor(build: (contentWidth: number) => string, minWidth = 16) {
-		super("", 1, 1);
+	constructor(
+		build: (contentWidth: number) => RailSection[],
+		getTheme: () => ExtensionUIContext["theme"],
+		minWidth = 16,
+	) {
 		this.build = build;
+		this.getTheme = getTheme;
 		this.minWidth = minWidth;
 	}
 
-	override invalidate(): void {
-		this.builtWidth = -1;
-		super.invalidate();
+	invalidate(): void {
+		this.dirty = true;
 	}
 
-	override render(width: number): string[] {
-		const contentWidth = Math.max(this.minWidth, width - 2);
-		if (contentWidth !== this.builtWidth) {
+	render(width: number): string[] {
+		const contentWidth = Math.max(this.minWidth, width - RAIL_PANEL_CHROME);
+		if (this.dirty || contentWidth !== this.builtWidth) {
 			this.builtWidth = contentWidth;
-			this.setText(this.build(contentWidth));
+			this.dirty = false;
+			this.stack = this.buildStack(contentWidth);
 		}
-		return super.render(width);
+		return this.stack.render(Math.max(1, width));
+	}
+
+	private buildStack(contentWidth: number): VStack {
+		const theme = this.getTheme();
+		const children: StackChild[] = [];
+		for (const section of this.build(contentWidth)) {
+			if (children.length > 0) children.push({ component: new Spacer(1) });
+			children.push({
+				component: new Panel(new Text(section.lines.join("\n"), 1, 0), {
+					title: theme.fg("accent", section.title),
+					borderColor: (text) => theme.fg("borderMuted", text),
+				}),
+			});
+		}
+		return new VStack(children);
 	}
 }
 
@@ -836,7 +873,7 @@ class RailText extends Text {
  *  contaminar otras sesiones (p.ej. un refresco asíncrono diferido de otra ui). */
 interface RailWidget {
 	cwd: string;
-	text: RailText;
+	content: RailContent;
 	scroll: ScrollView;
 }
 const railWidgets = new WeakMap<ExtensionUIContext, RailWidget>();
@@ -847,15 +884,18 @@ function renderRail(ui: ExtensionUIContext, cwd: string): void {
 	// cada refresco (memoria, MCP, git…), el ScrollView reiniciaría su posición de scroll.
 	let widget = railWidgets.get(ui);
 	if (widget === undefined || widget.cwd !== cwd) {
-		const text = new RailText((contentWidth) => railLines(ui, cwd, contentWidth).join("\n"));
-		const scroll = new ScrollView(text, {
+		const content = new RailContent(
+			(contentWidth) => railSections(ui, cwd, contentWidth),
+			() => ui.theme,
+		);
+		const scroll = new ScrollView(content, {
 			follow: "end",
 			overscroll: "contain",
 			scrollbar: "auto",
 			scrollbarTrackStyle: (line) => ui.theme.fg("scrollbarTrack", line),
 			scrollbarThumbStyle: (line) => ui.theme.fg("scrollbarThumb", line),
 		});
-		widget = { cwd, text, scroll };
+		widget = { cwd, content, scroll };
 		railWidgets.set(ui, widget);
 		ui.setWidget(
 			"hanniorq-rail",
@@ -866,7 +906,7 @@ function renderRail(ui: ExtensionUIContext, cwd: string): void {
 		);
 	} else {
 		// Contenido nuevo con el mismo componente: fuerza la reconstrucción en el próximo frame.
-		widget.text.invalidate();
+		widget.content.invalidate();
 	}
 }
 
