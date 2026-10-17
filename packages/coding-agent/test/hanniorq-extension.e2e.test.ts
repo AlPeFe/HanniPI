@@ -588,6 +588,84 @@ describe("extensión hanniorq", () => {
 		expect(rail).not.toContain("inactivo"); // sin ficha sODD no se pinta inactivo
 	});
 
+	it("inyecta el briefing de memoria en el system prompt antes de trabajar", async () => {
+		const { listeners, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHanniorqExtension()(pi);
+		const cwd = mkdtempSync(join(tmpdir(), "hanniorq-briefing-"));
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: unknown) => {
+				const target = String(url);
+				if (target.includes("/api/sessions")) {
+					return Response.json([
+						{
+							goal: "arreglar la actualizacion",
+							summary: "swap por renombrado de la carpeta de instalacion",
+							nextSteps: "revisar hanniorq",
+							endedAtUtc: "2026-10-17T14:15:07.157851Z",
+						},
+					]);
+				}
+				if (target.includes("/api/observations")) {
+					return Response.json([
+						{
+							id: 7,
+							title: "hanni update se mataba a si mismo",
+							topicKey: "hannipi/update/windows",
+							type: "adr",
+						},
+					]);
+				}
+				return new Response("", { status: 404 });
+			}),
+		);
+		try {
+			const sections: Record<string, string> = {};
+			const promptGuidelines: string[] = [];
+			const event = {
+				type: "before_agent_start",
+				prompt: "sigue con lo de ayer",
+				systemPrompt: "",
+				systemPromptOptions: { sections, promptGuidelines },
+			};
+			await emit(pi, "before_agent_start", event, { cwd, ui: (pi as any).ui });
+
+			const briefing = sections.memoria;
+			expect(briefing).toContain("última sesión");
+			expect(briefing).toContain("hecho: swap por renombrado de la carpeta de instalacion");
+			expect(briefing).toContain("revisar hanniorq");
+			expect(briefing).toContain("hanni update se mataba a si mismo");
+			expect(promptGuidelines.join(" ")).toContain("mem_context");
+			expect(promptGuidelines.join(" ")).toContain("mem_session_summary");
+
+			// Sin daemon no se inventa memoria: ni sección ni guideline.
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () => {
+					throw new Error("daemon caido");
+				}),
+			);
+			const other = mkdtempSync(join(tmpdir(), "hanniorq-briefing-off-"));
+			try {
+				const offlineSections: Record<string, string> = {};
+				const offlineEvent = {
+					type: "before_agent_start",
+					prompt: "hola",
+					systemPrompt: "",
+					systemPromptOptions: { sections: offlineSections, promptGuidelines: [] },
+				};
+				await emit(pi, "before_agent_start", offlineEvent, { cwd: other, ui: (pi as any).ui });
+				expect(offlineSections.memoria).toBeUndefined();
+			} finally {
+				rmSync(other, { recursive: true, force: true });
+			}
+		} finally {
+			vi.unstubAllGlobals();
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
 	it("la tool todo pinta las tareas del harness y las marca completadas", async () => {
 		const { widgets, tools, pi } = createMockPi();
 		createHanniorqExtension()(pi);

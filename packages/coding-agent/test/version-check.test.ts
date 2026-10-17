@@ -34,6 +34,16 @@ describe("version checks", () => {
 		expect(isNewerPackageVersion("0.70.6", "0.70.5")).toBe(true);
 	});
 
+	it("el sufijo -hannipi no cuenta como prerelease", () => {
+		// El tag de release es "v0.2.15-hannipi" y el paquete instalado "0.2.15-hannipi":
+		// sin normalizar, semver lee el sufijo como prerelease y HanniPI avisa de una
+		// actualizacion contra su propia release.
+		expect(comparePackageVersions("0.2.15-hannipi", "0.2.15")).toBe(0);
+		expect(comparePackageVersions("v0.2.15-hannipi", "0.2.15-hannipi")).toBe(0);
+		expect(isNewerPackageVersion("0.2.15-hannipi", "0.2.15")).toBe(false);
+		expect(isNewerPackageVersion("0.2.16-hannipi", "0.2.15-hannipi")).toBe(true);
+	});
+
 	it("returns only newer versions", async () => {
 		const fetchMock = vi.fn(async () => Response.json({ version: "1.2.3" }));
 		vi.stubGlobal("fetch", fetchMock);

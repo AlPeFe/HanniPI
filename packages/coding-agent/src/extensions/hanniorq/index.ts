@@ -15,6 +15,10 @@
  *  - Orgánico pero pequeño: la ficha es la fuente de verdad; HanniGram es un
  *    índice/espejo, no un duplicado.
  *  - Delegación CONDICIONAL: si la ficha activa es grande (2+ pasos, varios archivos/paquetes) y spliteable (partes independientes), delega cada parte con la tool subagent pasándole la ficha como contexto; si es un solo bloque, hazlo inline.
+ *  - La memoria va primera: al arrancar la sesión se lee HanniGram UNA vez y se inyecta un briefing
+ *    (decisiones + última sesión + trabajo en curso) en el system prompt. Así una sesión nueva —o el
+ *    mismo repo días después— no empieza a ciegas reexplorando ficheros: la memoria dice qué estaba
+ *    decidido y en curso, y el repo se lee para lo que la memoria no cubre.
  */
 
 import { spawnSync } from "node:child_process";
@@ -299,6 +303,123 @@ async function saveSessionSummary(cwd: string, summary: string): Promise<boolean
 		body: JSON.stringify({ sessionId, summary }),
 	});
 	return ended !== undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Briefing de memoria: lo que el harness ya sabe del proyecto antes de empezar.
+//
+// Motivo: una sesión nueva (o la misma, días después) arrancaba a ciegas. La
+// memoria de HanniGram solo se usaba si al modelo se le ocurría consultarla, así
+// que volvía a explorar el repo para reconstruir lo ya decidido y lo que quedó a
+// medias. Ahora se lee UNA vez al arrancar y se inyecta en el system prompt
+// (sección `memoria`): memoria primero, repo para lo que la memoria no cubre.
+// ---------------------------------------------------------------------------
+
+interface BriefingSession {
+	goal?: string;
+	summary?: string;
+	nextSteps?: string;
+	startedAtUtc?: string;
+	endedAtUtc?: string;
+}
+
+interface BriefingObservation {
+	title?: string;
+	topicKey?: string;
+	type?: string;
+}
+
+interface MemoryBriefing {
+	/** Texto que entra en el system prompt (sección `memoria`). */
+	text: string;
+	/** Resumen de una línea para avisar al arrancar que hay memoria que retomar. */
+	headline: string;
+}
+
+/** Guideline que el prompt se lleva cuando hay briefing (se añade una sola vez). */
+const MEMORY_GUIDELINE =
+	"La memoria del proyecto (HanniGram) va primero: consulta `mem_context`/`mem_search` antes de explorar el repo. El repo manda para el código; la memoria, para lo decidido, lo aprendido y lo que quedó en curso. Al acabar trabajo sustancial guarda el handoff con `mem_session_summary` y las decisiones o patrones con `mem_save`.";
+
+let briefing: { cwd: string; value: MemoryBriefing } | undefined;
+
+function oneLine(text: string | undefined, max: number): string {
+	const flat = (typeof text === "string" ? text : "").replace(/\s+/g, " ").trim();
+	return flat.length <= max ? flat : `${flat.slice(0, max - 1).trimEnd()}…`;
+}
+
+function briefingWhen(iso: string | undefined): string {
+	return typeof iso === "string" ? `${iso.slice(0, 16).replace("T", " ")} UTC` : "fecha desconocida";
+}
+
+async function fetchMemoryBriefing(cwd: string): Promise<MemoryBriefing | undefined> {
+	const [rawObservations, rawSessions] = await Promise.all([
+		hannigram<BriefingObservation[]>(`/api/observations?${new URLSearchParams({ cwd, limit: "80" })}`),
+		hannigram<BriefingSession[]>(`/api/sessions?${new URLSearchParams({ cwd, limit: "3" })}`),
+	]);
+	// Daemon caído: no se inventa memoria (el rail ya lo marca como OFF) y no se cachea nada.
+	if (rawObservations === undefined && rawSessions === undefined) return undefined;
+	// El daemon es otro proceso: una respuesta con otra forma no puede tumbar la sesión.
+	const observations = Array.isArray(rawObservations) ? rawObservations : [];
+	const sessions = Array.isArray(rawSessions) ? rawSessions : [];
+
+	const lines: string[] = [];
+	const resumeBits: string[] = [];
+	const last = sessions[0];
+	if (last) {
+		lines.push(
+			`última sesión (${briefingWhen(last.endedAtUtc ?? last.startedAtUtc)}): ${oneLine(last.goal, 140) || "sin objetivo"}`,
+		);
+		if (last.summary) lines.push(`  hecho: ${oneLine(last.summary, 420)}`);
+		if (last.nextSteps) lines.push(`  siguiente: ${oneLine(last.nextSteps, 320)}`);
+		resumeBits.push(`última sesión ${briefingWhen(last.endedAtUtc ?? last.startedAtUtc)}`);
+	}
+
+	const decisions = observations.filter((o) => o.type === "adr" || o.type === "pattern");
+	if (decisions.length > 0) {
+		lines.push("decisiones y convenciones guardadas:");
+		for (const decision of decisions.slice(0, 6)) {
+			lines.push(`- ${oneLine(decision.title, 110)}${decision.topicKey ? ` [${decision.topicKey}]` : ""}`);
+		}
+		if (decisions.length > 6) lines.push(`- … y ${decisions.length - 6} más (mem_search)`);
+	}
+
+	const slug = getActiveSlug(cwd) ?? sheetWithStatusActive(cwd);
+	const steps = slug ? todoSteps(cwd) : [];
+	if (slug && steps.length > 0) {
+		const done = steps.filter((step) => step.done).length;
+		lines.push(`trabajo en curso: odd/tasks/${slug}.md (${done}/${steps.length} pasos hechos)`);
+		for (const step of steps.slice(0, 6)) lines.push(`- [${step.done ? "x" : " "}] ${oneLine(step.text, 120)}`);
+		if (steps.length > 6) lines.push(`- … y ${steps.length - 6} pasos más (lee la ficha)`);
+		resumeBits.push(`en curso odd/tasks/${slug}.md (${done}/${steps.length})`);
+	}
+
+	if (lines.length === 0) {
+		lines.push(
+			"sin memoria todavía para este proyecto: al acabar trabajo sustancial guarda el handoff con `mem_session_summary` y las decisiones con `mem_save` (o construye la primera con /explore).",
+		);
+	} else {
+		lines.push(
+			`memoria del proyecto: ${observations.length} ${observations.length === 1 ? "observación" : "observaciones"} recientes (${HANNIGRAM_BASE}).`,
+		);
+	}
+
+	const headline =
+		resumeBits.length > 0
+			? `Memoria: ${resumeBits.join(" · ")}`
+			: `Memoria: ${observations.length} observaciones del proyecto`;
+	return { text: lines.join("\n"), headline };
+}
+
+/**
+ * Lee (una vez por sesión) el briefing de memoria del proyecto. Solo se cachea con
+ * contenido: si el daemon aún no responde el siguiente turno lo reintenta, en vez de
+ * dejar la sesión entera sin memoria.
+ */
+async function loadMemoryBriefing(cwd: string): Promise<MemoryBriefing | undefined> {
+	if (briefing?.cwd === cwd) return briefing.value;
+	const value = await fetchMemoryBriefing(cwd);
+	if (value !== undefined) briefing = { cwd, value };
+	return value;
 }
 
 // ---------------------------------------------------------------------------
@@ -1175,6 +1296,17 @@ export function createHanniorqExtension(
 			void refreshModifiedFiles(pi, ctx.ui, ctx.cwd ?? process.cwd());
 		});
 
+		// Briefing de memoria: al empezar el turno, lo que HanniGram ya sabe del proyecto entra en el
+		// system prompt (sección `memoria`) para que el agente retome en vez de reexplorar. La lectura
+		// se cachea por sesión, así que no cuesta una petición por turno.
+		pi.on("before_agent_start", async (event, ctx) => {
+			const cwd = ctx.cwd ?? process.cwd();
+			const memory = await loadMemoryBriefing(cwd);
+			if (memory) event.systemPromptOptions.sections.memoria = memory.text;
+			const guidelines = event.systemPromptOptions.promptGuidelines;
+			if (!guidelines.includes(MEMORY_GUIDELINE)) guidelines.push(MEMORY_GUIDELINE);
+		});
+
 		// Indicador sODD: pinta si hay ficha activa (al iniciar la sesión,
 		// que es cuando la ficha se retoma).
 		pi.on("session_start", (_event, ctx) => {
@@ -1189,10 +1321,16 @@ export function createHanniorqExtension(
 			void refreshModifiedFiles(pi, ctx.ui, cwd);
 			unsubscribeMcpStatus?.();
 			unsubscribeMcpStatus = subscribeMcpConnectionStatuses(() => renderRail(ctx.ui, cwd));
-			void (options.ensureDaemon ?? ensureHanniGramDaemon)({ cwd, baseUrl: HANNIGRAM_BASE }).then((started) => {
-				if (!started) return;
-				void checkMemory().then(() => renderRail(ctx.ui, cwd));
-			});
+			void (options.ensureDaemon ?? ensureHanniGramDaemon)({ cwd, baseUrl: HANNIGRAM_BASE }).then(
+				async (started) => {
+					if (!started) return;
+					await checkMemory();
+					renderRail(ctx.ui, cwd);
+					// Con el daemon ya arriba: briefing listo y aviso de lo que se retoma.
+					const memory = await loadMemoryBriefing(cwd);
+					if (memory) ctx.ui.notify(memory.headline, "info");
+				},
+			);
 		});
 		pi.on("session_shutdown", () => {
 			unsubscribeMcpStatus?.();

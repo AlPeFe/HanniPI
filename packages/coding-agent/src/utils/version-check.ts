@@ -31,18 +31,26 @@ export function formatVersionCheckError(error: unknown): string {
 	return causeMessage ? `${rootMessage} (cause: ${causeMessage})` : rootMessage;
 }
 
-/** Extract the numeric core (major.minor.patch) from a version string, ignoring
- * any "v" prefix or prerelease suffix like "-hannipi". A suffix would otherwise
- * read as a prerelease (e.g. "0.2.1-hannipi" < "0.2.1"), so HanniPI always
- * reported "update available" against its own release. */
+/** Normaliza el sufijo propio de HanniPI: semver lee "0.2.1-hannipi" como prerelease
+ * ("0.2.1-hannipi" < "0.2.1"), asi que HanniPI avisaba de "actualizacion disponible"
+ * contra su propia release. Solo se quita ese sufijo; las prereleases de verdad (beta,
+ * rc) se comparan como manda semver, que es lo que hace "5.0.0-beta.20" > "5.0.0-beta.9". */
+function normalizeVersion(version: string): string {
+	return version
+		.trim()
+		.replace(/^v/, "")
+		.replace(/-hannipi(\.\d+)?$/, "");
+}
+
+/** Ultimo recurso para versiones que semver no entiende: solo los digitos. */
 function coreVersion(version: string): string {
 	const match = version.trim().match(/(\d+\.\d+\.\d+)/);
 	return match ? match[1] : version.trim();
 }
 
 export function comparePackageVersions(leftVersion: string, rightVersion: string): number | undefined {
-	const left = valid(coreVersion(leftVersion));
-	const right = valid(coreVersion(rightVersion));
+	const left = valid(normalizeVersion(leftVersion));
+	const right = valid(normalizeVersion(rightVersion));
 	if (!left || !right) {
 		return undefined;
 	}

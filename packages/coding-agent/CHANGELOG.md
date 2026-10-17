@@ -14,6 +14,7 @@
 - HanniPI: the right rail can be resized by dragging its left border (one-column strip between chat and rail) with the mouse; the drag applies live and persists on release.
 - HanniPI: the rail-right visibility toggle (`/hanniorq rail`) and the task-list collapse (`/hanniorq tasks`, ctrl+alt+t) now persist across sessions via the new `railHidden` and `railTasksCollapsed` settings, exposed to extensions as `get/setRailHidden` and `get/setRailTasksCollapsed`.
 - HanniPI: the right rail content is scrollable (wheel over the rail scrolls it, with a transient scrollbar); the widget keeps its scroll position across rail refreshes.
+- HanniPI: on session start the harness reads HanniGram once and injects a `memoria` section into the system prompt — the last session handoff (goal, what was done, next steps), the saved decisions and conventions, and the work in flight from the active sODD sheet — plus a guideline to consult memory before exploring the repo and to save a `mem_session_summary` when finishing. A session on the same repo days later now starts from what was decided and left half-done instead of re-exploring files; when the project has no memory yet, the section says so and how to seed it. The read is cached per session, so it costs one request, not one per turn.
 
 ### Changed
 
@@ -27,6 +28,7 @@
 
 ### Fixed
 
+- HanniPI: version comparison no longer reads a real prerelease as equal to another one (`5.0.0-beta.20` against `5.0.0-beta.9` came out as `0`). Only HanniPI's own `-hannipi` suffix is stripped now, so a release tag still does not look like an older prerelease of itself while `beta`/`rc` versions order as semver says.
 - HanniPI: the right rail shows the top of its content again (project and tasks) instead of jumping to the end on every refresh. Every concept is now its own bordered panel, so the rail is taller than the viewport and following the end pushed the task list — the harness `todo` list or the sODD steps — out of view.
 - HanniPI: `hanni update` on Windows no longer kills the process that runs it. The installer used to stop every `hanni.exe` (including the `hanni update` process itself and the harness session that launched it) right before swapping files, so the update aborted at that point: staging stayed in `%TEMP%`, the install kept the old version and the "new version available" notice never went away. Now the installer protects its own process plus its ancestor chain, stops only the memory daemon and auxiliary processes, and swaps the install directory by renaming it aside (a running `.exe` cannot be deleted, but its folder can be renamed), deleting the leftovers on the next run. The new version applies when the harness is restarted.
 - HanniPI: `hanni update` on Windows now updates the standalone (bun binary) install by running the unified installer (`hanni-setup.ps1 -Action update`), which verifies the release checksum and stops Hanni processes, instead of failing with "self-update on Windows is only supported for npm and pnpm installs".
