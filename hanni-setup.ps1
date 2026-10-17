@@ -5,7 +5,13 @@
 #   powershell -ExecutionPolicy Bypass -File hanni-setup.ps1
 #   powershell -ExecutionPolicy Bypass -File hanni-setup.ps1 -Action install -Yes
 #   powershell -ExecutionPolicy Bypass -File hanni-setup.ps1 -Action update -HannigramSource latest
+#   powershell -ExecutionPolicy Bypass -File hanni-setup.ps1 -Action fonts
 #   powershell -ExecutionPolicy Bypass -File hanni-setup.ps1 -Action uninstall
+#
+# Ademas de HanniPI y HanniGram, la instalacion deja lista la tipografia del
+# harness: instala la familia 'Rysana Mono' (viene en el zip, en
+# assets/fonts/rysana) para el usuario actual y fija esa fuente como fuente por
+# defecto de Windows Terminal. Con -SkipFonts se omite todo esto.
 #
 # Antes de instalar/actualizar/desinstalar se PARAN todos los procesos de Hanni:
 # el binario de HanniPI (compilado con bun), el daemon HanniGram y cualquier
@@ -19,10 +25,12 @@
 # en vez del pinneado en la release de HanniPI.
 
 param(
-    [ValidateSet("menu", "install", "update", "uninstall")]
+    [ValidateSet("menu", "install", "update", "uninstall", "fonts")]
     [string]$Action = "menu",
     [switch]$Yes,
     [switch]$SkipStop,
+    # No instala la tipografia Rysana ni toca la configuracion de Windows Terminal.
+    [switch]$SkipFonts,
     # pinned = daemon pinneado en la release de HanniPI (una sola descarga
     # atomica, recomendado); latest = ultima release de AlPeFe/HanniGram.
     [ValidateSet("pinned", "latest")]
@@ -38,6 +46,12 @@ $HgmAsset = "hannigram-windows-x64.zip"
 $InstallDir = Join-Path $env:LOCALAPPDATA "HanniPI"
 $HgmDir = Join-Path $InstallDir "hannigram"
 $BinName = "hanni.exe"
+# Tipografia del harness: los TTF viajan en el zip (assets/fonts/rysana) y se
+# instalan en las fuentes del usuario; Windows Terminal pasa a usarlos.
+$FontsSourceDir = Join-Path $InstallDir "assets\fonts\rysana\ttf"
+$UserFontsDir = Join-Path $env:LOCALAPPDATA "Microsoft\Windows\Fonts"
+$FontsRegPath = "HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Fonts"
+$FontFace = "Rysana Mono"
 # El harness descubre extensiones en <agentDir>/extensions (por defecto ~/.pi/agent).
 $AgentDir = $env:HANNI_CODING_AGENT_DIR
 if (-not $AgentDir) { $AgentDir = Join-Path $env:USERPROFILE ".pi\agent" }
@@ -277,6 +291,109 @@ function Install-HanniGramExtension($hgmSource) {
     return $true
 }
 
+# ---------------------------------------------------------------------------
+# Tipografia Rysana Mono: se instala por usuario (sin admin) y Windows Terminal
+# pasa a usarla como fuente por defecto.
+# ---------------------------------------------------------------------------
+function Install-RysanaFonts {
+    if (-not (Test-Path $FontsSourceDir)) {
+        Write-Warn "no encuentro las fuentes en $FontsSourceDir; instala antes con -Action install"
+        return $false
+    }
+    New-Item -ItemType Directory -Force -Path $UserFontsDir | Out-Null
+    if (-not (Test-Path $FontsRegPath)) { New-Item -Path $FontsRegPath -Force | Out-Null }
+    $files = @(Get-ChildItem -Path $FontsSourceDir -Filter "*.ttf")
+    $count = 0
+    foreach ($file in $files) {
+        $target = Join-Path $UserFontsDir $file.Name
+        # Reinstalar sobrescribiendo un fichero ya cargado por Windows falla con
+        # "en uso": si ya esta ahi con el mismo tamano, se da por instalado.
+        if (-not ((Test-Path $target) -and ((Get-Item $target).Length -eq $file.Length))) {
+            try {
+                Copy-Item $file.FullName $target -Force -ErrorAction Stop
+            } catch {
+                Write-Warn "no pude copiar $($file.Name) (en uso); cierra Windows Terminal y reintenta"
+                continue
+            }
+        }
+        # -creplace: -replace ignora mayusculas y partiria 'Italic' en 'I ta li c'.
+        $name = "$FontFace $($file.BaseName -creplace '^RysanaMono-', '' -creplace '([a-z])([A-Z])', '$1 $2')"
+        New-ItemProperty -Path $FontsRegPath -Name "$name (TrueType)" -Value $target -PropertyType String -Force | Out-Null
+        $count++
+    }
+    Write-Ok "$count ficheros de la familia '$FontFace' instalados en $UserFontsDir"
+    # AddFontResource + WM_FONTCHANGE: las apps abiertas ven la fuente sin reiniciar Windows.
+    try {
+        Add-Type -Namespace HanniFonts -Name Notify -MemberDefinition @"
+[System.Runtime.InteropServices.DllImport("gdi32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+public static extern int AddFontResource(string lpFileName);
+[System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint msg, System.UIntPtr wParam, System.IntPtr lParam, uint flags, uint timeout, out System.UIntPtr result);
+"@
+        foreach ($file in $files) {
+            [void][HanniFonts.Notify]::AddFontResource((Join-Path $UserFontsDir $file.Name))
+        }
+        $result = [System.UIntPtr]::Zero
+        [void][HanniFonts.Notify]::SendMessageTimeout([System.IntPtr]0xffff, 0x001D, [System.UIntPtr]::Zero, [System.IntPtr]::Zero, 0x0002, 1000, [ref]$result)
+    } catch {
+        Write-Warn "las terminales ya abiertas pueden necesitar reinicio para pintar la fuente"
+    }
+    return $true
+}
+
+# ficheros settings.json de Windows Terminal (Store, Preview y sin empaquetar).
+function Get-TerminalSettingsPaths {
+    $paths = @()
+    foreach ($pkg in @("Microsoft.WindowsTerminal_8wekyb3d8bbwe", "Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe")) {
+        $paths += (Join-Path $env:LOCALAPPDATA "Packages\$pkg\LocalState\settings.json")
+    }
+    $paths += (Join-Path $env:LOCALAPPDATA "Microsoft\Windows Terminal\settings.json")
+    return $paths
+}
+
+function Set-RysanaTerminalFont {
+    $applied = 0
+    foreach ($settings in Get-TerminalSettingsPaths) {
+        if (-not (Test-Path $settings)) { continue }
+        $config = $null
+        try { $config = Get-Content $settings -Raw | ConvertFrom-Json } catch { }
+        if (-not $config -or -not $config.profiles) {
+            Write-Warn "$settings no se puede leer como JSON (comentarios o formato); pon '$FontFace' a mano"
+            continue
+        }
+        if ($null -eq $config.profiles.defaults) {
+            $config.profiles | Add-Member -NotePropertyName "defaults" -NotePropertyValue (New-Object psobject) -Force
+        }
+        $defaults = $config.profiles.defaults
+        $current = $null
+        if ($defaults.font -and $defaults.font.face) { $current = [string]$defaults.font.face }
+        if ($current -eq $FontFace) { Write-Ok "Windows Terminal ya usa $FontFace"; continue }
+        if ($current) {
+            Write-Warn "Windows Terminal usa '$current'; no la cambio. Ponla a mano si quieres '$FontFace'"
+            continue
+        }
+        if (-not (Test-Path "$settings.hanni-bak")) { Copy-Item $settings "$settings.hanni-bak" -Force }
+        if (-not $defaults.font) {
+            $defaults | Add-Member -NotePropertyName "font" -NotePropertyValue (New-Object psobject) -Force
+        }
+        $defaults.font | Add-Member -NotePropertyName "face" -NotePropertyValue $FontFace -Force
+        $text = $config | ConvertTo-Json -Depth 32
+        [System.IO.File]::WriteAllText($settings, $text, (New-Object System.Text.UTF8Encoding($false)))
+        Write-Ok "Windows Terminal: fuente por defecto = $FontFace (copia de seguridad: $settings.hanni-bak)"
+        $applied++
+    }
+    if ($applied -eq 0 -and -not (Test-Path (Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"))) {
+        Write-Warn "Windows Terminal no detectado; la fuente queda instalada para las apps que la elijan"
+    }
+}
+
+function Install-Fonts {
+    Write-Title "Tipografia Rysana Mono"
+    if (-not (Install-RysanaFonts)) { return }
+    Set-RysanaTerminalFont
+    Write-Host "  Abre una pestana nueva (o Windows Terminal) para verla." -ForegroundColor Magenta
+}
+
 function Install-All([bool]$isUpdate) {
     if ($isUpdate) { Write-Title "Actualizar HanniPI + HanniGram" }
     else { Write-Title "Instalar HanniPI + HanniGram" }
@@ -316,6 +433,11 @@ function Install-All([bool]$isUpdate) {
     Add-UserPath $InstallDir
     Add-UserPath $HgmDir
     [void](Install-HanniGramExtension $HgmDir)
+    if ($SkipFonts) {
+        Write-Warn "tipografia Rysana omitida (-SkipFonts)"
+    } elseif (Install-RysanaFonts) {
+        Set-RysanaTerminalFont
+    }
 
     $ver = $null
     try { $ver = & (Join-Path $InstallDir $BinName) --version 2>$null } catch { }
@@ -360,6 +482,7 @@ function Uninstall-All {
     [Environment]::SetEnvironmentVariable("HANNIGRAM_DAEMON", $null, "User")
     if ($env:HANNIGRAM_DAEMON) { Remove-Item Env:\HANNIGRAM_DAEMON -ErrorAction SilentlyContinue }
     Write-Ok "PATH y HANNIGRAM_DAEMON limpiados"
+    Write-Warn "las fuentes Rysana ($UserFontsDir) y la fuente de Windows Terminal quedan instaladas; quitalas a mano si no las quieres"
 
     $dataDir = Join-Path $env:USERPROFILE ".hannigram"
     if (Test-Path $dataDir) {
@@ -386,6 +509,7 @@ function Show-Menu {
     Write-Host " 1) Instalar"
     Write-Host " 2) Actualizar"
     Write-Host " 3) Desinstalar"
+    Write-Host " 4) Instalar la tipografia Rysana (fuente de la terminal)"
     Write-Host " 0) Salir"
     Write-Host ""
     $op = Read-Host "Elige una opcion"
@@ -393,6 +517,7 @@ function Show-Menu {
         "1" { Install-All $false }
         "2" { Install-All $true }
         "3" { Uninstall-All }
+        "4" { Install-Fonts }
         "0" { return }
         default { Write-Warn "opcion no valida"; Show-Menu }
     }
@@ -404,4 +529,5 @@ try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::S
 if ($Action -eq "menu") { Show-Menu }
 elseif ($Action -eq "install") { Install-All $false }
 elseif ($Action -eq "update") { Install-All $true }
+elseif ($Action -eq "fonts") { Install-Fonts }
 elseif ($Action -eq "uninstall") { Uninstall-All }

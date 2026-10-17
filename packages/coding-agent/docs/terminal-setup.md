@@ -18,6 +18,15 @@ Pi uses extended-key protocols so terminals can distinguish combinations such as
 
 Use `/hotkeys` to inspect Pi's active shortcuts. See [Keybindings](keybindings.md) to change them.
 
+## Rysana Mono
+
+HanniPI bundles the subset of Rysana Mono it needs (SIL OFL 1.1; see `src/modes/interactive/assets/fonts/rysana/LICENSE.txt`) and applies it to the two surfaces it controls:
+
+- **The terminal.** The Windows installer copies the hinted static TTF weights into the current user's fonts and registers them as the `Rysana Mono` family, so the TUI renders with it once the terminal uses that face. `hanni-setup.ps1` also sets `profiles.defaults.font.face` in Windows Terminal, unless that entry already names another font (your choice stays) or the file cannot be parsed (`ConvertFrom-Json` rejects JSONC comments; set the face by hand then). The previous file is kept next to it as `settings.json.hanni-bak`. Skip the whole step with `-SkipFonts`; run only it with `hanni-setup.ps1 -Action fonts`.
+- **HTML exports.** The export template inlines the core WOFF2 subset (weight 100-900) as a data URI and puts `Rysana Mono` first in the font stack, so an exported session keeps the typeface on machines without it. Characters outside the core subset fall back to the next font in the stack.
+
+The font has no Nerd Font icon set: it covers box drawing, block elements, braille, the Powerline separators (`U+E0B0-E0BF`), a few git glyphs (`U+E0A0-E0A3`) and the symbols the TUI uses.
+
 ## Kitty
 
 Kitty supports the required keyboard protocol without additional configuration.

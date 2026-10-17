@@ -4,6 +4,8 @@
 
 ### Added
 
+- HanniPI: bundled the Rysana Mono typeface (`packages/coding-agent/src/modes/interactive/assets/fonts/rysana`, SIL OFL 1.1). The Windows installer installs the hinted static weights for the current user and sets `Rysana Mono` as the Windows Terminal default font face; `hanni-setup.ps1 -Action fonts` runs only that step and `-SkipFonts` skips it.
+- HanniPI: HTML session exports render with Rysana Mono, embedded in the export as a WOFF2 data URI (core subset, weight 100-900), so the transcript keeps the typeface where it is not installed.
 - HanniPI: added `/helpme` (lists every HanniPI command and what it does), `/hannidump [ruta]` (writes an `agents.md` context+ADR dump for harnesses that do not use HanniGram, summarized by the model), and `/explore` (reads the project's md files/README and builds initial HanniGram memory on first run).
 - HanniPI: added the `todo` tool, which the harness uses to declare/update the current request's task list. The right rail shows it with `✓`/`▸`/`·` marks; a new list replaces the previous one (so new tasks in the next prompt clear the old ones), and without a list the rail falls back to the active sODD sheet's steps.
 - HanniPI: the right rail can be resized by dragging its left border (one-column strip between chat and rail) with the mouse; the drag applies live and persists on release.

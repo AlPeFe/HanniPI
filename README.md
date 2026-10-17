@@ -83,6 +83,12 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 - Configuración en `~/.pi/agent/mcp.json` (global) y `.pi/mcp.json` (proyecto), con la forma `mcpServers`; también hay CLI: `hanni mcp add|remove|list`.
 - El rail derecho muestra los servidores MCP configurados con su estado (`conectado`, `sin conectar`, `desactivado`, `login pendiente`, `caído`) y avisa si la extensión MCP está desactivada en `settings.json` (por ejemplo `"-builtin:mcp"`).
 
+### ✍️ Tipografía
+
+- La TUI y los exports HTML usan **Rysana Mono**, empaquetada en el repo (SIL OFL 1.1, subconjunto mono del paquete `rysana-type`).
+- El instalador de Windows la instala para tu usuario y fija `Rysana Mono` como fuente por defecto de **Windows Terminal**; se omite con `-SkipFonts` y se repite con `hanni-setup.ps1 -Action fonts`.
+- Los exports HTML (`hanni --export <sesión>.jsonl`, y `/export` en la TUI) embeben el subconjunto en WOFF2 como data URI, así que el transcript conserva la tipografía aunque quien lo abra no la tenga instalada.
+
 ## Instalación
 
 **Windows** — un solo script instala **HanniPI + HanniGram** juntos (descarga el binario standalone de la última release, verifica SHA256, lo añade al PATH como `hanni` e instala el daemon y el CLI de HanniGram):

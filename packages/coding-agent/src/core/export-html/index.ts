@@ -1,7 +1,7 @@
 import type { AgentState } from "@earendil-works/pi-agent-core";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { basename, join } from "path";
-import { APP_NAME, getExportTemplateDir } from "../../config.ts";
+import { APP_NAME, getBundledInteractiveAssetPath, getExportTemplateDir } from "../../config.ts";
 import { getResolvedThemeColors, getThemeExportColors } from "../../modes/interactive/theme/theme.ts";
 import { normalizePath, resolvePath } from "../../utils/paths.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
@@ -138,6 +138,37 @@ interface SessionData {
 }
 
 /**
+ * Core of the bundled Rysana Mono subset, inlined as a data URI so an exported
+ * session keeps the typeface even where the font is not installed.
+ */
+const EXPORT_FONT_FACES = [
+	{ file: "fonts/rysana/web/RysanaMono-Variable-Core.woff2", style: "normal" },
+	{ file: "fonts/rysana/web/RysanaMono-VariableItalic-Core.woff2", style: "italic" },
+];
+
+/** Build the `@font-face` rules for the bundled typeface; empty when the files are missing. */
+function buildFontFaceCss(): string {
+	const faces: string[] = [];
+	for (const face of EXPORT_FONT_FACES) {
+		const fontPath = getBundledInteractiveAssetPath(face.file);
+		if (!existsSync(fontPath)) continue;
+		const data = readFileSync(fontPath).toString("base64");
+		faces.push(
+			[
+				"@font-face {",
+				"  font-family: 'Rysana Mono';",
+				`  font-style: ${face.style};`,
+				"  font-weight: 100 900;",
+				"  font-display: swap;",
+				`  src: url(data:font/woff2;base64,${data}) format('woff2');`,
+				"}",
+			].join("\n"),
+		);
+	}
+	return faces.join("\n");
+}
+
+/**
  * Core HTML generation logic shared by both export functions.
  */
 function generateHtml(sessionData: SessionData, themeName?: string): string {
@@ -161,6 +192,7 @@ function generateHtml(sessionData: SessionData, themeName?: string): string {
 
 	// Build the CSS with theme variables injected
 	const css = templateCss
+		.replace("{{FONT_FACE}}", buildFontFaceCss())
 		.replace("{{THEME_VARS}}", themeVars)
 		.replace("{{BODY_BG}}", bodyBg)
 		.replace("{{CONTAINER_BG}}", containerBg)
