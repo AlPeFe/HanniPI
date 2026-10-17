@@ -90,6 +90,14 @@ async function emit(pi: ReturnType<typeof createMockPi>["pi"], event: string, pa
 	for (const h of handlers) await h(payload, ctx);
 }
 
+/**
+ * Extension sin daemon real: los tests no arrancan procesos ni escriben en la memoria del usuario
+ * (la BD real de HanniGram acabo llena de proyectos temporales de tests).
+ */
+function createHermeticExtension(pi: Parameters<ExtensionFactory>[0]): void {
+	createHanniorqExtension({ ensureDaemon: async () => false })(pi);
+}
+
 /** Texto del widget del rail derecho, renderizado al ancho dado (por defecto, el de la TUI). */
 function railText(widgets: Map<string, string[] | ((...args: any[]) => unknown)>, width = 32): string {
 	const widget = widgets.get("hanniorq-rail");
@@ -109,7 +117,7 @@ describe("extensión hanniorq", () => {
 
 	it("registra los comandos /hanniorq y /hannigram", () => {
 		const { registeredCommands, pi } = createMockPi();
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		expect(registeredCommands.has("hanniorq")).toBe(true);
 		expect(registeredCommands.has("hannigram")).toBe(true);
 		expect(registeredCommands.get("hanniorq")!.description).toContain("Orquestador sODD");
@@ -118,7 +126,7 @@ describe("extensión hanniorq", () => {
 
 	it("registra /helpme, /hannidump y /explore", () => {
 		const { registeredCommands, pi } = createMockPi();
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		expect(registeredCommands.has("helpme")).toBe(true);
 		expect(registeredCommands.has("hannidump")).toBe(true);
 		expect(registeredCommands.has("explore")).toBe(true);
@@ -130,7 +138,7 @@ describe("extensión hanniorq", () => {
 	it("renders configured MCP connection state on the right rail", async () => {
 		const { listeners, widgets, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const ctx = { cwd: "C:/x", ui: (pi as any).ui };
 		publishMcpConnectionStatuses("test", [
 			{ name: "context7", state: "connected" },
@@ -152,7 +160,7 @@ describe("extensión hanniorq", () => {
 	it("muestra los servidores de mcp.json aunque la extensión MCP no haya conectado", async () => {
 		const { listeners, widgets, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const agentDir = mkdtempSync(join(tmpdir(), "hanniorq-mcp-agent-"));
 		const cwd = mkdtempSync(join(tmpdir(), "hanniorq-mcp-cwd-"));
 		const previousAgentDir = process.env.HANNI_CODING_AGENT_DIR;
@@ -187,7 +195,7 @@ describe("extensión hanniorq", () => {
 	it("el rail avisa cuando el built-in mcp está desactivado en los ajustes", async () => {
 		const { listeners, widgets, pi, extensionOverrides } = createMockPi();
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const agentDir = mkdtempSync(join(tmpdir(), "hanniorq-mcp-off-"));
 		const previousAgentDir = process.env.HANNI_CODING_AGENT_DIR;
 		process.env.HANNI_CODING_AGENT_DIR = agentDir;
@@ -218,7 +226,7 @@ describe("extensión hanniorq", () => {
 	it("cierra el turno con la línea hannigram → memory de lo que cambió", async () => {
 		const { listeners, widgets, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const ctx = { cwd: "C:/x", ui: (pi as any).ui };
 		await emit(pi, "turn_start", {}, ctx);
 
@@ -242,7 +250,7 @@ describe("extensión hanniorq", () => {
 	it("no pinta la línea de memoria cuando el turno no la toca", async () => {
 		const { listeners, widgets, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const ctx = { cwd: "C:/x", ui: (pi as any).ui };
 		await emit(pi, "turn_start", {}, ctx);
 		await emit(pi, "tool_execution_start", { toolName: "read", toolCallId: "r1", args: {} }, ctx);
@@ -256,7 +264,7 @@ describe("extensión hanniorq", () => {
 	it("el rail avisa del contexto y de la compactación inminente", async () => {
 		const { listeners, widgets, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		await emit(
 			pi,
 			"session_start",
@@ -286,7 +294,7 @@ describe("extensión hanniorq", () => {
 		(pi as any).__listeners = listeners;
 		const exec = vi.fn(async () => ({ stdout: " M source.ts\0?? new.ts\0", stderr: "", code: 0, killed: false }));
 		(pi as any).exec = exec;
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const root = mkdtempSync(join(tmpdir(), "hanniorq-rail-"));
 		try {
 			mkdirSync(join(root, "odd", "tasks"), { recursive: true });
@@ -314,7 +322,7 @@ describe("extensión hanniorq", () => {
 	it("lista los pasos aunque la ficha no use la sección ## Pasos", async () => {
 		const { listeners, widgets, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const root = mkdtempSync(join(tmpdir(), "hanniorq-rail-tasks-"));
 		try {
 			mkdirSync(join(root, "odd", "tasks"), { recursive: true });
@@ -336,7 +344,7 @@ describe("extensión hanniorq", () => {
 	it("envuelve las tareas largas y las muestra enteras al ensanchar el rail", async () => {
 		const { listeners, widgets, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const root = mkdtempSync(join(tmpdir(), "hanniorq-rail-wrap-"));
 		try {
 			mkdirSync(join(root, "odd", "tasks"), { recursive: true });
@@ -362,7 +370,7 @@ describe("extensión hanniorq", () => {
 
 	it("/hanniorq rail <n> fija el ancho del rail y el toggle lo oculta/muestra", async () => {
 		const { registeredCommands, widgets, pi } = createMockPi();
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const root = mkdtempSync(join(tmpdir(), "hanniorq-rail-width-"));
 		try {
 			const ui = (pi as any).ui;
@@ -388,7 +396,7 @@ describe("extensión hanniorq", () => {
 	it("muestra sODD activo con una ficha status:active aunque falte odd/.active", async () => {
 		const { listeners, widgets, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const root = mkdtempSync(join(tmpdir(), "hanniorq-rail-status-"));
 		try {
 			mkdirSync(join(root, "odd", "tasks"), { recursive: true });
@@ -411,7 +419,7 @@ describe("extensión hanniorq", () => {
 	it("sODD activo muestra working durante el turno y not working en reposo", async () => {
 		const { listeners, widgets, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const root = mkdtempSync(join(tmpdir(), "hanniorq-rail-work-"));
 		try {
 			mkdirSync(join(root, "odd", "tasks"), { recursive: true });
@@ -436,7 +444,7 @@ describe("extensión hanniorq", () => {
 	it("la tecla del rail pliega y despliega los pasos", async () => {
 		const { listeners, widgets, shortcuts, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const root = mkdtempSync(join(tmpdir(), "hanniorq-rail-toggle-"));
 		try {
 			mkdirSync(join(root, "odd", "tasks"), { recursive: true });
@@ -462,7 +470,7 @@ describe("extensión hanniorq", () => {
 
 	it("/explore envía un turno al modelo pidiendo construir memoria del proyecto", async () => {
 		const { registeredCommands, pi, sentMessages } = createMockPi();
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const handler = registeredCommands.get("explore")!.handler;
 		const ctx = { cwd: "C:/proyectos/demo", ui: (pi as any).ui };
 		await handler("", ctx);
@@ -476,7 +484,7 @@ describe("extensión hanniorq", () => {
 
 	it("/hannidump sin memoria avisa y no envía turno", async () => {
 		const { registeredCommands, pi, sentMessages } = createMockPi();
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const handler = registeredCommands.get("hannidump")!.handler;
 		const ctx = { cwd: "C:/proyectos/demo", ui: (pi as any).ui };
 		// Sin daemon HanniGram (fetch falla → undefined), no hay observaciones. El daemon real
@@ -500,7 +508,7 @@ describe("extensión hanniorq", () => {
 		const { listeners, widgets, pi } = createMockPi();
 		// exponer listeners en pi para el helper emit
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const ctx = { cwd: "C:/x", ui: (pi as any).ui };
 
 		// turn_start resetea
@@ -535,7 +543,7 @@ describe("extensión hanniorq", () => {
 	it("marca sODD tocado cuando se usa /task", async () => {
 		const { listeners, widgets, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const ctx = { cwd: "C:/x", ui: (pi as any).ui };
 
 		await emit(pi, "turn_start", {}, ctx);
@@ -549,7 +557,7 @@ describe("extensión hanniorq", () => {
 	it("no marca memoria cuando no se escribió", async () => {
 		const { listeners, widgets, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const ctx = { cwd: "C:/x", ui: (pi as any).ui };
 
 		await emit(pi, "turn_start", {}, ctx);
@@ -563,7 +571,7 @@ describe("extensión hanniorq", () => {
 	it("muestra lecturas y escrituras de memoria en el rail derecho", async () => {
 		const { listeners, widgets, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const ctx = { cwd: "C:/x", ui: (pi as any).ui };
 		await emit(pi, "turn_start", {}, ctx);
 		await emit(
@@ -592,7 +600,7 @@ describe("extensión hanniorq", () => {
 		const { listeners, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
 		// ensureDaemon falso: el test no arranca el daemon real.
-		createHanniorqExtension({ ensureDaemon: async () => false })(pi);
+		createHermeticExtension(pi);
 		const cwd = mkdtempSync(join(tmpdir(), "hanniorq-briefing-"));
 		vi.stubGlobal(
 			"fetch",
@@ -671,7 +679,7 @@ describe("extensión hanniorq", () => {
 	it("guarda un handoff rodante si el turno deja trabajo y no hay resumen de sesion", async () => {
 		const { listeners, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension({ ensureDaemon: async () => false })(pi);
+		createHermeticExtension(pi);
 		const cwd = mkdtempSync(join(tmpdir(), "hanniorq-handoff-"));
 		mkdirSync(join(cwd, "odd", "tasks"), { recursive: true });
 		writeFileSync(join(cwd, "odd", ".active"), "demo");
@@ -775,7 +783,7 @@ describe("extensión hanniorq", () => {
 
 	it("la tool todo pinta las tareas del harness y las marca completadas", async () => {
 		const { widgets, tools, pi } = createMockPi();
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const ctx = { cwd: "C:/x", ui: (pi as any).ui };
 		const todo = tools.get("todo");
 		expect(todo).toBeDefined();
@@ -808,7 +816,7 @@ describe("extensión hanniorq", () => {
 	it("el rail indica si la memoria quedó igual, con altas o con bajas", async () => {
 		const { listeners, widgets, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension()(pi);
+		createHermeticExtension(pi);
 		const fetchStub = vi.fn(async () => ({ ok: true, json: async () => ({ status: "ok" }) }));
 		vi.stubGlobal("fetch", fetchStub);
 		try {

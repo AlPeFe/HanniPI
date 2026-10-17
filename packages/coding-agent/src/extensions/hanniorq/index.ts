@@ -462,14 +462,18 @@ let handoffSuperseded = false;
 async function saveRollingHandoff(cwd: string): Promise<void> {
 	const slug = soddIndicator(cwd)?.slug;
 	const files = visibleWorktreeFiles(cwd, modifiedFilesCache.get(cwd) ?? []);
-	// Sin trabajo que contar (una pregunta, una lectura), no se escribe nada.
+	// Sin objetivo no hay sesion que retomar (solo se leyo o se pregunto): no se escribe nada, para no
+	// llenar la memoria de handoffs vacios.
+	if (!sessionWork.goal) return;
+	// Sin trabajo, no hay nada que contar: el turno fue una pregunta o una lectura.
 	if (!slug && files.length === 0) return;
 
 	const steps = slug ? todoSteps(cwd) : [];
 	const pending = steps.filter((step) => !step.done);
+	const commit = existsSync(join(cwd, ".git")) ? oneLine(lastCommit(cwd), 160) : "(sin repositorio git)";
 	const lines = [
-		`objetivo: ${oneLine(sessionWork.goal, 200) || "sin petición registrada"}`,
-		`hecho: ${oneLine(lastCommit(cwd), 160)}`,
+		`objetivo: ${oneLine(sessionWork.goal, 200)}`,
+		`hecho: ${commit || "(sin commits en esta sesión)"}`,
 		files.length > 0 ? `ficheros: ${files.slice(0, 8).join(", ")}` : "ficheros: (árbol sin cambios)",
 		slug
 			? `en curso: odd/tasks/${slug}.md (${steps.filter((step) => step.done).length}/${steps.length} pasos)`

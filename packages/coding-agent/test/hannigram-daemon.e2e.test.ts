@@ -1,11 +1,20 @@
 /**
- * Prueba de los handlers de /hannigram contra el daemon HanniGram REAL (127.0.0.1:8765).
+ * Prueba de los handlers de /hannigram contra el daemon HanniGram REAL.
  * - status: health + observaciones recientes del proyecto
  * - adr: guarda una ADR de verdad en la BD
+ *
+ * ESCRIBE en la memoria del usuario, asi que queda DESACTIVADO por defecto: el resto de tests
+ * aislan HanniGram con un puerto muerto (packages/coding-agent/vitest.config.ts) y este se abre a
+ * proposito. Para lanzarlo:
+ *
+ *   HANNIGRAM_E2E=1 HANNIGRAM_URL=http://127.0.0.1:8765 \
+ *     node ../../node_modules/vitest/dist/cli.js --run test/hannigram-daemon.e2e.test.ts
  */
 import { describe, expect, it } from "vitest";
 import type { ExtensionFactory } from "../src/core/extensions/types.ts";
 import { createHanniorqExtension } from "../src/extensions/hanniorq/index.ts";
+
+const runE2E = process.env.HANNIGRAM_E2E === "1";
 
 type Handler = (args: string, ctx: any) => Promise<void> | void;
 
@@ -25,7 +34,7 @@ function loadHandlers() {
 	return { commands, notifications };
 }
 
-describe("/hannigram contra daemon real", () => {
+describe.skipIf(!runE2E)("/hannigram contra daemon real", () => {
 	it("status devuelve daemon OK con observaciones del proyecto", async () => {
 		const { commands, notifications } = loadHandlers();
 		const ctx = {
