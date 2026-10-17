@@ -135,7 +135,7 @@ import { loadAllHighlightLanguages } from "../../utils/syntax-highlight.ts";
 import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
 import { reportBug } from "./bug-report.ts";
-import { createChatViewport } from "./chat-viewport.ts";
+import { createChatViewport, RailColumn } from "./chat-viewport.ts";
 import { ArminComponent } from "./components/armin.ts";
 import { playArmin3d } from "./components/armin-3d.lazy.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
@@ -628,7 +628,9 @@ export class InteractiveMode {
 		this.statusContainer = new Container();
 		this.widgetContainerAbove = new Container();
 		this.widgetContainerBelow = new Container();
-		this.widgetContainerRight = new Container();
+		// El rail derecho es una pila (no un `Container`): así el widget del rail, que la extensión
+		// `hanniorq` publica como `ScrollView`, es un nodo de scroll real y la rueda lo desplaza.
+		this.widgetContainerRight = new RailColumn();
 		this.keybindings = KeybindingsManager.create();
 		setKeybindings(this.keybindings);
 		const editorPaddingX = this.settingsManager.getEditorPaddingX();

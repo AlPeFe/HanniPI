@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { FullscreenExitOutput, TuiMode } from "../src/core/settings-manager.ts";
+import { createChatViewport, RailColumn } from "../src/modes/interactive/chat-viewport.ts";
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
@@ -178,6 +179,52 @@ describe("createInteractiveTui", () => {
 
 		expect(stableUi.mode).toBe("fullscreen");
 		expect([terminal.startCount, terminal.stopCount]).toEqual([2, 2]);
+	});
+});
+
+describe("rail derecho", () => {
+	it("la rueda desplaza el rail sin mover el transcript", async () => {
+		const terminal = new RecordingTerminal(120, 10);
+		const ui = createInteractiveTui({
+			tuiMode: "fullscreen",
+			showHardwareCursor: false,
+			logDirectory: "/tmp",
+			terminal,
+		});
+		const lines = (count: number, prefix: string) =>
+			Array.from({ length: count }, (_, index) => `${prefix} ${index + 1}`).join("\n");
+		// Igual que el harness: la columna del rail envuelve el widget de la extensión, que es un ScrollView.
+		const railColumn = new RailColumn();
+		const rail = new ScrollView(new Text(lines(40, "rail"), 0, 0), {
+			follow: "none",
+			overscroll: "contain",
+			scrollbar: "auto",
+		});
+		railColumn.addChild(rail);
+		const viewport = createChatViewport({
+			document: new Text(lines(40, "chat"), 0, 0),
+			pendingMessages: new Container(),
+			status: new Container(),
+			editor: new Text("> ", 0, 0),
+			footer: new Text("footer", 0, 0),
+			rightRail: railColumn,
+			rightRailWidth: 30,
+			rightRailMinTerminalWidth: 60,
+		});
+		ui.setLayoutRoot(viewport.root);
+		ui.start();
+		try {
+			await terminal.waitForRender();
+			const transcriptTop = viewport.transcript.scrollTop;
+			// Rueda abajo sobre la columna del rail: con 120 columnas y un rail de 30, el rail es x >= 90.
+			terminal.sendInput("\x1b[<65;106;3M");
+			await terminal.waitForRender();
+			expect(rail.scrollTop).toBeGreaterThan(0);
+			// El rail contiene el gesto (overscroll "contain"): la conversación no se mueve.
+			expect(viewport.transcript.scrollTop).toBe(transcriptTop);
+		} finally {
+			ui.stop();
+		}
 	});
 });
 

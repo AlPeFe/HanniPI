@@ -18,7 +18,11 @@ export interface ChatViewportOptions {
 	readonly footer: Component;
 	readonly widgetsAbove?: Component;
 	readonly widgetsBelow?: Component;
-	/** Right-side status rail. Hidden below rightRailMinTerminalWidth columns, or when rightRailVisible() is false. */
+	/**
+	 * Right-side status rail. Hidden below rightRailMinTerminalWidth columns, or when rightRailVisible() is false.
+	 * Pass a `RailColumn`: it stretches its child to the full height, which is what turns a rail widget into a
+	 * scrollable viewport (see `RailColumn`).
+	 */
 	readonly rightRail?: Component;
 	/** Fixed column width for the right rail (default 34). */
 	readonly rightRailWidth?: number;
@@ -52,6 +56,22 @@ export interface ChatViewport {
 	readonly setRightRailWidth: (width: number) => void;
 	/** The mouse drag handle between the transcript and the rail, when enabled. */
 	readonly railResizeHandle: RailResizeHandleComponent | undefined;
+}
+
+/**
+ * Columna del rail derecho: la pila vertical que el harness usa como contenedor de los widgets con
+ * placement "rightRail". El hijo se estira a toda la altura de la columna.
+ *
+ * Por qué no vale un `Container` normal: el layout solo desciende por nodos de layout, y un `Container`
+ * es opaco — renderiza a sus hijos enteros y el resultado se recorta contra la terminal. Con la pila, el
+ * widget de dentro (normalmente un `ScrollView` de la extensión) sí es un nodo de scroll: recibe altura
+ * acotada y la rueda y la scrollbar lo recorren. Sin esto el rail pintaba su contenido de arriba abajo y
+ * lo que sobraba se perdía, sin forma de desplazarlo.
+ */
+export class RailColumn extends VStack {
+	override addChild(component: Component): void {
+		super.addChild(component, { basis: 0, grow: 1, shrink: 1, minSize: 1 });
+	}
 }
 
 /** Component with mouse handling, so tests can drive drag gestures directly. */
