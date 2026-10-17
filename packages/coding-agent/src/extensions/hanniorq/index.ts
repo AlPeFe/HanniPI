@@ -100,6 +100,23 @@ let harnessTodos: HarnessTodo[] = [];
 let soddWorking = false;
 /** Máximo de pasos listados en el rail; el resto se resume con "+N". */
 const MAX_RAIL_TODOS = 8;
+/**
+ * Skills en juego en la sesión. El estado distingue lo que el usuario pide ver: `using` mientras el
+ * run en curso las está usando (o las acaba de cargar), `activated` cuando ya se cargaron antes y el
+ * run terminó. La clave es el nombre del skill tal y como lo conoce el system prompt.
+ */
+interface SkillUse {
+	name: string;
+	state: "using" | "activated";
+	/** Orden de activación (para listar primero lo más reciente). */
+	seq: number;
+}
+const skillUses = new Map<string, SkillUse>();
+/** Catálogo de skills del system prompt (nombre + fichero): permite mapear una lectura a su skill. */
+let sessionSkills: Array<{ name: string; filePath: string }> = [];
+let skillSeq = 0;
+/** Máximo de skills listados en el rail; el resto se resume con "+N". */
+const MAX_RAIL_SKILLS = 4;
 /** Ancho por defecto de la columna del rail; el usuario lo cambia con ctrl+alt+←/→ o /hanniorq rail <n>. */
 export const RAIL_WIDTH = 34;
 /** Líneas máximas por tarea: se envuelve el texto en varias líneas en vez de recortarlo. Con los
@@ -900,6 +917,58 @@ interface RailSection {
 }
 
 /**
+ * Nombre del skill al que pertenece un fichero leído, o `undefined` si esa lectura no es un skill.
+ * Solo cuentan las rutas del catálogo del system prompt (así una ficha `odd/tasks/x.md` no se toma
+ * por un skill) y, si el catálogo aún no llegó, la convención `<dir>/SKILL.md`.
+ */
+function skillFromRead(path: string): string | undefined {
+	const normalized = normalizeSkillPath(path);
+	const known = sessionSkills.find((skill) => normalizeSkillPath(skill.filePath) === normalized);
+	if (known) return known.name;
+	const parts = normalized.split("/");
+	if (parts[parts.length - 1] !== "skill.md") return undefined;
+	return parts[parts.length - 2];
+}
+
+/** Rutas comparables en Windows (barras y mayúsculas dan igual). */
+function normalizeSkillPath(path: string): string {
+	return path.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+}
+
+/** Marca un skill como en uso en el run actual. Devuelve `true` si el rail cambia. */
+function markSkillUsed(name: string): boolean {
+	const previous = skillUses.get(name);
+	skillUses.set(name, { name, state: "using", seq: previous?.seq ?? ++skillSeq });
+	return previous?.state !== "using";
+}
+
+/** Un prompt nuevo (o el final del run) cierra el ciclo: "en uso" pasa a "activado". */
+function deactivateSkillsInUse(): boolean {
+	let changed = false;
+	for (const use of skillUses.values()) {
+		if (use.state !== "using") continue;
+		use.state = "activated";
+		changed = true;
+	}
+	return changed;
+}
+
+/** Líneas del panel `skills`: en uso primero (`▸`) y luego los ya activados (`✓`). */
+function skillRailLines(theme: ExtensionUIContext["theme"], width: number): string[] {
+	const uses = [...skillUses.values()].sort((a, b) =>
+		a.state === b.state ? b.seq - a.seq : a.state === "using" ? -1 : 1,
+	);
+	const lines: string[] = [];
+	for (const use of uses.slice(0, MAX_RAIL_SKILLS)) {
+		const icon = use.state === "using" ? theme.fg("warning", "▸") : theme.fg("success", "✓");
+		const state = use.state === "using" ? theme.fg("warning", "en uso") : theme.fg("muted", "activado");
+		lines.push(`${icon} ${clip(use.name, Math.max(8, width - 13))} · ${state}`);
+	}
+	if (uses.length > MAX_RAIL_SKILLS) lines.push(theme.fg("muted", `… +${uses.length - MAX_RAIL_SKILLS}`));
+	return lines;
+}
+
+/**
  * Secciones del rail derecho (coloreadas con el tema vivo vía ui.theme) al ancho de contenido dado.
  * Cada sección es un panel propio: el rail deja de ser una lista corrida de bloques y cada concepto
  * (proyecto, memoria, contexto, sODD, tareas, MCP, cambios) se lee como una tarjeta.
@@ -945,6 +1014,15 @@ function railSections(ui: ExtensionUIContext, cwd: string, width: number = RAIL_
 			}
 		}
 		sections.push({ title: `tareas (${doneTodos}/${todos.length})`, lines: taskLines });
+	}
+
+	// Skills: qué skills usa la sesión y en qué estado — `en uso` mientras el run en curso los está
+	// usando (el modelo al leer su fichero, o el usuario con `/skill:<nombre>`), `activado` cuando ya
+	// se cargaron antes. Va arriba, junto a las tareas, porque es "qué está haciendo ahora mismo".
+	// Sin skills usados no se pinta: el panel informa, no recuerda que existen.
+	if (skillUses.size > 0) {
+		const total = sessionSkills.length > 0 ? `/${sessionSkills.length}` : "";
+		sections.push({ title: `skills (${skillUses.size}${total})`, lines: skillRailLines(theme, W) });
 	}
 
 	// Memoria HanniGram: ON/OFF + si en la sesión se añadió o borró algo.
@@ -1226,6 +1304,12 @@ export function createHanniorqExtension(
 				turnSoddTouched = true;
 			}
 			if (MEM_READ_TOOLS.has(event.toolName)) memTurn.reads++;
+			// Skill en uso: el modelo lo activa leyendo su fichero (SKILL.md o uno del catálogo).
+			if (event.toolName === "read") {
+				const path = (event.args as { path?: unknown } | undefined)?.path;
+				const skill = typeof path === "string" ? skillFromRead(path) : undefined;
+				if (skill && markSkillUsed(skill)) renderRail(ctx.ui, ctx.cwd ?? process.cwd());
+			}
 			// Actividad de memoria: registra lecturas y escrituras para el rail.
 			if (MEM_READ_TOOLS.has(event.toolName) || MEM_WRITE_TOOLS.has(event.toolName)) {
 				const op: MemActivity["op"] =
@@ -1382,10 +1466,24 @@ export function createHanniorqExtension(
 		pi.on("before_agent_start", async (event, ctx) => {
 			const cwd = ctx.cwd ?? process.cwd();
 			if (!sessionWork.goal) sessionWork.goal = oneLine(event.prompt, 200) || undefined;
+			// Skills: catálogo del system prompt, y el ciclo de uso — un prompt nuevo cierra el anterior
+			// (`en uso` → `activado`), y si el prompt es `/skill:<nombre>` ese skill empieza en uso.
+			const catalog = event.systemPromptOptions?.skills;
+			if (Array.isArray(catalog)) {
+				sessionSkills = catalog.map((skill) => ({ name: skill.name, filePath: skill.filePath }));
+			}
+			deactivateSkillsInUse();
+			const invoked = /<skill\s+name="([^"]+)"/.exec(event.prompt)?.[1];
+			if (invoked) markSkillUsed(invoked);
 			const memory = await loadMemoryBriefing(cwd);
 			if (memory) event.systemPromptOptions.sections.memoria = memory.text;
 			const guidelines = event.systemPromptOptions.promptGuidelines;
 			if (!guidelines.includes(MEMORY_GUIDELINE)) guidelines.push(MEMORY_GUIDELINE);
+		});
+
+		// El run terminó: lo que estaba en uso queda como activado (ya se cargó en esta sesión).
+		pi.on("agent_settled", (_event, ctx) => {
+			if (deactivateSkillsInUse()) renderRail(ctx.ui, ctx.cwd ?? process.cwd());
 		});
 
 		// Indicador sODD: pinta si hay ficha activa (al iniciar la sesión,
@@ -1396,6 +1494,8 @@ export function createHanniorqExtension(
 			// Sesion nueva: la actividad de memoria y las tareas del harness son de la sesion.
 			memActivity.length = 0;
 			harnessTodos = [];
+			skillUses.clear();
+			sessionSkills = [];
 			soddWorking = false;
 			sessionWork.goal = undefined;
 			handoffSuperseded = false;

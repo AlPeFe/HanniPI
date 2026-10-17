@@ -841,4 +841,73 @@ describe("extensión hanniorq", () => {
 			vi.unstubAllGlobals();
 		}
 	});
+
+	it("muestra el skill en uso y lo deja activado al terminar el run", async () => {
+		const { listeners, widgets, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHermeticExtension(pi);
+		const ctx = { cwd: "C:/x", ui: (pi as any).ui };
+		const skills = [
+			{ name: "release", filePath: "C:\\repo\\.pi\\skills\\release.md" },
+			{ name: "sodd", filePath: "C:\\repo\\.pi\\skills\\sodd\\SKILL.md" },
+		];
+		await emit(pi, "session_start", {}, ctx);
+		await emit(
+			pi,
+			"before_agent_start",
+			{ prompt: "arregla el rail", systemPromptOptions: { sections: {}, promptGuidelines: [], skills } },
+			ctx,
+		);
+		// Aún no se ha usado: sin panel de skills.
+		expect(railText(widgets)).not.toContain("skills (");
+
+		// El modelo activa el skill leyendo su fichero (la ruta del catálogo, en cualquier estilo).
+		await emit(
+			pi,
+			"tool_execution_start",
+			{ toolName: "read", toolCallId: "t1", args: { path: "C:/repo/.pi/skills/release.md" } },
+			ctx,
+		);
+		const inUse = railText(widgets, 44);
+		expect(inUse).toContain("skills (1/2)");
+		expect(inUse).toContain("release");
+		expect(inUse).toContain("en uso");
+
+		// Al terminar el run ya no está en uso, pero sigue activado.
+		await emit(pi, "agent_settled", { type: "agent_settled" }, ctx);
+		const settled = railText(widgets, 44);
+		expect(settled).toContain("activado");
+		expect(settled).not.toContain("en uso");
+	});
+
+	it("marca el skill que invoca el usuario y no confunde una ficha con un skill", async () => {
+		const { listeners, widgets, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHermeticExtension(pi);
+		const ctx = { cwd: "C:/x", ui: (pi as any).ui };
+		const skills = [{ name: "sodd", filePath: ".pi/skills/sodd/SKILL.md" }];
+		await emit(pi, "session_start", {}, ctx);
+		await emit(
+			pi,
+			"before_agent_start",
+			{
+				prompt: '<skill name="sodd" location=".pi/skills/sodd/SKILL.md">\nPasos\n</skill>\n\nsigue',
+				systemPromptOptions: { sections: {}, promptGuidelines: [], skills },
+			},
+			ctx,
+		);
+		const rail = railText(widgets, 44);
+		expect(rail).toContain("skills (1/1)");
+		expect(rail).toContain("sodd");
+		expect(rail).toContain("en uso");
+
+		// Leer una ficha sODD (u otro .md suelto) no es activar un skill.
+		await emit(
+			pi,
+			"tool_execution_start",
+			{ toolName: "read", toolCallId: "t1", args: { path: "odd/tasks/rail-scrollable.md" } },
+			ctx,
+		);
+		expect(railText(widgets, 44)).toContain("skills (1/1)");
+	});
 });

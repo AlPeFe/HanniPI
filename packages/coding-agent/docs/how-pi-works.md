@@ -41,7 +41,7 @@ HanniPI's interactive mode separates three things that used to share one column:
 - **Top bar** (fixed, two rows): the wordmark and version, the working directory with its git branch, the session name, the model the next request goes to (including a virtual route), then the extension statuses, the context meter, and the token usage.
 - **Conversation**: every block is a panel whose title lives in the border — `tú` for user messages, `hanni` for assistant messages (the border shows `generando…` while streaming), and the tool name for tool calls with `ejecutando` / `ok` / `error` at the right of the border.
 - **Status bar** (fixed, one row): the current mode (`lista`, `pensando`, `compactando`, `bash`, `cola`) and the shortcuts that apply to it.
-- **Right rail** (optional, `ctrl+alt+←/→` or `/hanniorq rail <n>`): one panel per concept — project, memory, context, sODD sheet, tasks, MCP servers, and changed files. It is taller than the viewport, so it opens at its top and scrolls with the wheel (or by dragging its scrollbar), keeping the position across refreshes.
+- **Right rail** (optional, `ctrl+alt+←/→` or `/hanniorq rail <n>`): one panel per concept — project, tasks, skills, memory, context, sODD sheet, MCP servers, and changed files. The `skills` panel shows which skills the agent is using (`en uso`) and which it already loaded in the session (`activado`). It is taller than the viewport, so it opens at its top and scrolls with the wheel (or by dragging its scrollbar), keeping the position across refreshes.
 
 Panels come from the `Panel` component in `@earendil-works/pi-tui`: a border with an optional title, a right-aligned status, and a caption in the bottom border. `outputPad` controls the content margin inside them.
 
