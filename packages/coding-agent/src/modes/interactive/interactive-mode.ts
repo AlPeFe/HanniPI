@@ -48,6 +48,7 @@ import {
 	type TUI,
 	TuiAltScreen,
 	TuiMainScreen,
+	VStack,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import chalk from "chalk";
@@ -150,7 +151,7 @@ import { EarendilAnnouncementComponent } from "./components/earendil-announcemen
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
-import { FooterComponent, formatTokens } from "./components/footer.ts";
+import { formatTokens } from "./components/footer.ts";
 import { hanniLogoLines, hanniWordmark, supportsHanniLogo } from "./components/hanni-logo.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
@@ -169,6 +170,7 @@ import { ScopedModelsSelectorComponent } from "./components/scoped-models-select
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
+import { StatusBarComponent, type StatusBarMode } from "./components/status-bar.ts";
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
@@ -180,6 +182,7 @@ import {
 import { ThemedText } from "./components/themed-text.ts";
 import { ThinkingSelectorComponent } from "./components/thinking-selector.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
+import { TopBarComponent } from "./components/top-bar.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
@@ -459,7 +462,8 @@ export class InteractiveMode {
 	private editorContainer: Container;
 	private activeSelectorToken?: object;
 	private activeSelectorDispose?: () => void;
-	private footer: FooterComponent;
+	private statusBar: StatusBarComponent;
+	private topBar: TopBarComponent;
 	private footerContainer: Container;
 	private footerDataProvider: FooterDataProvider;
 	// Stored so the same manager can be injected into custom editors, selectors, and extension UI.
@@ -638,10 +642,13 @@ export class InteractiveMode {
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
-		this.footer = new FooterComponent(this.session, this.footerDataProvider);
-		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
+		this.topBar = new TopBarComponent(this.session, this.footerDataProvider, this.version);
+		this.statusBar = new StatusBarComponent({
+			getMode: () => this.getStatusBarMode(),
+			getTrailing: () => this.getStatusBarTrailing(),
+		});
 		this.footerContainer = new Container();
-		this.footerContainer.addChild(this.footer);
+		this.footerContainer.addChild(this.statusBar);
 
 		// Load hide thinking block setting
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
@@ -942,9 +949,15 @@ export class InteractiveMode {
 			scrollbarThumbStyle: (text) => theme.fg("scrollbarThumb", text),
 		});
 		this.transcriptScrollView = viewport.transcript;
-		this.fullscreenLayoutRoot = viewport.root;
+		// The chrome stays outside the transcript: the top bar holds identity and resources, the
+		// viewport keeps the scrolling conversation plus the input dock and the status bar.
+		this.fullscreenLayoutRoot = new VStack([
+			{ component: this.topBar, basis: "auto", grow: 0, shrink: 0, minSize: 2 },
+			{ component: viewport.root, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+		]);
 		this.resizeRailWidth = viewport.setRightRailWidth;
 		this.mountInteractiveTui(this.renderer, [
+			this.topBar,
 			this.documentContainer,
 			this.pendingMessagesContainer,
 			this.statusContainer,
@@ -1971,8 +1984,7 @@ export class InteractiveMode {
 			this.renderer.setCopyOnSelect(this.settingsManager.getFullscreenCopyOnSelect());
 			this.renderer.setWheelScrollLines(this.settingsManager.getFullscreenWheelScrollLines());
 		}
-		this.footer.setSession(this.session);
-		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
+		this.topBar.setSession(this.session);
 		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 		this.outputPad = this.settingsManager.getOutputPad();
@@ -2260,6 +2272,24 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	/**
+	 * What the status bar chip shows. Streaming wins over the queue (the model is still answering),
+	 * and bash mode wins over everything: the next Enter runs a command, not a prompt.
+	 */
+	private getStatusBarMode(): StatusBarMode {
+		if (this.isBashMode) return "bash";
+		if (this.session.isCompacting) return "compacting";
+		if (this.session.isStreaming) return "working";
+		if (this.pendingUserInputs.length > 0) return "queue";
+		return "idle";
+	}
+
+	private getStatusBarTrailing(): string | undefined {
+		const queued = this.pendingUserInputs.length;
+		if (queued === 0) return undefined;
+		return queued === 1 ? "1 mensaje en cola" : `${queued} mensajes en cola`;
+	}
+
 	private setHiddenThinkingLabel(label?: string): void {
 		this.hiddenThinkingLabel = label ?? this.defaultHiddenThinkingLabel;
 		for (const child of this.chatContainer.children) {
@@ -2384,7 +2414,7 @@ export class InteractiveMode {
 		this.setExtensionHeader(undefined);
 		this.clearExtensionWidgets();
 		this.footerDataProvider.clearExtensionStatuses();
-		this.footer.invalidate();
+		this.statusBar.invalidate();
 		this.autocompleteProviderWrappers = [];
 		this.setCustomEditorComponent(undefined);
 		this.setupAutocompleteProvider();
@@ -2461,7 +2491,7 @@ export class InteractiveMode {
 		} else {
 			// Restore built-in footer
 			this.customFooter = undefined;
-			this.footerContainer.addChild(this.footer);
+			this.footerContainer.addChild(this.statusBar);
 		}
 
 		this.ui.requestRender();
@@ -3343,7 +3373,7 @@ export class InteractiveMode {
 			await this.init();
 		}
 
-		this.footer.invalidate();
+		this.statusBar.invalidate();
 
 		switch (event.type) {
 			case "agent_start":
@@ -3415,19 +3445,19 @@ export class InteractiveMode {
 					}
 					this.renderSessionEntries(retainedEntries.filter((entry) => entriesAfterCompaction.has(entry.id)));
 					for (const entryId of entriesAfterCompaction) this.entriesRenderedByBoundaryCompaction.add(entryId);
-					this.footer.invalidate();
+					this.statusBar.invalidate();
 					this.ui.requestRender();
 				}
 				break;
 
 			case "session_info_changed":
 				this.updateTerminalTitle();
-				this.footer.invalidate();
+				this.statusBar.invalidate();
 				this.ui.requestRender();
 				break;
 
 			case "thinking_level_changed":
-				this.footer.invalidate();
+				this.statusBar.invalidate();
 				this.updateEditorBorderColor();
 				break;
 
@@ -3528,7 +3558,7 @@ export class InteractiveMode {
 					}
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
-					this.footer.invalidate();
+					this.statusBar.invalidate();
 				}
 				this.ui.requestRender();
 				break;
@@ -3659,7 +3689,7 @@ export class InteractiveMode {
 							usage: event.result.usage,
 						});
 					}
-					this.footer.invalidate();
+					this.statusBar.invalidate();
 				} else if (event.errorMessage) {
 					if (event.reason === "manual") {
 						this.showError(event.errorMessage);
@@ -3946,7 +3976,7 @@ export class InteractiveMode {
 			: new Map<AssistantMessage, CacheMiss>();
 
 		if (options.updateFooter) {
-			this.footer.invalidate();
+			this.statusBar.invalidate();
 			this.updateEditorBorderColor();
 		}
 
@@ -4467,7 +4497,7 @@ export class InteractiveMode {
 		if (newLevel === undefined) {
 			this.showStatus("Current model does not support thinking");
 		} else {
-			this.footer.invalidate();
+			this.statusBar.invalidate();
 			this.updateEditorBorderColor();
 			this.showStatus(`Thinking level: ${newLevel}`);
 		}
@@ -4480,7 +4510,7 @@ export class InteractiveMode {
 				const msg = this.session.scopedModels.length > 0 ? "Only one model in scope" : "Only one model available";
 				this.showStatus(msg);
 			} else {
-				this.footer.invalidate();
+				this.statusBar.invalidate();
 				this.updateEditorBorderColor();
 				const thinkingStr =
 					result.model.reasoning && result.thinkingLevel !== "off" ? ` (thinking: ${result.thinkingLevel})` : "";
@@ -4897,7 +4927,6 @@ export class InteractiveMode {
 				{
 					onAutoCompactChange: (enabled) => {
 						this.session.setAutoCompactionEnabled(enabled);
-						this.footer.setAutoCompactEnabled(enabled);
 					},
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);
@@ -4950,7 +4979,7 @@ export class InteractiveMode {
 						const current = this.session.model;
 						if (current && current.provider === provider && current.id === modelId) {
 							this.session.setThinkingLevel(level);
-							this.footer.invalidate();
+							this.statusBar.invalidate();
 							this.updateEditorBorderColor();
 						}
 					},
@@ -4961,7 +4990,7 @@ export class InteractiveMode {
 						if (current && current.provider === provider && current.id === modelId) {
 							const globalDefault = this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL;
 							this.session.setThinkingLevel(globalDefault);
-							this.footer.invalidate();
+							this.statusBar.invalidate();
 							this.updateEditorBorderColor();
 						}
 					},
@@ -5100,7 +5129,7 @@ export class InteractiveMode {
 	private selectThinkingLevel(level: ThinkingLevel, persist: boolean): void {
 		try {
 			this.session.setThinkingLevel(level, { persist });
-			this.footer.invalidate();
+			this.statusBar.invalidate();
 			this.updateEditorBorderColor();
 			this.showStatus(persist ? `Default thinking level: ${level}` : `Thinking level: ${level}`);
 		} catch (error) {
@@ -5139,7 +5168,7 @@ export class InteractiveMode {
 		if (model) {
 			try {
 				await this.session.setModel(model, { persist: false });
-				this.footer.invalidate();
+				this.statusBar.invalidate();
 				this.updateEditorBorderColor();
 				this.showStatus(`Model: ${model.id}`);
 				void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
@@ -5284,7 +5313,7 @@ export class InteractiveMode {
 				try {
 					await this.session.setModel(model, { persist });
 					this.updateAvailableProviderCount();
-					this.footer.invalidate();
+					this.statusBar.invalidate();
 					this.updateEditorBorderColor();
 					done();
 					this.showStatus(persist ? `Default model: ${model.provider}/${model.id}` : `Model: ${model.id}`);
@@ -6130,7 +6159,7 @@ export class InteractiveMode {
 			}
 
 			await this.updateAvailableProviderCount();
-			this.footer.invalidate();
+			this.statusBar.invalidate();
 			this.updateEditorBorderColor();
 			if (selectedModel) {
 				this.showStatus(`${actionLabel}. Selected ${selectedModel.id}. Credentials saved to ${getAuthPath()}`);
@@ -6166,7 +6195,7 @@ export class InteractiveMode {
 					await finishAuthentication();
 				}
 				this.updateAvailableProviderCount();
-				this.footer.invalidate();
+				this.statusBar.invalidate();
 				this.ui.requestRender();
 			})
 			.catch((error: unknown) => {
@@ -7122,7 +7151,6 @@ export class InteractiveMode {
 		this.clearStatusIndicator();
 		this.themeController.disableAutoSync();
 		this.clearExtensionTerminalInputListeners();
-		this.footer.dispose();
 		this.footerDataProvider.dispose();
 		if (this.unsubscribe) {
 			this.unsubscribe();
