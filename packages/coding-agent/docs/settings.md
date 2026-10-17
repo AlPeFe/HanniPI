@@ -14,7 +14,7 @@ This reference lists user-configurable settings, their types, defaults, and purp
 | `modelThinkingLevels` | object | None | Per-model startup thinking levels keyed by exact `provider/modelId`. |
 | `thinkingBudgets` | object | Built-in budgets | Token budgets for `minimal`, `low`, `medium`, and `high` thinking levels. |
 | `enabledModels` | `string[]` | All available models | Model patterns used for startup selection and model cycling. Uses the same format as `--models`. |
-| `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in the transcript. |
+| `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in the transcript. A visible block is shown as a compact summary (code fences removed, first lines only); click it to cycle summary → full → hidden. Display only: the model still receives the complete thinking. |
 | `showCacheMissNotices` | boolean | `false` | Show notices for significant cache misses, successful cache warming, compaction usage, and provider recovery. |
 | `cacheWarming` | `"off" \| "streaming" \| "idle"` | `"streaming"` | Keep eligible provider prompt caches warm during active runs or, with `"idle"`, between runs. Global setting only. |
 

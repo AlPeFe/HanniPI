@@ -3,6 +3,10 @@ import { Container, Markdown, type MarkdownTheme, MouseRegion, Panel, Spacer, Te
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
+import { summarizeThinking } from "./thinking-summary.ts";
+
+/** Cómo se pinta un bloque de pensamiento: resumen (por defecto), completo u oculto. */
+type ThinkingDisplayMode = "resumen" | "completo" | "oculto";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -22,7 +26,8 @@ export class AssistantMessageComponent extends Container {
 	private lastMessage?: AssistantMessage;
 	private hasToolCalls = false;
 	private isStreaming = false;
-	private thinkingVisibilityOverrides = new Map<number, boolean>();
+	/** Estado por bloque de pensamiento: resumen (por defecto), completo u oculto. */
+	private thinkingDisplayOverrides = new Map<number, ThinkingDisplayMode>();
 
 	constructor(
 		message?: AssistantMessage,
@@ -65,7 +70,7 @@ export class AssistantMessageComponent extends Container {
 
 	setHideThinkingBlock(hide: boolean): void {
 		this.hideThinkingBlock = hide;
-		this.thinkingVisibilityOverrides.clear();
+		this.thinkingDisplayOverrides.clear();
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
@@ -153,30 +158,37 @@ export class AssistantMessageComponent extends Container {
 					.some((c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()));
 
 				const runIndex = thinkingRunIndex++;
-				const hidden = this.thinkingVisibilityOverrides.get(runIndex) ?? this.hideThinkingBlock;
-				const thinkingComponent = hidden
-					? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0)
-					: new Markdown(
-							thinkingBlocks.join("\n\n"),
-							this.outputPad,
-							0,
-							this.markdownTheme,
-							{
-								color: (text: string) => theme.fg("thinkingText", text),
-								italic: true,
-							},
-							{
-								transform: createMarkdownTransform(
-									"assistant-thinking",
-									this.isStreaming,
-									this.markdownTransformers,
-								),
-							},
-						);
+				const fullThinking = thinkingBlocks.join("\n\n");
+				const mode = this.thinkingDisplayOverrides.get(runIndex) ?? (this.hideThinkingBlock ? "oculto" : "resumen");
+				// El thinking entra en el contexto del modelo entero; aquí se pinta en resumen (sin los
+				// bloques de código) para que la sesión no sea tan densa. Un clic va resumen → completo
+				// → oculto → resumen.
+				const thinkingComponent =
+					mode === "oculto"
+						? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0)
+						: new Markdown(
+								mode === "completo" ? fullThinking : summarizeThinking(fullThinking),
+								this.outputPad,
+								0,
+								this.markdownTheme,
+								{
+									color: (text: string) => theme.fg("thinkingText", text),
+									italic: true,
+								},
+								{
+									transform: createMarkdownTransform(
+										"assistant-thinking",
+										this.isStreaming,
+										this.markdownTransformers,
+									),
+								},
+							);
 				this.contentContainer.addChild(
 					new MouseRegion(thinkingComponent, (event) => {
 						if (event.type !== "click" || event.button !== "left") return undefined;
-						this.thinkingVisibilityOverrides.set(runIndex, !hidden);
+						const next: ThinkingDisplayMode =
+							mode === "resumen" ? "completo" : mode === "completo" ? "oculto" : "resumen";
+						this.thinkingDisplayOverrides.set(runIndex, next);
 						if (this.lastMessage) this.updateContent(this.lastMessage);
 						return { handled: true };
 					}),

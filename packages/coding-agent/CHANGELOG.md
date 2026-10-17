@@ -15,6 +15,7 @@
 - HanniPI: the rail-right visibility toggle (`/hanniorq rail`) and the task-list collapse (`/hanniorq tasks`, ctrl+alt+t) now persist across sessions via the new `railHidden` and `railTasksCollapsed` settings, exposed to extensions as `get/setRailHidden` and `get/setRailTasksCollapsed`.
 - HanniPI: the right rail content is scrollable (wheel over the rail scrolls it, with a transient scrollbar); the widget keeps its scroll position across rail refreshes.
 - HanniPI: on session start the harness reads HanniGram once and injects a `memoria` section into the system prompt — the last session handoff (goal, what was done, next steps), the saved decisions and conventions, and the work in flight from the active sODD sheet — plus a guideline to consult memory before exploring the repo and to save a `mem_session_summary` when finishing. A session on the same repo days later now starts from what was decided and left half-done instead of re-exploring files; when the project has no memory yet, the section says so and how to seed it. The read is cached per session, so it costs one request, not one per turn.
+- HanniPI: the project memory keeps itself current. When a turn leaves work behind (changes in the working tree or an active sODD sheet) and no session summary was saved, the harness updates a single `handoff/actual` observation with the goal, the last commit, the files touched and the pending steps, and the next session reads it when there is no session handoff. Closing the terminal no longer leaves the following session — maybe days later — without a starting point.
 
 ### Changed
 
@@ -24,6 +25,7 @@
 - HanniPI: the right rail's memory line shows `ON` plus whether records were added (`nuevo`), deleted (`borrado`), or unchanged (`igual`) instead of an observation count. The changed-files list is capped at 3 paths so it does not accumulate and push the rest off the rail.
 - `/arminsayshi` now plays a 3D version in fullscreen mode, with one cube per pixel of Armin. The 3D pi logo easter egg on header logo click is replaced by it.
 - HanniPI: the installer retries its downloads (release lookup, `SHA256SUMS`, `pi-windows-x64.zip`, `hannigram-windows-x64.zip`) up to three times and cleans its `%TEMP%` artifacts when it finishes; a failed attempt no longer leaves ~170 MB behind. Install/update/uninstall failures end with the reason and a non-zero exit code instead of a bare exit.
+- HanniPI: thinking blocks render as a compact summary: code fences are dropped (replaced with a `⋯ (código oculto: N líneas)` note), repeated blank lines collapse, and the text is capped to the first lines with a `… (+N líneas)` mark. Clicking a block cycles summary → full → hidden (`ctrl+t` still toggles hidden/visible globally). Display only: the model still receives the complete thinking and the session transcript keeps it.
 - HanniPI: the rail stacks `tareas` right below `proyecto`, so the work in progress is the first panel the rail shows.
 
 ### Fixed
