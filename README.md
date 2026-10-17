@@ -112,7 +112,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/AlP
 
 > Se instala como **`hanni`** (no `pi`) para no chocar con el pi de earendil-works si ya lo tienes instalado. Después de instalar, abre una terminal nueva y escribe `hanni`.
 > **HanniGram es obligatorio**: cada release trae `hannigram-windows-x64.zip` (daemon + CLI self-contained, sin necesidad de .NET instalado, + la extensión `mem_*`) y el instalador aborta sin instalar nada si no lo encuentra, en vez de dejar un HanniPI sin memoria. El daemon se instala en `%LOCALAPPDATA%\HanniPI\hannigram`, la extensión `mem_*` en `~/.pi/agent/extensions/hannigram` y HanniPI descubre el daemon por `HANNIGRAM_DAEMON`. El asset lo publica el propio HanniGram y HanniPI lo copia **pinneado** (`hannigram-version.json`: tag + sha256); con `-HannigramSource latest` el instalador coge la última release de HanniGram en vez del pin.
-> Al instalar, actualizar o desinstalar, el script **para antes todos los procesos de Hanni** (el binario compilado con bun y el daemon HanniGram) para poder reemplazar o borrar los ficheros sin bloqueos de Windows.
+> Al instalar, actualizar o desinstalar, el script **para el daemon de memoria y los procesos auxiliares** y **aparta la instalación anterior por renombrado** (Windows no deja borrar ni sobrescribir un `.exe` en marcha, pero sí renombrar la carpeta que lo contiene). Así una sesión de `hanni` abierta no bloquea la actualización, no se pierde el trabajo en curso y la versión nueva entra en vigor al reiniciar el harness; los restos de la versión anterior se borran en la siguiente ejecución.
 
 **Desde el repo (desarrollo):**
 

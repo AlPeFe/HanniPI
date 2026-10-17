@@ -13,10 +13,14 @@
 # assets/fonts/rysana) para el usuario actual y fija esa fuente como fuente por
 # defecto de Windows Terminal. Con -SkipFonts se omite todo esto.
 #
-# Antes de instalar/actualizar/desinstalar se PARAN todos los procesos de Hanni:
-# el binario de HanniPI (compilado con bun), el daemon HanniGram y cualquier
-# bun/node/dotnet con "hanni" en su linea de comandos. Sin esto, Windows
-# bloquea los ficheros y la instalacion/desinstalacion falla.
+# Antes de instalar/actualizar/desinstalar se PARA el daemon de memoria
+# (HanniGram) y los procesos auxiliares de bun/node/dotnet que salen de la
+# instalacion. El harness (hanni.exe) NO se mata: la instalacion se hace por
+# renombrado (ver Install-Staged), asi que una sesion abierta no bloquea la
+# actualizacion, no se pierde trabajo, y `hanni update` no se mata a si mismo
+# (ese era el fallo: el script moria justo antes de instalar y la version
+# nueva nunca se aplicaba). La version nueva entra en vigor al reiniciar el
+# harness.
 #
 # HanniGram (la memoria) es obligatorio: la release TIENE que traer
 # hannigram-windows-x64.zip. Si falta, el script aborta antes de tocar nada.
@@ -68,13 +72,43 @@ function Write-Warn($text) { Write-Host "  $text" -ForegroundColor Yellow }
 function Write-Err($text) { Write-Host "  $text" -ForegroundColor Red }
 
 # ---------------------------------------------------------------------------
-# Parar todos los procesos de Hanni (HanniPI bun + HanniGram) antes de tocar
-# ficheros. Devuelve cuantos paro.
+# Procesos protegidos: este script (powershell) y toda su cadena de padres.
+# `hanni update` lanza este script, asi que en esa cadena estan el propio
+# `hanni update` y la terminal/sesion del harness que lo invoco: matarlos
+# abortaba la actualizacion y se llevaba por delante la sesion del usuario.
+# ---------------------------------------------------------------------------
+function Get-ProtectedProcessIds {
+    $protected = @{}
+    $protected[[int]$PID] = $true
+    try {
+        $parents = @{}
+        foreach ($p in Get-CimInstance Win32_Process -ErrorAction Stop) {
+            $parents[[int]$p.ProcessId] = [int]$p.ParentProcessId
+        }
+        $current = [int]$PID
+        $guard = 0
+        while ($parents.ContainsKey($current) -and $guard -lt 64) {
+            $parent = $parents[$current]
+            if ($parent -le 0 -or $protected.ContainsKey($parent)) { break }
+            $protected[$parent] = $true
+            $current = $parent
+            $guard++
+        }
+    } catch { }
+    return $protected
+}
+
+# ---------------------------------------------------------------------------
+# Parar el daemon de memoria y los procesos auxiliares antes de tocar ficheros.
+# El harness (hanni.exe) se deja en paz a proposito: no bloquea la instalacion
+# (se aparta por renombrado) y matarlo perderia el trabajo de la sesion.
+# Devuelve cuantos proceso paro.
 # ---------------------------------------------------------------------------
 function Stop-HanniProcesses {
     if ($SkipStop) { Write-Warn "Stop-HanniProcesses omitido (-SkipStop)"; return 0 }
-    Write-Host "Parando procesos de Hanni..." -ForegroundColor Cyan
+    Write-Host "Parando el daemon de memoria y procesos auxiliares..." -ForegroundColor Cyan
     $installLiteral = [regex]::Escape($InstallDir)
+    $protected = Get-ProtectedProcessIds
     $stopped = 0
     try {
         $procs = Get-CimInstance Win32_Process -ErrorAction Stop
@@ -90,8 +124,9 @@ function Stop-HanniProcesses {
         $path = ""
         if ($p.ExecutablePath) { $path = $p.ExecutablePath }
         $isTarget = $false
-        if ($name -eq "hanni.exe" -or $name -eq "hannigram.exe" -or
-            $name -eq "hannigram.server.exe" -or $name -eq "hannigram.cli.exe") {
+        if ($name -eq "hannigram.exe" -or $name -eq "hannigram.server.exe" -or
+            $name -eq "hannigram.cli.exe" -or $name -eq "hannigram-mcp.exe") {
+            # El daemon se reinicia despues con Test-HanniGramDaemon.
             $isTarget = $true
         } elseif ($name -eq "pi.exe" -and $path -match $installLiteral) {
             $isTarget = $true
@@ -102,6 +137,10 @@ function Stop-HanniProcesses {
             $isTarget = $true
         }
         if (-not $isTarget) { continue }
+        if ($protected.ContainsKey([int]$p.ProcessId)) {
+            Write-Host "  en uso, no lo toco: $($p.Name) (PID $($p.ProcessId))" -ForegroundColor DarkGray
+            continue
+        }
         try {
             Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop
             Write-Host "  parado $($p.Name) (PID $($p.ProcessId))" -ForegroundColor DarkGray
@@ -110,11 +149,21 @@ function Stop-HanniProcesses {
             Write-Warn "no pude parar $($p.Name) (PID $($p.ProcessId)); sigue en marcha"
         }
     }
-    if ($stopped -eq 0) { Write-Ok "no habia procesos de Hanni en marcha" }
+    if ($stopped -eq 0) { Write-Ok "no habia nada que parar" }
     else { Write-Ok "$stopped proceso(s) parado(s)" }
     # Deja un momento a Windows para liberar los bloqueos de fichero.
     Start-Sleep -Milliseconds 800
     return $stopped
+}
+
+# Devuelve cuantos harness (hanni.exe) siguen abiertos; se usan para avisar de
+# que la version nueva entra en vigor al reiniciarlos.
+function Get-RunningHarnessCount {
+    try {
+        return @(Get-CimInstance Win32_Process -Filter "Name='hanni.exe'" -ErrorAction Stop).Count
+    } catch {
+        return 0
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -144,23 +193,49 @@ function Remove-UserPathLike($pattern) {
 
 function Get-LatestRelease {
     Write-Host "Buscando la ultima release de $Repo ..." -ForegroundColor Cyan
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" `
-        -Headers @{ "User-Agent" = "hanni-setup" }
+    $release = $null
+    for ($i = 1; $i -le 3; $i++) {
+        try {
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" `
+                -Headers @{ "User-Agent" = "hanni-setup" } -ErrorAction Stop
+            break
+        } catch {
+            if ($i -eq 3) { throw "No pude consultar la ultima release de $Repo : $($_.Exception.Message)" }
+            Write-Warn "consulta de la release fallida (intento $i de 3): $($_.Exception.Message)"
+            Start-Sleep -Seconds 2
+        }
+    }
     Write-Ok "release $($release.tag_name)"
     return $release
+}
+
+# Las descargas son grandes (~55 MB el harness, ~115 MB la memoria) y fallan a
+# la primera con mas frecuencia de la cuenta; sin reintento la actualizacion se
+# quedaba a medias.
+function Invoke-DownloadWithRetry($url, $dest, $label) {
+    for ($i = 1; $i -le 3; $i++) {
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -ErrorAction Stop
+            return
+        } catch {
+            if ($i -eq 3) { throw "No pude descargar $label ($url): $($_.Exception.Message)" }
+            Write-Warn "descarga de $label fallida (intento $i de 3): $($_.Exception.Message)"
+            Start-Sleep -Seconds 2
+        }
+    }
 }
 
 function Download-Asset($release, $assetName, $dest) {
     $url = "https://github.com/$Repo/releases/download/$($release.tag_name)/$assetName"
     Write-Host "Descargando $assetName ..." -ForegroundColor Cyan
-    Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+    Invoke-DownloadWithRetry $url $dest $assetName
     return $dest
 }
 
 function Get-ShaMap($release) {
     $sumsPath = Join-Path $env:TEMP "hanni-SHA256SUMS"
     $url = "https://github.com/$Repo/releases/download/$($release.tag_name)/SHA256SUMS"
-    Invoke-WebRequest -Uri $url -OutFile $sumsPath -UseBasicParsing
+    Invoke-DownloadWithRetry $url $sumsPath "SHA256SUMS"
     return Get-ShaMapFromPath $sumsPath
 }
 
@@ -222,12 +297,86 @@ function Stage-Asset($release, $shaMap, $assetName, $destDir) {
     return $destDir
 }
 
+# Windows no deja borrar ni sobrescribir un .exe en marcha ("Acceso denegado"),
+# pero SI deja renombrar la carpeta que lo contiene. La instalacion se hace asi:
+#   1) la instalacion actual se aparta como <dest>.old-<marca> (instantaneo)
+#   2) el contenido ya verificado se coloca en <dest>
+#   3) el <dest>.old-<marca> se borra; si algun proceso viejo lo mantiene
+#      bloqueado, se borra en la proxima instalacion (Remove-RetiredInstalls)
+# Con esto no hay que matar nada: la version nueva entra en vigor al reiniciar
+# el harness que estuviera abierto.
+function Move-Aside($dest) {
+    if (-not (Test-Path $dest)) { return $null }
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $retired = "$dest.old-$stamp"
+    $n = 1
+    while (Test-Path $retired) {
+        $retired = "$dest.old-$stamp-$n"
+        $n++
+    }
+    try {
+        Move-Item $dest $retired -Force -ErrorAction Stop
+    } catch {
+        throw "No pude apartar la instalacion actual ($dest): $($_.Exception.Message). Cierra las terminales que esten dentro de esa carpeta y reintenta."
+    }
+    return $retired
+}
+
+# Restos de una actualizacion anterior: el proceso viejo ya no existe, asi que
+# ahora si se pueden borrar.
+function Remove-RetiredInstalls {
+    $parent = Split-Path $InstallDir -Parent
+    $leaf = Split-Path $InstallDir -Leaf
+    if (-not (Test-Path $parent)) { return }
+    foreach ($dir in @(Get-ChildItem $parent -Directory -Filter "$leaf.old-*" -ErrorAction SilentlyContinue)) {
+        try {
+            Remove-Item $dir.FullName -Recurse -Force -ErrorAction Stop
+            Write-Host "  limpiado resto de la version anterior: $($dir.Name)" -ForegroundColor DarkGray
+        } catch {
+            Write-Warn "no pude borrar $($dir.Name) (sigue en uso); se intentara en la proxima actualizacion"
+        }
+    }
+}
+
 # Reemplaza $dest por el contenido ya validado de $source.
 function Install-Staged($source, $dest) {
-    if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+    $retired = Move-Aside $dest
     New-Item -ItemType Directory -Path $dest -Force | Out-Null
-    Get-ChildItem $source -Force | Move-Item -Destination $dest -Force
+    try {
+        Get-ChildItem $source -Force | Move-Item -Destination $dest -Force -ErrorAction Stop
+    } catch {
+        $failure = $_
+        if ($retired) {
+            try {
+                Remove-Item $dest -Recurse -Force -ErrorAction Stop
+                Move-Item $retired $dest -Force -ErrorAction Stop
+                Write-Warn "instalacion anterior restaurada en $dest"
+            } catch {
+                Write-Err "no pude restaurar la instalacion anterior; esta en $retired, muevela a mano a $dest"
+            }
+        }
+        throw $failure
+    }
     Remove-Item $source -Recurse -Force
+    if ($retired) {
+        try {
+            Remove-Item $retired -Recurse -Force -ErrorAction Stop
+        } catch {
+            Write-Warn "la version anterior sigue en $retired (en uso); se borrara en la proxima actualizacion"
+        }
+    }
+}
+
+# Los zips y el staging de %TEMP% no se reutilizan entre ejecuciones.
+function Remove-TempArtifacts {
+    foreach ($name in @($Asset, $HgmAsset, "hanni-SHA256SUMS", "hannigram-SHA256SUMS")) {
+        $path = Join-Path $env:TEMP $name
+        if (Test-Path $path) { Remove-Item $path -Force -ErrorAction SilentlyContinue }
+    }
+    foreach ($name in @("hanni-pi-staging", "hannigram-staging")) {
+        $path = Join-Path $env:TEMP $name
+        if (Test-Path $path) { Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 # Arranca el daemon si no responde ya y espera a /health. Devuelve $true/$false.
@@ -259,9 +408,9 @@ function Stage-HanniGram($release, $shaMap) {
             -Headers @{ "User-Agent" = "hanni-setup" }
         Write-Ok "release $($hgmRelease.tag_name)"
         $sumsPath = Join-Path $env:TEMP "hannigram-SHA256SUMS"
-        Invoke-WebRequest -Uri "https://github.com/$HgmRepo/releases/download/$($hgmRelease.tag_name)/SHA256SUMS" -OutFile $sumsPath -UseBasicParsing
+        Invoke-DownloadWithRetry "https://github.com/$HgmRepo/releases/download/$($hgmRelease.tag_name)/SHA256SUMS" $sumsPath "SHA256SUMS"
         $zip = Join-Path $env:TEMP $HgmAsset
-        Invoke-WebRequest -Uri "https://github.com/$HgmRepo/releases/download/$($hgmRelease.tag_name)/$HgmAsset" -OutFile $zip -UseBasicParsing
+        Invoke-DownloadWithRetry "https://github.com/$HgmRepo/releases/download/$($hgmRelease.tag_name)/$HgmAsset" $zip $HgmAsset
         Verify-Asset $zip $HgmAsset (Get-ShaMapFromPath $sumsPath)
     } else {
         $zip = Download-Asset $release $HgmAsset (Join-Path $env:TEMP $HgmAsset)
@@ -284,7 +433,10 @@ function Install-HanniGramExtension($hgmSource) {
         Write-Warn "El asset de HanniGram no trae pi-extension; las tools mem_* quedan sin instalar (la memoria sigue funcionando)."
         return $false
     }
-    if (Test-Path $ExtDir) { Remove-Item $ExtDir -Recurse -Force }
+    if (Test-Path $ExtDir) {
+        try { Remove-Item $ExtDir -Recurse -Force -ErrorAction Stop }
+        catch { Write-Warn "no pude limpiar $ExtDir (en uso); copio encima" }
+    }
     New-Item -ItemType Directory -Path $ExtDir -Force | Out-Null
     Get-ChildItem $source -Force | Copy-Item -Destination $ExtDir -Recurse -Force
     Write-Ok "extension mem_* instalada en $ExtDir"
@@ -397,6 +549,16 @@ function Install-Fonts {
 function Install-All([bool]$isUpdate) {
     if ($isUpdate) { Write-Title "Actualizar HanniPI + HanniGram" }
     else { Write-Title "Instalar HanniPI + HanniGram" }
+    try {
+        Install-AllCore $isUpdate
+    } finally {
+        Remove-TempArtifacts
+    }
+}
+
+function Install-AllCore([bool]$isUpdate) {
+    # Restos de la ejecucion anterior, si los dejo un proceso viejo.
+    Remove-RetiredInstalls
 
     $release = Get-LatestRelease
     $shaMap = Get-ShaMap $release
@@ -449,6 +611,9 @@ function Install-All([bool]$isUpdate) {
     } else {
         Write-Warn "el daemon no respondio /health; HanniPI lo arrancara cuando lo use"
     }
+    if ((Get-RunningHarnessCount) -gt 0) {
+        Write-Warn "hay sesiones de hanni abiertas con la version anterior: reinicialas para usar $ver (no se han cerrado para no perder tu trabajo)"
+    }
     Write-Host "  Abre una terminal NUEVA y escribe:  hanni" -ForegroundColor Magenta
 }
 
@@ -457,11 +622,19 @@ function Uninstall-All {
     [void](Stop-HanniProcesses)
 
     if (Test-Path $InstallDir) {
+        # Igual que al instalar: se aparta por renombrado (un hanni.exe abierto
+        # impide borrar, pero no renombrar) y se borra al final si se puede.
         try {
-            Remove-Item $InstallDir -Recurse -Force
-            Write-Ok "borrado $InstallDir"
+            $retired = Move-Aside $InstallDir
+            Write-Ok "instalacion apartada: $retired"
+            try {
+                Remove-Item $retired -Recurse -Force -ErrorAction Stop
+                Write-Ok "borrado $InstallDir"
+            } catch {
+                Write-Warn "queda en $retired (hay un hanni abierto usandola); borrala cuando cierres las sesiones"
+            }
         } catch {
-            Write-Err "no pude borrar $InstallDir : $($_.Exception.Message)"
+            Write-Err "no pude apartar $InstallDir : $($_.Exception.Message)"
             Write-Warn "cierra las terminales que usen hanni y reintenta"
         }
     } else {
@@ -501,6 +674,7 @@ function Uninstall-All {
         }
     }
 
+    Remove-TempArtifacts
     Write-Host "  Cierra y reabre la terminal para refrescar el PATH." -ForegroundColor Magenta
 }
 
@@ -526,8 +700,17 @@ function Show-Menu {
 # Aseguramos TLS 1.2 para GitHub.
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
-if ($Action -eq "menu") { Show-Menu }
-elseif ($Action -eq "install") { Install-All $false }
-elseif ($Action -eq "update") { Install-All $true }
-elseif ($Action -eq "fonts") { Install-Fonts }
-elseif ($Action -eq "uninstall") { Uninstall-All }
+# Un fallo no puede acabar en un "exited with code 1" mudo: el usuario que
+# actualiza necesita saber que ha pasado y que NO se ha quedado a medias.
+try {
+    if ($Action -eq "menu") { Show-Menu }
+    elseif ($Action -eq "install") { Install-All $false }
+    elseif ($Action -eq "update") { Install-All $true }
+    elseif ($Action -eq "fonts") { Install-Fonts }
+    elseif ($Action -eq "uninstall") { Uninstall-All }
+} catch {
+    Write-Host ""
+    Write-Err "Fallo: $($_.Exception.Message)"
+    Write-Warn "La instalacion anterior no se ha tocado (o se ha restaurado sola). Reintenta; si persiste, cierra las terminales con hanni abiertas."
+    exit 1
+}

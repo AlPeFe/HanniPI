@@ -22,9 +22,11 @@
 - HanniPI: Hanni's identity in the system prompt is now female (feminine grammatical forms in gendered languages) and the assistant uses light kaomoji in replies. The startup help refers to her in feminine terms.
 - HanniPI: the right rail's memory line shows `ON` plus whether records were added (`nuevo`), deleted (`borrado`), or unchanged (`igual`) instead of an observation count. The changed-files list is capped at 3 paths so it does not accumulate and push the rest off the rail.
 - `/arminsayshi` now plays a 3D version in fullscreen mode, with one cube per pixel of Armin. The 3D pi logo easter egg on header logo click is replaced by it.
+- HanniPI: the installer retries its downloads (release lookup, `SHA256SUMS`, `pi-windows-x64.zip`, `hannigram-windows-x64.zip`) up to three times and cleans its `%TEMP%` artifacts when it finishes; a failed attempt no longer leaves ~170 MB behind. Install/update/uninstall failures end with the reason and a non-zero exit code instead of a bare exit.
 
 ### Fixed
 
+- HanniPI: `hanni update` on Windows no longer kills the process that runs it. The installer used to stop every `hanni.exe` (including the `hanni update` process itself and the harness session that launched it) right before swapping files, so the update aborted at that point: staging stayed in `%TEMP%`, the install kept the old version and the "new version available" notice never went away. Now the installer protects its own process plus its ancestor chain, stops only the memory daemon and auxiliary processes, and swaps the install directory by renaming it aside (a running `.exe` cannot be deleted, but its folder can be renamed), deleting the leftovers on the next run. The new version applies when the harness is restarted.
 - HanniPI: `hanni update` on Windows now updates the standalone (bun binary) install by running the unified installer (`hanni-setup.ps1 -Action update`), which verifies the release checksum and stops Hanni processes, instead of failing with "self-update on Windows is only supported for npm and pnpm installs".
 
 ## [1.0.0] - 2026-10-01

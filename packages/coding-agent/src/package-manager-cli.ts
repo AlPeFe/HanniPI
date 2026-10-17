@@ -227,9 +227,10 @@ async function runManagedSelfUpdate(managedRoot: string, version: string): Promi
 }
 
 // HanniPI standalone Windows installs ship as a bun-compiled binary and are
-// updated by the unified installer (checksum verification, stopping Hanni
-// processes, swapping the binary). Delegate `hanni update` to it instead of
-// reporting that self-update is unsupported.
+// updated by the unified installer (checksum verification, swapping the install
+// by rename). Delegate `hanni update` to it instead of reporting that self-update
+// is unsupported. The installer protects this process and its ancestors, so the
+// update no longer kills the session that runs it.
 // Main first because HanniPI releases currently ship only the binary zip and
 // SHA256SUMS; `releases/latest/download/hanni-setup.ps1` is kept as a fallback
 // for when the script is attached to a release.
@@ -1117,6 +1118,9 @@ export async function handlePackageCommand(
 							return true;
 						}
 						console.log(chalk.green(`Updated ${APP_NAME} from ${VERSION} to ${selfUpdatePlan.version}`));
+						// The installer swaps the install directory by rename and never kills
+						// running harnesses: what is already open keeps the old code.
+						console.log(chalk.dim(`Restart any open ${APP_NAME} session to run ${selfUpdatePlan.version}.`));
 						return true;
 					}
 					if (process.platform === "win32" && installMethod !== "npm" && installMethod !== "pnpm") {
