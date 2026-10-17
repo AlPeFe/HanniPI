@@ -5,6 +5,7 @@ import {
 	getCapabilities,
 	Image,
 	MouseRegion,
+	Panel,
 	Spacer,
 	Text,
 	type TUI,
@@ -29,6 +30,8 @@ export interface ToolExecutionOptions {
 }
 
 export class ToolExecutionComponent extends Container {
+	private shell: Container;
+	private panel: Panel;
 	private contentBox: Box;
 	private contentText: Text;
 	private contentTextRegion: MouseRegion;
@@ -93,10 +96,19 @@ export class ToolExecutionComponent extends Container {
 		this.contentTextRegion = this.createResultRegion(this.contentText);
 		this.selfRenderContainer = new Container();
 
+		// The card frame: the tool name in the border and its state on the right of the border, so a long
+		// transcript can be scanned by tool and by result without reading the output.
+		this.shell = new Container();
+		this.panel = new Panel(this.shell, {
+			borderColor: (text: string) => theme.fg("borderMuted", text),
+			paddingX: 0,
+		});
+		this.addChild(this.panel);
+
 		if (this.hasRendererDefinition()) {
-			this.addChild(this.getRenderShell() === "self" ? this.selfRenderContainer : this.contentBox);
+			this.shell.addChild(this.getRenderShell() === "self" ? this.selfRenderContainer : this.contentBox);
 		} else {
-			this.addChild(this.contentTextRegion);
+			this.shell.addChild(this.contentTextRegion);
 		}
 
 		this.updateDisplay();
@@ -302,6 +314,14 @@ export class ToolExecutionComponent extends Container {
 			: this.result?.isError
 				? (text: string) => theme.bg("toolErrorBg", text)
 				: (text: string) => theme.bg("toolSuccessBg", text);
+		this.panel.setTitle(theme.fg("toolTitle", theme.bold(this.toolName)));
+		this.panel.setStatus(
+			this.isPartial
+				? theme.fg("warning", "ejecutando")
+				: this.result?.isError
+					? theme.fg("error", "✗ error")
+					: theme.fg("success", "✓ ok"),
+		);
 
 		let hasContent = false;
 		this.hideComponent = false;

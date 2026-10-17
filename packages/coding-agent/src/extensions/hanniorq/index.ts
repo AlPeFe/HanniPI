@@ -859,7 +859,7 @@ class RailContent implements Component {
 		for (const section of this.build(contentWidth)) {
 			if (children.length > 0) children.push({ component: new Spacer(1) });
 			children.push({
-				component: new Panel(new Text(section.lines.join("\n"), 1, 0), {
+				component: new Panel(new Text(section.lines.join("\n"), 0, 0), {
 					title: theme.fg("accent", section.title),
 					borderColor: (text) => theme.fg("borderMuted", text),
 				}),

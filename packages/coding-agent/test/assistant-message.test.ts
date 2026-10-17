@@ -142,13 +142,14 @@ describe("AssistantMessageComponent", () => {
 		);
 		const lines = component.render(80).map((line) => stripAnsi(line));
 
-		expect(lines.some((line) => line.includes(" hello"))).toBe(true);
-		expect(lines.some((line) => line.includes(" reasoning"))).toBe(true);
+		// The panel frame adds `│ ` to every body line; the padding under test is what follows it.
+		expect(lines.some((line) => line.includes("│ hello"))).toBe(true);
+		expect(lines.some((line) => line.includes("│ reasoning"))).toBe(true);
 
 		component.setOutputPad(0);
 		const updatedLines = component.render(80).map((line) => stripAnsi(line));
-		expect(updatedLines.some((line) => line.startsWith("hello"))).toBe(true);
-		expect(updatedLines.some((line) => line.startsWith("reasoning"))).toBe(true);
+		expect(updatedLines.some((line) => line.includes("│hello"))).toBe(true);
+		expect(updatedLines.some((line) => line.includes("│reasoning"))).toBe(true);
 	});
 
 	test("chains Markdown transformers in registration order", () => {
@@ -207,10 +208,10 @@ describe("AssistantMessageComponent", () => {
 			],
 		);
 
-		expect(stripAnsi(component.render(80).join("\n"))).toContain("answer (78)");
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("answer (76)");
 		component.render(80);
-		expect(stripAnsi(component.render(60).join("\n"))).toContain("answer (58)");
-		expect(availableWidths).toEqual([78, 58]);
+		expect(stripAnsi(component.render(60).join("\n"))).toContain("answer (56)");
+		expect(availableWidths).toEqual([76, 56]);
 	});
 
 	test("continues the Markdown transformer chain when a transformer throws", () => {
@@ -268,10 +269,10 @@ describe("AssistantMessageComponent", () => {
 
 		const paddedComponent = new UserMessageComponent("hello", undefined, 1);
 		const paddedLines = paddedComponent.render(40).map((line) => stripAnsi(line));
-		expect(paddedLines.some((line) => line.startsWith(" hello"))).toBe(true);
+		expect(paddedLines.some((line) => line.includes("│ hello"))).toBe(true);
 
 		const unpaddedComponent = new UserMessageComponent("hello", undefined, 0);
 		const unpaddedLines = unpaddedComponent.render(40).map((line) => stripAnsi(line));
-		expect(unpaddedLines.some((line) => line.startsWith("hello"))).toBe(true);
+		expect(unpaddedLines.some((line) => line.includes("│hello"))).toBe(true);
 	});
 });

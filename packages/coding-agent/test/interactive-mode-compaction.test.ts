@@ -137,7 +137,7 @@ describe("InteractiveMode compaction events", () => {
 		};
 		const fakeThis = {
 			isInitialized: true,
-			footer: { invalidate: vi.fn() },
+			statusBar: { invalidate: vi.fn() },
 			autoCompactionEscapeHandler: undefined as (() => void) | undefined,
 			autoCompactionLoader: undefined,
 			defaultEditor: {},
@@ -200,7 +200,7 @@ describe("InteractiveMode compaction events", () => {
 	test("updates the working state when the same agent run resumes after compaction", async () => {
 		const fakeThis = {
 			isInitialized: true,
-			footer: { invalidate: vi.fn() },
+			statusBar: { invalidate: vi.fn() },
 			activeStatusIndicator: undefined,
 			workingVisible: true,
 			showWorkingStatusIndicator: vi.fn(),

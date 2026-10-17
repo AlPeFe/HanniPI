@@ -86,10 +86,12 @@ export class StatusBarComponent implements Component {
 		const chip = theme.bg("selectedBg", theme.bold(theme.fg(style.color, ` ${style.label} `)));
 		const hints = style.hints
 			.map(([key, description]) => {
-				// Raw keys (`/`, `!`) are not keybindings: only the `tui.*`/`app.*` ids are resolved.
-				const keyLabel = key.includes(".") ? keyText(key as Keybinding) : key;
+				const keyLabel = resolveKeyLabel(key);
+				// A keybinding with no keys in this session is not worth showing.
+				if (!keyLabel) return undefined;
 				return `${theme.fg("text", keyLabel)} ${theme.fg("dim", description)}`;
 			})
+			.filter((hint): hint is string => hint !== undefined)
 			.join(theme.fg("dim", " · "));
 		const trailing = this.options.getTrailing?.();
 		const right = trailing ? theme.fg("muted", trailing) : "";
@@ -105,6 +107,12 @@ export class StatusBarComponent implements Component {
 		const gap = Math.max(1, width - visibleWidth(line) - rightWidth);
 		return [pad(line + " ".repeat(gap) + right, width)];
 	}
+}
+
+/** Resolves a hint key: binding ids (`app.*`, `tui.*`) take their first key, raw keys (`/`, `!`) stay. */
+function resolveKeyLabel(key: string): string | undefined {
+	if (!key.includes(".")) return key;
+	return keyText(key as Keybinding).split("/")[0] || undefined;
 }
 
 function pad(line: string, width: number): string {

@@ -35,7 +35,7 @@ function createTreeUI() {
 		editor: { getText: () => "", setText: vi.fn() },
 		chatContainer: new Container(),
 		isInitialized: true,
-		footer: { invalidate: vi.fn() },
+		statusBar: { invalidate: vi.fn() },
 		ui: { terminal: { rows: 24, setProgress: vi.fn() }, requestRender: vi.fn() },
 		showSelector: (
 			create: (done: () => void) => { component: TreeSelectorComponent; focus: TreeSelectorComponent },

@@ -30,6 +30,18 @@ function createBaseToolDefinition(name = "custom_tool"): ToolDefinition {
 	};
 }
 
+/**
+ * Drops the panel frame (border lines and the vertical border of every body line) so assertions about
+ * the tool's own content keep working now that tool calls render as cards.
+ */
+function withoutPanelFrame(rendered: string): string {
+	return rendered
+		.split("\n")
+		.filter((line) => !/^[╭╰]/.test(line.trimStart()))
+		.map((line) => line.replace(/^│ ?/, "").replace(/│ ?$/, ""))
+		.join("\n");
+}
+
 function createFakeTui(): TUI {
 	return {
 		requestRender: () => {},
@@ -230,10 +242,10 @@ describe("ToolExecutionComponent parity", () => {
 		component.setExpanded(true);
 		component.updateResult({ ...result, isError: false }, false);
 
-		const rendered = stripAnsi(component.render(200).join("\n"));
+		const rendered = withoutPanelFrame(stripAnsi(component.render(200).join("\n")));
 		expect(rendered.match(/Full output:/g)?.length ?? 0).toBe(1);
-		expect(rendered).toMatch(/line-4000[^\n]*\n[^\S\n]*\n \[Full output:/);
-		expect(rendered).not.toMatch(/line-4000[^\n]*\n[^\S\n]*\n[^\S\n]*\n \[Full output:/);
+		expect(rendered).toMatch(/line-4000[^\n]*\n[^\S\n]*\n\[Full output:/);
+		expect(rendered).not.toMatch(/line-4000[^\n]*\n[^\S\n]*\n[^\S\n]*\n\[Full output:/);
 		expect(rendered).toContain("Truncated: showing 2000 of 4000 lines");
 		expect(rendered).not.toContain("[Showing lines 2001-4000 of 4000. Full output:");
 	});
@@ -290,7 +302,7 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
-		const rendered = stripAnsi(component.render(120).join("\n"));
+		const rendered = withoutPanelFrame(stripAnsi(component.render(120).join("\n")));
 		expect(rendered.match(/\bread\b/g)?.length ?? 0).toBe(1);
 	});
 
@@ -466,13 +478,16 @@ describe("ToolExecutionComponent parity", () => {
 		expect(collapsed).not.toContain(longValue);
 
 		component.setExpanded(true);
-		const expanded = stripAnsi(component.render(300).join("\n"));
+		const expanded = withoutPanelFrame(stripAnsi(component.render(300).join("\n")));
 		expect(expanded).toContain("  query: pi");
 		expect(expanded).toContain(longValue);
 		const expandedLines = expanded.split("\n").map((line) => line.trimEnd());
 		const textLine = expandedLines.findIndex((line) => line.endsWith("  text: line one"));
 		expect(textLine).toBeGreaterThan(-1);
-		expect(expandedLines[textLine + 1]).toMatch(/^\s+ {4}line two$/);
+		// The continuation of a wrapped value keeps the argument indentation plus its own indent.
+		const indent = (line: string) => line.length - line.trimStart().length;
+		expect(expandedLines[textLine + 1].trim()).toBe("line two");
+		expect(indent(expandedLines[textLine + 1])).toBeGreaterThan(indent(expandedLines[textLine]));
 	});
 
 	test("collapses fallback results until expanded", () => {

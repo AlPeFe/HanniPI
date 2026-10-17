@@ -102,7 +102,7 @@ describe("issues #7027 and #7113 credential refresh hang", () => {
 		const context = {
 			session: harness.session,
 			updateAvailableProviderCount: vi.fn(),
-			footer: { invalidate: vi.fn() },
+			statusBar: { invalidate: vi.fn() },
 			updateEditorBorderColor: vi.fn(),
 			showStatus: vi.fn(),
 			showError: vi.fn(),
@@ -155,7 +155,7 @@ describe("post-login model discovery", () => {
 		const context = {
 			session,
 			updateAvailableProviderCount: vi.fn(),
-			footer: { invalidate: vi.fn() },
+			statusBar: { invalidate: vi.fn() },
 			updateEditorBorderColor: vi.fn(),
 			showStatus: vi.fn(),
 			showError: vi.fn(),

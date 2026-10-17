@@ -22,12 +22,18 @@ const tool: ToolDefinition = {
 
 type OutputPaddedComponent = Component & { setOutputPad(outputPad: number): void };
 
-/** Text lines without ANSI codes or trailing fill. Blank lines and full-width borders are skipped. */
+/**
+ * Text lines without ANSI codes or trailing fill, ready to compare indentation across outputPad values.
+ * Panels add their own frame: the border lines are dropped and the vertical border is removed so the
+ * comparison is about the content the padding applies to.
+ */
 function renderLines(component: Component): string[] {
 	return component
 		.render(60)
 		.map((line) => stripAnsi(line).trimEnd())
-		.filter((line) => /[\w$(]/.test(line));
+		.filter((line) => /[\w$(]/.test(line))
+		.filter((line) => !/^[╭╰╔╚┏┗]/.test(line))
+		.map((line) => line.replace(/^│/, "").replace(/│$/, "").trimEnd());
 }
 
 function createTool(definition: ToolDefinition | undefined, outputPad: number): ToolExecutionComponent {

@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Container, Markdown, type MarkdownTheme, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, Markdown, type MarkdownTheme, MouseRegion, Panel, Spacer, Text } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
@@ -13,6 +13,7 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
  */
 export class AssistantMessageComponent extends Container {
 	private contentContainer: Container;
+	private panel: Panel;
 	private hideThinkingBlock: boolean;
 	private markdownTheme: MarkdownTheme;
 	private hiddenThinkingLabel: string;
@@ -41,7 +42,14 @@ export class AssistantMessageComponent extends Container {
 
 		// Container for text/thinking content
 		this.contentContainer = new Container();
-		this.addChild(this.contentContainer);
+		// The panel frames the answer and names it in the border; the body keeps the plain background so
+		// markdown and thinking blocks keep their own colors.
+		this.panel = new Panel(this.contentContainer, {
+			title: theme.fg("accent", "hanni"),
+			borderColor: (text: string) => theme.fg("borderMuted", text),
+			paddingX: 0,
+		});
+		this.addChild(this.panel);
 
 		if (message) {
 			this.updateContent(message);
@@ -78,6 +86,11 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override render(width: number): string[] {
+		// A message with no visible content (for example one that only asked for tools) gets no frame.
+		if (this.contentContainer.children.length === 0) {
+			return [];
+		}
+		this.panel.setStatus(this.isStreaming ? theme.fg("warning", "generando…") : "");
 		const lines = super.render(width);
 		if (this.hasToolCalls || lines.length === 0) {
 			return lines;

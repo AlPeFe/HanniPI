@@ -1,4 +1,4 @@
-import { Container, Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { Container, Markdown, type MarkdownTheme, Panel } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
@@ -38,21 +38,30 @@ export class UserMessageComponent extends Container {
 	private rebuild(): void {
 		this.clear();
 		// The Markdown pads and colors its own background: a Box around it would keep a second full-width copy of every
-		// line, with identical output.
+		// line, with identical output. The panel adds the frame: its title names who is talking, and its background
+		// keeps the user block tinted from edge to edge.
 		this.addChild(
-			new Markdown(
-				this.text,
-				this.outputPad,
-				1,
-				this.markdownTheme,
+			new Panel(
+				new Markdown(
+					this.text,
+					this.outputPad,
+					1,
+					this.markdownTheme,
+					{
+						color: (content: string) => theme.fg("userMessageText", content),
+						bgColor: (content: string) => theme.bg("userMessageBg", content),
+					},
+					{
+						preserveOrderedListMarkers: true,
+						preserveBackslashEscapes: true,
+						transform: createMarkdownTransform("user", false, this.markdownTransformers),
+					},
+				),
 				{
-					color: (content: string) => theme.fg("userMessageText", content),
-					bgColor: (content: string) => theme.bg("userMessageBg", content),
-				},
-				{
-					preserveOrderedListMarkers: true,
-					preserveBackslashEscapes: true,
-					transform: createMarkdownTransform("user", false, this.markdownTransformers),
+					title: theme.fg("accent", "tú"),
+					borderColor: (text: string) => theme.fg("borderMuted", text),
+					paddingX: 0,
+					background: (text: string) => theme.bg("userMessageBg", text),
 				},
 			),
 		);
