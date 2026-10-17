@@ -479,8 +479,20 @@ describe("extensión hanniorq", () => {
 		createHanniorqExtension()(pi);
 		const handler = registeredCommands.get("hannidump")!.handler;
 		const ctx = { cwd: "C:/proyectos/demo", ui: (pi as any).ui };
-		// Sin daemon HanniGram (fetch falla → undefined), no hay observaciones.
-		await handler("", ctx);
+		// Sin daemon HanniGram (fetch falla → undefined), no hay observaciones. El daemon real
+		// puede estar corriendo en la maquina de desarrollo (127.0.0.1:8765), asi que se simula
+		// que no responde en vez de depender del entorno.
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				throw new Error("daemon caido");
+			}),
+		);
+		try {
+			await handler("", ctx);
+		} finally {
+			vi.unstubAllGlobals();
+		}
 		expect(sentMessages.length).toBe(0);
 	});
 

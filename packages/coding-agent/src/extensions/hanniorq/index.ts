@@ -722,6 +722,35 @@ function railSections(ui: ExtensionUIContext, cwd: string, width: number = RAIL_
 		],
 	});
 
+	// Tareas — lo primero que se ve (justo debajo de proyecto): es el trabajo en curso, y con los
+	// paneles por concepto el rail ya no cabe entero, así que lo importante tiene que ir arriba (el
+	// rail muestra el principio; ver `follow` en renderRail). Las define el harness (tool `todo`) para
+	// el turno actual; si no, se muestran los pasos de la ficha sODD. La que está "en curso" va con ▸.
+	// Se pliegan con la tecla del rail o /hanniorq tasks.
+	const todos = railTodos(cwd);
+	if (todos.length > 0) {
+		const doneTodos = todos.filter((t) => t.done).length;
+		const taskLines: string[] = [];
+		if (ui.getRailTasksCollapsed()) {
+			taskLines.push(theme.fg("muted", `plegadas · ${RAIL_TASKS_KEY}`));
+		} else {
+			todos.slice(0, MAX_RAIL_TODOS).forEach((t) => {
+				const mark = t.done
+					? theme.fg("success", "✓")
+					: t.current
+						? theme.fg("warning", "▸")
+						: theme.fg("muted", "·");
+				wrapLines(t.text, W - 2, MAX_TODO_LINES).forEach((line, index) => {
+					taskLines.push(`${index === 0 ? `${mark} ` : "  "}${line}`);
+				});
+			});
+			if (todos.length > MAX_RAIL_TODOS) {
+				taskLines.push(theme.fg("muted", `… +${todos.length - MAX_RAIL_TODOS}`));
+			}
+		}
+		sections.push({ title: `tareas (${doneTodos}/${todos.length})`, lines: taskLines });
+	}
+
 	// Memoria HanniGram: ON/OFF + si en la sesión se añadió o borró algo.
 	const memoryLines: string[] = [];
 	if (!memoryCache.checked) {
@@ -755,32 +784,6 @@ function railSections(ui: ExtensionUIContext, cwd: string, width: number = RAIL_
 				theme.fg("muted", `${clip(ind.slug, 16)} (${ind.done}/${ind.total})`),
 			],
 		});
-	}
-
-	// Tareas — las define el harness (tool `todo`) para el turno actual; si no, se muestran los pasos
-	// de la ficha sODD. La que está "en curso" va con ▸. Se pliegan con la tecla del rail o /hanniorq tasks.
-	const todos = railTodos(cwd);
-	if (todos.length > 0) {
-		const doneTodos = todos.filter((t) => t.done).length;
-		const taskLines: string[] = [];
-		if (ui.getRailTasksCollapsed()) {
-			taskLines.push(theme.fg("muted", `plegadas · ${RAIL_TASKS_KEY}`));
-		} else {
-			todos.slice(0, MAX_RAIL_TODOS).forEach((t) => {
-				const mark = t.done
-					? theme.fg("success", "✓")
-					: t.current
-						? theme.fg("warning", "▸")
-						: theme.fg("muted", "·");
-				wrapLines(t.text, W - 2, MAX_TODO_LINES).forEach((line, index) => {
-					taskLines.push(`${index === 0 ? `${mark} ` : "  "}${line}`);
-				});
-			});
-			if (todos.length > MAX_RAIL_TODOS) {
-				taskLines.push(theme.fg("muted", `… +${todos.length - MAX_RAIL_TODOS}`));
-			}
-		}
-		sections.push({ title: `tareas (${doneTodos}/${todos.length})`, lines: taskLines });
 	}
 
 	// MCP: siempre se pinta algo útil. Los estados vivos los publica la extensión MCP; si no corre
@@ -890,7 +893,10 @@ function renderRail(ui: ExtensionUIContext, cwd: string): void {
 			() => ui.theme,
 		);
 		const scroll = new ScrollView(content, {
-			follow: "end",
+			// Sin follow: el rail muestra su principio (proyecto + tareas). Con follow "end" el rail
+			// saltaba al final en cada refresco y, al crecer el contenido (un panel por concepto, con
+			// bordes), las tareas quedaban fuera de la vista.
+			follow: "none",
 			overscroll: "contain",
 			scrollbar: "auto",
 			scrollbarTrackStyle: (line) => ui.theme.fg("scrollbarTrack", line),
