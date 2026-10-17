@@ -58,7 +58,8 @@ describe("rail: contexto y compactación", () => {
 	it("muestra el porcentaje y el umbral cuando queda margen", async () => {
 		const lines = await setup(usageAt(120_000));
 		const text = lines.join("\n");
-		expect(text).toContain("contexto");
+		// La cabecera "contexto" la pone el título del panel del rail, no estas líneas.
+		expect(text).not.toContain("contexto");
 		// 120k/200k = 60%, el umbral con la reserva por defecto (16k) es 184k = 92%.
 		expect(text).toContain("60% (120k/200k)");
 		expect(text).toContain("compacta a 92%");

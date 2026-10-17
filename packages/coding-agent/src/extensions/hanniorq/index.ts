@@ -502,6 +502,7 @@ function trackContext(ctx: ExtensionContext): void {
 /**
  * Aviso de compactación: cuánto contexto queda y a qué umbral se dispara sola.
  * El umbral es el mismo del motor: `contextWindow - reserveTokens` (16k por defecto).
+ * No lleva cabecera propia: el título del panel del rail ya dice "contexto".
  */
 export function contextRailLines(theme: ExtensionUIContext["theme"], width: number): string[] {
 	// El `ctx` de los tests (y de algunos modos) puede no traer el uso de contexto: sin él, no se pinta.
@@ -515,9 +516,9 @@ export function contextRailLines(theme: ExtensionUIContext["theme"], width: numb
 	const thresholdTokens = Math.max(0, window - reserve);
 	const thresholdPercent = window > 0 ? (thresholdTokens / window) * 100 : 0;
 
-	const lines: string[] = [theme.fg("accent", "contexto")];
+	const lines: string[] = [];
 	if (usage.tokens === null) {
-		lines.push(theme.fg("muted", clip("— (se estima tras la próxima respuesta)", width)));
+		lines.push(theme.fg("muted", clip("— se estima tras la próxima respuesta", width)));
 		return lines;
 	}
 	const tokens = usage.tokens;

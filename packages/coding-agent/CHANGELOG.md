@@ -4,6 +4,9 @@
 
 ### Added
 
+- HanniPI: the interface is now built from panels. A fixed top bar shows the wordmark, version, working directory, branch, session, model (with virtual routes), extension statuses, a context meter and token usage; the bottom bar shows the current mode (`lista`, `pensando`, `compactando`, `bash`, `cola`) with the shortcuts that apply to it.
+- HanniPI: every transcript block is a card with its title in the border — `tú`, `hanni` (with `generando…` while streaming) and the tool name with `ejecutando` / `ok` / `error` — and the right rail stacks one panel per concept (project, memory, context, sODD, tasks, MCP, changes).
+- Added `Panel` to `@earendil-works/pi-tui`: a container that draws a border with its title, a right-aligned status, and a caption in the bottom border, padding every line to the requested width.
 - HanniPI: bundled the Rysana Mono typeface (`packages/coding-agent/src/modes/interactive/assets/fonts/rysana`, SIL OFL 1.1). The Windows installer installs the hinted static weights for the current user and sets `Rysana Mono` as the Windows Terminal default font face; `hanni-setup.ps1 -Action fonts` runs only that step and `-SkipFonts` skips it.
 - HanniPI: HTML session exports render with Rysana Mono, embedded in the export as a WOFF2 data URI (core subset, weight 100-900), so the transcript keeps the typeface where it is not installed.
 - HanniPI: added `/helpme` (lists every HanniPI command and what it does), `/hannidump [ruta]` (writes an `agents.md` context+ADR dump for harnesses that do not use HanniGram, summarized by the model), and `/explore` (reads the project's md files/README and builds initial HanniGram memory on first run).
@@ -14,6 +17,7 @@
 
 ### Changed
 
+- HanniPI: the startup header no longer lists the compact key hints (the status bar shows them) and the right rail's context section no longer repeats its own heading.
 - The Xiaomi MiMo default model now points at `mimo-v2.6-pro` (v2.5 was removed from the live catalog) and the NVIDIA default at `nemotron-3.5-super-vl-120b-a12b`.
 - HanniPI: Hanni's identity in the system prompt is now female (feminine grammatical forms in gendered languages) and the assistant uses light kaomoji in replies. The startup help refers to her in feminine terms.
 - HanniPI: the right rail's memory line shows `ON` plus whether records were added (`nuevo`), deleted (`borrado`), or unchanged (`igual`) instead of an observation count. The changed-files list is capped at 3 paths so it does not accumulate and push the rest off the rail.

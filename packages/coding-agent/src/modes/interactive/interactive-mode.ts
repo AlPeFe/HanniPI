@@ -985,14 +985,14 @@ export class InteractiveMode {
 		// Add header with keybindings from config (unless silenced)
 		if (this.shouldShowStartupHeader()) {
 			const showDetails = this.shouldShowStartupDetails();
-			// Built on demand so the header follows theme changes. The logo's first line carries the version,
-			// its second line the first line of key hints. Terminals that cannot render the logo get a
-			// "Hanni vX" line instead, with the key hints below it.
+			// Built on demand so the header follows theme changes. The compact header is only the logo
+			// (or a "Hanni vX" line where the banner cannot render) plus how to see the rest: the key
+			// hints live in the status bar at the bottom, so they are not repeated here.
 			const showLogo = supportsHanniLogo();
-			const withLogo = (hints: string) => {
-				if (!showLogo) return `${hanniWordmark()} ${theme.fg("dim", `v${this.version}`)}\n${hints}`;
-				const banner = hanniLogoLines().join("\n");
-				return `${banner}\n${theme.fg("dim", `v${this.version}`)}\n${hints}`;
+			const wordmark = () => {
+				const version = theme.fg("dim", `v${this.version}`);
+				if (!showLogo) return `${hanniWordmark()} ${version}`;
+				return `${hanniLogoLines().join("\n")}\n${version}`;
 			};
 
 			// Build startup instructions using keybinding hint helpers
@@ -1023,14 +1023,6 @@ export class InteractiveMode {
 					hint("app.clipboard.pasteImage", "to paste files on macOS, images, or text"),
 					rawKeyHint("drop files", "to attach"),
 				].join("\n");
-			const compactInstructions = () =>
-				[
-					hint("app.interrupt", "interrupt"),
-					rawKeyHint(`${keyText("app.clear")}/${keyText("app.exit")}`, "clear/exit"),
-					rawKeyHint("/", "commands"),
-					rawKeyHint("!", "bash"),
-					hint("app.tools.expand", "more"),
-				].join(theme.fg("muted", " · "));
 			const compactOnboarding = () =>
 				theme.fg(
 					"dim",
@@ -1042,8 +1034,8 @@ export class InteractiveMode {
 					`Hanni can explain her own features and look up her docs. Ask her how to use or extend Hanni.`,
 				);
 			this.builtInHeader = new ExpandableText(
-				() => `${withLogo(compactInstructions())}\n${compactOnboarding()}\n\n${onboarding()}`,
-				() => `${withLogo(expandedInstructions())}\n\n${onboarding()}`,
+				() => `${wordmark()}\n\n${compactOnboarding()}\n\n${onboarding()}`,
+				() => `${wordmark()}\n\n${expandedInstructions()}\n\n${onboarding()}`,
 				this.getStartupExpansionState(),
 				1,
 				0,

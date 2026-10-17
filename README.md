@@ -73,6 +73,15 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 
 **El resumen de `/hanniorq close`** incluye una sección **Memoria (HanniGram)** que refleja cómo se ha trabajado la memoria en la sesión: observaciones leídas, espejo de la ficha (topic `odd/<slug>/tasks`) y resumen de sesión. Si el daemon de HanniGram no está disponible, se marca `PENDIENTE` en vez de inventar el guardado.
 
+### 🖥️ Interfaz
+
+La TUI separa chrome, conversación y rail, en vez de mezclarlo todo en una columna:
+
+- **Barra superior** (fija): `Hanni` con la versión, el directorio y la rama, el modelo (con la ruta del modelo virtual si lo hay), y a la derecha el medidor de contexto y los tokens.
+- **Conversación**: cada bloque es un panel con el título en el borde — `tú`, `hanni` (con `generando…` mientras responde) y cada herramienta con `ejecutando` / `ok` / `error`.
+- **Barra inferior** (fija): el modo actual (`lista`, `pensando`, `compactando`, `bash`, `cola`) y los atajos que aplican a ese modo.
+- **Rail derecho** (opcional): un panel por concepto — proyecto, memoria, contexto, ficha sODD, tareas, MCP y cambios.
+
 ### 🔌 Gestión de extensiones
 
 - **Paquetes por defecto** (activos siempre): `pi-mcp-adapter`, `pi-subagents`, `pi-web-access`.

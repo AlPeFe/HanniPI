@@ -34,6 +34,17 @@ Model context is reconstructed from the active branch. Compaction inserts a summ
 
 Interactive mode renders session and agent events in the terminal. Print mode runs a prompt and writes the final response. JSON mode writes agent events as JSONL.
 
+### Interactive layout
+
+HanniPI's interactive mode separates three things that used to share one column: the chrome, the conversation, and the side rail.
+
+- **Top bar** (fixed, two rows): the wordmark and version, the working directory with its git branch, the session name, the model the next request goes to (including a virtual route), then the extension statuses, the context meter, and the token usage.
+- **Conversation**: every block is a panel whose title lives in the border — `tú` for user messages, `hanni` for assistant messages (the border shows `generando…` while streaming), and the tool name for tool calls with `ejecutando` / `ok` / `error` at the right of the border.
+- **Status bar** (fixed, one row): the current mode (`lista`, `pensando`, `compactando`, `bash`, `cola`) and the shortcuts that apply to it.
+- **Right rail** (optional, `ctrl+alt+←/→` or `/hanniorq rail <n>`): one panel per concept — project, memory, context, sODD sheet, tasks, MCP servers, and changed files.
+
+Panels come from the `Panel` component in `@earendil-works/pi-tui`: a border with an optional title, a right-aligned status, and a caption in the bottom border. `outputPad` controls the content margin inside them.
+
 RPC mode accepts JSONL commands on stdin and writes responses and events to stdout. The TypeScript SDK creates and controls agent sessions in process.
 
 All interfaces use the same agent and session mechanisms.
