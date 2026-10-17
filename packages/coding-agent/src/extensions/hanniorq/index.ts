@@ -325,9 +325,14 @@ interface BriefingSession {
 
 interface BriefingObservation {
 	title?: string;
+	content?: string;
 	topicKey?: string;
 	type?: string;
+	createdAtUtc?: string;
 }
+
+/** TopicKey de la observacion "en que estaba": una sola fila por proyecto, actualizada sola. */
+const HANDOFF_TOPIC = "handoff/actual";
 
 interface MemoryBriefing {
 	/** Texto que entra en el system prompt (sección `memoria`). */
@@ -372,6 +377,16 @@ async function fetchMemoryBriefing(cwd: string): Promise<MemoryBriefing | undefi
 		if (last.summary) lines.push(`  hecho: ${oneLine(last.summary, 420)}`);
 		if (last.nextSteps) lines.push(`  siguiente: ${oneLine(last.nextSteps, 320)}`);
 		resumeBits.push(`última sesión ${briefingWhen(last.endedAtUtc ?? last.startedAtUtc)}`);
+	} else {
+		// Sin resumen de sesión, el estado lo mantiene el handoff rodante (saveRollingHandoff).
+		const handoff = observations.find((o) => o.topicKey === HANDOFF_TOPIC || o.type === "handoff");
+		if (handoff) {
+			lines.push(`último estado guardado (${briefingWhen(handoff.createdAtUtc)}):`);
+			for (const line of (typeof handoff.content === "string" ? handoff.content : "").split("\n")) {
+				if (line.trim()) lines.push(`  ${oneLine(line, 200)}`);
+			}
+			resumeBits.push(`estado guardado ${briefingWhen(handoff.createdAtUtc)}`);
+		}
 	}
 
 	const decisions = observations.filter((o) => o.type === "adr" || o.type === "pattern");
@@ -420,6 +435,62 @@ async function loadMemoryBriefing(cwd: string): Promise<MemoryBriefing | undefin
 	const value = await fetchMemoryBriefing(cwd);
 	if (value !== undefined) briefing = { cwd, value };
 	return value;
+}
+
+/** Invalida el briefing cacheado: la memoria cambió y el prompt debe reflejarlo. */
+function invalidateMemoryBriefing(): void {
+	briefing = undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Handoff rodante: "en qué estaba", sin depender de que el agente se acuerde de
+// guardarlo. Si un turno deja trabajo (cambios en el árbol o ficha sODD activa) y
+// no se guardó un resumen de sesión, se actualiza UNA observación del proyecto
+// (topic handoff/actual). Así cerrar la terminal no deja la próxima sesión —quizá
+// días después— sin punto de partida.
+// ---------------------------------------------------------------------------
+
+interface SessionWork {
+	/** Primera petición de la sesión: el objetivo del handoff. */
+	goal?: string;
+}
+
+const sessionWork: SessionWork = {};
+/** El agente ya guardó un mem_session_summary: el handoff rodante sobra. */
+let handoffSuperseded = false;
+
+async function saveRollingHandoff(cwd: string): Promise<void> {
+	const slug = soddIndicator(cwd)?.slug;
+	const files = visibleWorktreeFiles(cwd, modifiedFilesCache.get(cwd) ?? []);
+	// Sin trabajo que contar (una pregunta, una lectura), no se escribe nada.
+	if (!slug && files.length === 0) return;
+
+	const steps = slug ? todoSteps(cwd) : [];
+	const pending = steps.filter((step) => !step.done);
+	const lines = [
+		`objetivo: ${oneLine(sessionWork.goal, 200) || "sin petición registrada"}`,
+		`hecho: ${oneLine(lastCommit(cwd), 160)}`,
+		files.length > 0 ? `ficheros: ${files.slice(0, 8).join(", ")}` : "ficheros: (árbol sin cambios)",
+		slug
+			? `en curso: odd/tasks/${slug}.md (${steps.filter((step) => step.done).length}/${steps.length} pasos)`
+			: "en curso: (sin ficha sODD activa)",
+		pending.length > 0
+			? `siguiente: ${pending
+					.slice(0, 3)
+					.map((step) => oneLine(step.text, 80))
+					.join(" | ")}`
+			: "siguiente: revisar los cambios pendientes",
+	];
+
+	await hannigram(`/api/observations?${new URLSearchParams({ cwd })}`, {
+		method: "POST",
+		body: JSON.stringify({
+			title: `handoff: ${projectName(cwd)}`,
+			content: lines.join("\n"),
+			topicKey: HANDOFF_TOPIC,
+			type: "handoff",
+		}),
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -1182,6 +1253,9 @@ export function createHanniorqExtension(
 				else if (event.toolName === "mem_session_summary") memTurn.summaries++;
 				else if (/\bUpdated observation\b/i.test(toolResultText(event.result))) memTurn.updated++;
 				else memTurn.created++;
+				// Un resumen de sesión de verdad deja el handoff rodante sin papel.
+				if (event.toolName === "mem_session_summary") handoffSuperseded = true;
+				invalidateMemoryBriefing();
 			}
 			// Refresca el rail derecho cuando cambia estado relevante (memoria/sODD/tareas).
 			if (
@@ -1290,6 +1364,8 @@ export function createHanniorqExtension(
 			updateSoddIndicator(ctx.ui, cwd);
 			refreshRail(ctx.ui, cwd);
 			void refreshModifiedFiles(pi, ctx.ui, cwd);
+			// El turno dejó trabajo y no hubo resumen de sesión: se actualiza "en qué estaba".
+			if (!handoffSuperseded && memTurn.summaries === 0) void saveRollingHandoff(cwd);
 		});
 
 		pi.on("tool_execution_end", (_event, ctx) => {
@@ -1301,6 +1377,7 @@ export function createHanniorqExtension(
 		// se cachea por sesión, así que no cuesta una petición por turno.
 		pi.on("before_agent_start", async (event, ctx) => {
 			const cwd = ctx.cwd ?? process.cwd();
+			if (!sessionWork.goal) sessionWork.goal = oneLine(event.prompt, 200) || undefined;
 			const memory = await loadMemoryBriefing(cwd);
 			if (memory) event.systemPromptOptions.sections.memoria = memory.text;
 			const guidelines = event.systemPromptOptions.promptGuidelines;
@@ -1316,6 +1393,9 @@ export function createHanniorqExtension(
 			memActivity.length = 0;
 			harnessTodos = [];
 			soddWorking = false;
+			sessionWork.goal = undefined;
+			handoffSuperseded = false;
+			invalidateMemoryBriefing();
 			updateSoddIndicator(ctx.ui, cwd);
 			refreshRail(ctx.ui, cwd);
 			void refreshModifiedFiles(pi, ctx.ui, cwd);

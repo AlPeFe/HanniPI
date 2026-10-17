@@ -591,7 +591,8 @@ describe("extensión hanniorq", () => {
 	it("inyecta el briefing de memoria en el system prompt antes de trabajar", async () => {
 		const { listeners, pi } = createMockPi();
 		(pi as any).__listeners = listeners;
-		createHanniorqExtension()(pi);
+		// ensureDaemon falso: el test no arranca el daemon real.
+		createHanniorqExtension({ ensureDaemon: async () => false })(pi);
 		const cwd = mkdtempSync(join(tmpdir(), "hanniorq-briefing-"));
 		vi.stubGlobal(
 			"fetch",
@@ -621,6 +622,7 @@ describe("extensión hanniorq", () => {
 			}),
 		);
 		try {
+			await emit(pi, "session_start", {}, { cwd, ui: (pi as any).ui });
 			const sections: Record<string, string> = {};
 			const promptGuidelines: string[] = [];
 			const event = {
@@ -659,6 +661,111 @@ describe("extensión hanniorq", () => {
 				expect(offlineSections.memoria).toBeUndefined();
 			} finally {
 				rmSync(other, { recursive: true, force: true });
+			}
+		} finally {
+			vi.unstubAllGlobals();
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("guarda un handoff rodante si el turno deja trabajo y no hay resumen de sesion", async () => {
+		const { listeners, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHanniorqExtension({ ensureDaemon: async () => false })(pi);
+		const cwd = mkdtempSync(join(tmpdir(), "hanniorq-handoff-"));
+		mkdirSync(join(cwd, "odd", "tasks"), { recursive: true });
+		writeFileSync(join(cwd, "odd", ".active"), "demo");
+		writeFileSync(
+			join(cwd, "odd", "tasks", "demo.md"),
+			"---\nstatus: active\n---\n# demo\n\n## Pasos\n- [x] S1 hecho\n- [ ] S2 pendiente\n",
+		);
+		const posts: Array<Record<string, any>> = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: unknown, init?: any) => {
+				if (init?.method === "POST") {
+					posts.push(JSON.parse(String(init.body)));
+					return Response.json({ id: 1 });
+				}
+				if (String(url).includes("/api/sessions")) return Response.json([]);
+				if (String(url).includes("/api/observations")) return Response.json([]);
+				return new Response("", { status: 404 });
+			}),
+		);
+		try {
+			const ctx = { cwd, ui: (pi as any).ui };
+			await emit(pi, "session_start", {}, ctx);
+			await emit(
+				pi,
+				"before_agent_start",
+				{
+					type: "before_agent_start",
+					prompt: "arregla el rail",
+					systemPrompt: "",
+					systemPromptOptions: { sections: {}, promptGuidelines: [] },
+				},
+				ctx,
+			);
+			await emit(pi, "turn_start", {}, ctx);
+			await emit(pi, "turn_end", {}, ctx);
+			await new Promise((resolve) => setTimeout(resolve, 30));
+
+			const handoff = posts.find((p) => p.topicKey === "handoff/actual");
+			expect(handoff).toBeDefined();
+			expect(handoff!.content).toContain("objetivo: arregla el rail");
+			expect(handoff!.content).toContain("en curso: odd/tasks/demo.md (1/2 pasos)");
+			expect(handoff!.content).toContain("S2 pendiente");
+
+			// Con un resumen de sesion en el turno, el handoff rodante sobra.
+			posts.length = 0;
+			await emit(pi, "turn_start", {}, ctx);
+			await emit(
+				pi,
+				"tool_execution_end",
+				{ toolName: "mem_session_summary", isError: false, result: { content: [] }, toolCallId: "t1" },
+				ctx,
+			);
+			await emit(pi, "turn_end", {}, ctx);
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			expect(posts.filter((p) => p.topicKey === "handoff/actual")).toEqual([]);
+
+			// Y el briefing de la proxima sesion lee ese estado cuando no hay resumen de sesion.
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (url: unknown) => {
+					if (String(url).includes("/api/sessions")) return Response.json([]);
+					if (String(url).includes("/api/observations")) {
+						return Response.json([
+							{
+								topicKey: "handoff/actual",
+								type: "handoff",
+								createdAtUtc: "2026-10-17T14:20:00.000000Z",
+								content:
+									"objetivo: arregla el rail\nen curso: odd/tasks/demo.md (1/2 pasos)\nsiguiente: S2 pendiente",
+							},
+						]);
+					}
+					return new Response("", { status: 404 });
+				}),
+			);
+			const next = mkdtempSync(join(tmpdir(), "hanniorq-handoff-next-"));
+			try {
+				const sections: Record<string, string> = {};
+				await emit(
+					pi,
+					"before_agent_start",
+					{
+						type: "before_agent_start",
+						prompt: "sigue",
+						systemPrompt: "",
+						systemPromptOptions: { sections, promptGuidelines: [] },
+					},
+					{ cwd: next, ui: (pi as any).ui },
+				);
+				expect(sections.memoria).toContain("último estado guardado");
+				expect(sections.memoria).toContain("S2 pendiente");
+			} finally {
+				rmSync(next, { recursive: true, force: true });
 			}
 		} finally {
 			vi.unstubAllGlobals();
