@@ -836,6 +836,47 @@ export function mcpRailServers(cwd: string): Array<{ name: string; state: string
 	return out;
 }
 
+/** Un servicio que el harness tiene escuchando en un puerto: qué es y en qué puerto. */
+export interface RailService {
+	name: string;
+	port: number;
+	/** Para qué lo usa el harness: "memoria", "MCP"… */
+	kind: string;
+}
+
+/** Puerto explícito de una URL (`http://host:8765`); sin puerto en la URL no hay puerto que enseñar. */
+function explicitPort(raw: string): number | undefined {
+	try {
+		const url = new URL(raw);
+		if (!url.port) return undefined;
+		const port = Number(url.port);
+		return Number.isInteger(port) && port > 0 ? port : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Puertos que el harness tiene abiertos ahora mismo: el daemon de memoria HanniGram (si está
+ * arriba) y los servidores MCP por HTTP conectados (el puerto sale de su URL en `mcp.json`).
+ * Es información de lo activo: un servicio caído no se pinta como si siguiera escuchando.
+ */
+export function railServices(cwd: string): RailService[] {
+	const out: RailService[] = [];
+	if (memoryCache.up && !memoryCache.skipped) {
+		const port = explicitPort(HANNIGRAM_BASE);
+		if (port !== undefined) out.push({ name: "HanniGram", port, kind: "memoria" });
+	}
+	const live = new Map(getMcpConnectionStatuses().map((status) => [status.name, status.state as string]));
+	for (const server of loadMcpConfig({ agentDir: getAgentDir(), cwd, projectTrusted: false }).servers) {
+		if (!("url" in server.config) || live.get(server.name) !== "connected") continue;
+		const port = explicitPort(server.config.url);
+		if (port === undefined) continue;
+		out.push({ name: server.name, port, kind: "MCP" });
+	}
+	return out.sort((a, b) => a.port - b.port);
+}
+
 /** Nombre del proyecto: owner/repo del git remote, o nombre del directorio. */
 function projectName(cwd: string): string {
 	const r = git(cwd, ["config", "--get", "remote.origin.url"]);
@@ -1065,6 +1106,19 @@ function railSections(ui: ExtensionUIContext, cwd: string, width: number = RAIL_
 		memoryLines.push(`${icon} ${clip(m.detail, W - 4)}`);
 	}
 	sections.push({ title: "memoria", lines: memoryLines });
+
+	// Servicios: qué tiene abierto el harness y en qué puerto (daemon de memoria, MCP por HTTP).
+	// Solo aparece con algo escuchando: el panel informa de lo activo, no de lo que podría estarlo.
+	const services = railServices(cwd);
+	if (services.length > 0) {
+		const serviceLines = services.map((service) => {
+			const portText = `:${service.port}`;
+			const tail = `${portText} · ${service.kind}`;
+			const name = clip(service.name, Math.max(8, W - 3 - tail.length));
+			return `${theme.fg("success", "●")} ${name} ${theme.fg("accent", portText)} · ${theme.fg("muted", service.kind)}`;
+		});
+		sections.push({ title: `servicios (${services.length})`, lines: serviceLines });
+	}
 
 	// Contexto y compactación: cuánto queda y cuándo se dispara sola.
 	const contextLines = contextRailLines(theme, W);
