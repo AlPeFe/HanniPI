@@ -269,6 +269,9 @@ function slugify(s: string): string {
 }
 
 async function hannigram<T>(path: string, init?: RequestInit): Promise<T | undefined> {
+	// /skipmemory: HanniGram fuera del juego. Ni una petición — tampoco /health —, así que ni el
+	// briefing, ni el handoff, ni el registro de sesión salen de aquí.
+	if (memorySkipped()) return undefined;
 	try {
 		const res = await fetch(`${HANNIGRAM_BASE}${path}`, {
 			...init,
@@ -650,7 +653,11 @@ const modifiedFilesCache = new Map<string, string[]>();
 const modifiedFilesRefresh = new Map<string, Promise<void>>();
 
 /** Cache del estado de la memoria HanniGram (daemon arriba/abajo). */
-let memoryCache: { up: boolean; checked: boolean } = { up: false, checked: false };
+let memoryCache: { up: boolean; checked: boolean; skipped: boolean } = {
+	up: false,
+	checked: false,
+	skipped: false,
+};
 
 function clip(s: string, n: number): string {
 	return s.length > n ? `${s.slice(0, n - 1)}…` : s;
@@ -696,6 +703,14 @@ let readExtensionOverrides: () => string[] = () => [];
 
 /** Ajustes efectivos (incluye compactación); los expone el factory desde `pi.getSettings()`. */
 let readSettings: () => Settings | undefined = () => undefined;
+
+/**
+ * HanniGram está omitido (`/skipmemory`): ni briefing, ni `mem_*`, ni daemon. Va contra los ajustes
+ * vivos (no contra una copia), así que el comando surte efecto en el acto y persiste entre sesiones.
+ */
+function memorySkipped(): boolean {
+	return readSettings()?.skipMemory === true;
+}
 
 /** Margen con el que se avisa de que la compactación está cerca (tokens y puntos porcentuales). */
 const COMPACT_NEAR_TOKENS = 20_000;
@@ -874,11 +889,16 @@ function collectTodos(lines: string[], onlyPasos: boolean): Array<{ done: boolea
 }
 
 /** Consulta el daemon HanniGram (health) y refresca la cache. */ async function checkMemory(): Promise<void> {
+	if (memorySkipped()) {
+		// Omitida a propósito: no se pregunta al daemon ni se pinta como caído.
+		memoryCache = { up: false, checked: true, skipped: true };
+		return;
+	}
 	try {
 		const health = await hannigram<{ status?: string }>("/health");
-		memoryCache = { up: health?.status === "ok", checked: true };
+		memoryCache = { up: health?.status === "ok", checked: true, skipped: false };
 	} catch {
-		memoryCache = { up: false, checked: true };
+		memoryCache = { up: false, checked: true, skipped: false };
 	}
 }
 
@@ -1027,7 +1047,11 @@ function railSections(ui: ExtensionUIContext, cwd: string, width: number = RAIL_
 
 	// Memoria HanniGram: ON/OFF + si en la sesión se añadió o borró algo.
 	const memoryLines: string[] = [];
-	if (!memoryCache.checked) {
+	if (memoryCache.skipped) {
+		memoryLines.push(
+			`${theme.fg("warning", "⏭")} ${theme.fg("text", "omitida")} · ${theme.fg("muted", "/skipmemory off")}`,
+		);
+	} else if (!memoryCache.checked) {
 		memoryLines.push(theme.fg("muted", "comprobando…"));
 	} else if (memoryCache.up) {
 		const delta = memoryDelta();
@@ -1282,6 +1306,39 @@ export function createHanniorqExtension(
 		readExtensionOverrides = () => pi.getSettings().extensions ?? [];
 		readSettings = () => pi.getSettings();
 		let unsubscribeMcpStatus: (() => void) | undefined;
+		/** mem_* que quedaron fuera del conjunto activo al omitir la memoria (para restaurarlas). */
+		let memoryToolsHidden: string[] = [];
+
+		/**
+		 * Saca las `mem_*` del conjunto activo: el modelo deja de verlas en el prompt, no solo se le
+		 * prohíbe llamarlas. Se recuerdan para volver a activarlas con `/skipmemory off`.
+		 */
+		function hideMemoryTools(): void {
+			const active = pi.getActiveTools();
+			const hidden = active.filter((name) => name.startsWith("mem_"));
+			if (hidden.length === 0) return;
+			memoryToolsHidden = [...new Set([...memoryToolsHidden, ...hidden])];
+			pi.setActiveTools(active.filter((name) => !name.startsWith("mem_")));
+		}
+
+		/** Devuelve al conjunto activo las `mem_*` que la omisión había quitado. */
+		function restoreMemoryTools(): void {
+			if (memoryToolsHidden.length === 0) return;
+			const active = pi.getActiveTools();
+			pi.setActiveTools([...active, ...memoryToolsHidden.filter((name) => !active.includes(name))]);
+			memoryToolsHidden = [];
+		}
+
+		/** Aviso común de los comandos que necesitan memoria cuando está omitida. */
+		function memoryBlocked(ui: ExtensionUIContext): boolean {
+			if (!memorySkipped()) return false;
+			ui.notify(
+				"Memoria omitida con /skipmemory: HanniGram no se toca. Usa /skipmemory off para volver a usarla.",
+				"warning",
+			);
+			return true;
+		}
+
 		// Estado del turno actual: tools usadas, escrituras de memoria, si se
 		// tocó sODD. Se resetea en turn_start y se resume en turn_end como un
 		// widget pequeñito (abajo), estilo "updated skill" de Hermes.
@@ -1369,11 +1426,54 @@ export function createHanniorqExtension(
 		// exportado, crea ADR, consulta estado). Delega en el CLI del motor
 		// (hannigram) o en el daemon HTTP; la fuente de verdad es la BD.
 		// =================================================================
+		// /skipmemory — HanniGram fuera del juego, entero: sin briefing en el system prompt, sin tools
+		// mem_* (se quitan del conjunto activo y además se bloquean sus llamadas), sin arrancar el
+		// daemon y sin lecturas ni escrituras. Persiste entre sesiones, así que una sesión nueva sigue
+		// omitida hasta que se apague con /skipmemory off.
+		pi.registerCommand("skipmemory", {
+			description: "Omitir HanniGram por completo: briefing, tools mem_* y daemon (on|off)",
+			handler: async (args, ctx) => {
+				const cwd = ctx.cwd ?? process.cwd();
+				const mode = args.trim().toLowerCase();
+				if (mode !== "" && mode !== "on" && mode !== "off") {
+					ctx.ui.notify("Uso: /skipmemory [on|off] (sin argumento alterna)", "warning");
+					return;
+				}
+				const skip = mode === "on" ? true : mode === "off" ? false : !ctx.ui.getSkipMemory();
+				ctx.ui.setSkipMemory(skip);
+				if (skip) {
+					hideMemoryTools();
+					memoryCache = { up: false, checked: true, skipped: true };
+				} else {
+					restoreMemoryTools();
+					memoryCache = { up: false, checked: false, skipped: false };
+				}
+				invalidateMemoryBriefing();
+				refreshRail(ctx.ui, cwd);
+				ctx.ui.notify(
+					skip
+						? "Memoria omitida: HanniGram no se leerá ni se escribirá en esta sesión (ni el briefing, ni las tools mem_*, ni el daemon). Persiste entre sesiones; /skipmemory off para volver."
+						: "Memoria de HanniGram activada otra vez.",
+					"info",
+				);
+			},
+		});
+
+		// Cinturón y tirantes: aunque otra extensión reactive las mem_*, ninguna llamada pasa.
+		pi.on("tool_call", (event) => {
+			if (!memorySkipped() || !event.toolName.startsWith("mem_")) return undefined;
+			return {
+				block: true,
+				reason: "memoria omitida con /skipmemory (usa /skipmemory off para volver a usarla)",
+			};
+		});
+
 		pi.registerCommand("hannigram", {
 			description: "Memoria del proyecto: init|status|adr (HanniGram)",
 			handler: async (args, ctx) => {
 				const [sub, ...rest] = args.trim().split(/\s+/);
 				const cwd = ctx.cwd ?? process.cwd();
+				if (memoryBlocked(ctx.ui)) return;
 				const hgCli = process.env.HANNIGRAM_CLI ?? "hannigram";
 				if (sub === "init") {
 					ctx.ui.notify("Inicializando memoria del proyecto (BD + .hannigram/memory.md).", "info");
@@ -1475,6 +1575,8 @@ export function createHanniorqExtension(
 			deactivateSkillsInUse();
 			const invoked = /<skill\s+name="([^"]+)"/.exec(event.prompt)?.[1];
 			if (invoked) markSkillUsed(invoked);
+			// /skipmemory: ni briefing ni guideline de memoria. El resto del handler (skills) sigue.
+			if (memorySkipped()) return;
 			const memory = await loadMemoryBriefing(cwd);
 			if (memory) event.systemPromptOptions.sections.memoria = memory.text;
 			const guidelines = event.systemPromptOptions.promptGuidelines;
@@ -1500,11 +1602,14 @@ export function createHanniorqExtension(
 			sessionWork.goal = undefined;
 			handoffSuperseded = false;
 			invalidateMemoryBriefing();
+			if (memorySkipped()) hideMemoryTools();
 			updateSoddIndicator(ctx.ui, cwd);
 			refreshRail(ctx.ui, cwd);
 			void refreshModifiedFiles(pi, ctx.ui, cwd);
 			unsubscribeMcpStatus?.();
 			unsubscribeMcpStatus = subscribeMcpConnectionStatuses(() => renderRail(ctx.ui, cwd));
+			// Con la memoria omitida no se arranca el daemon: HanniGram no se toca en toda la sesión.
+			if (memorySkipped()) return;
 			void (options.ensureDaemon ?? ensureHanniGramDaemon)({ cwd, baseUrl: HANNIGRAM_BASE }).then(
 				async (started) => {
 					if (!started) return;
@@ -1588,6 +1693,10 @@ export function createHanniorqExtension(
 							{
 								cmd: "/hannigram adr <título> [contenido]",
 								desc: "Guarda una decisión de arquitectura (ADR) con topic adr/<slug>, tipo adr. Base de 'respetar estilos/convenciones' entre sesiones.",
+							},
+							{
+								cmd: "/skipmemory [on|off]",
+								desc: "Omitir HanniGram por completo: sin briefing en el prompt, sin tools mem_* y sin arrancar el daemon. Persiste entre sesiones hasta /skipmemory off.",
 							},
 							{
 								cmd: "delega <petición>",
@@ -1716,6 +1825,7 @@ export function createHanniorqExtension(
 						return;
 					}
 					case "close": {
+						if (memoryBlocked(ctx.ui)) return;
 						if (!taskPath) {
 							ctx.ui.notify(
 								"No hay ficha activa — nada que resumir. (sODD: los cambios triviales no generan resumen.)",
@@ -1741,6 +1851,7 @@ export function createHanniorqExtension(
 						return;
 					}
 					case "resume": {
+						if (memoryBlocked(ctx.ui)) return;
 						const slug = rest[0] ?? getActiveSlug(cwd);
 						if (!slug) {
 							ctx.ui.notify("No hay ficha activa ni slug indicado. Uso: /hanniorq resume [<slug>]", "warning");
@@ -1836,6 +1947,10 @@ export function createHanniorqExtension(
 						cmd: "/hannigram init|status|adr <título>",
 						desc: "Memoria del proyecto: instancia la BD + exporta .hannigram/memory.md, consulta estado, guarda ADRs.",
 					},
+					{
+						cmd: "/skipmemory [on|off]",
+						desc: "Omitir HanniGram por completo (briefing, tools mem_*, daemon). Persiste hasta que lo apagues.",
+					},
 					{ cmd: "/model", desc: "Seleccionar proveedor/modelo." },
 					{ cmd: "/session", desc: "Info y estadísticas de la sesión actual." },
 					{ cmd: "/new", desc: "Nueva sesión." },
@@ -1870,6 +1985,7 @@ export function createHanniorqExtension(
 			handler: async (args, ctx) => {
 				const cwd = ctx.cwd ?? process.cwd();
 				const target = args.trim().split(/\s+/)[0] || "agents.md";
+				if (memoryBlocked(ctx.ui)) return;
 				const obs =
 					(await hannigram<
 						Array<{ id: number; title: string; content: string; topicKey?: string; type?: string }>
@@ -1902,6 +2018,7 @@ export function createHanniorqExtension(
 			description: "Explora el proyecto y construye su memoria inicial en HanniGram",
 			handler: async (_args, ctx) => {
 				const cwd = ctx.cwd ?? process.cwd();
+				if (memoryBlocked(ctx.ui)) return;
 				ctx.ui.notify("Explorando el proyecto para construir su memoria inicial (vía LLM).", "info");
 				pi.sendUserMessage(
 					`Explora este proyecto para construir su memoria inicial en HanniGram (primera vez). Directorio de trabajo: ${cwd}.\n\nHaz:\n1. Lee los ficheros informativos: README, *.md, AGENTS.md, CONTRIBUTING.md, docs/, package.json (o equivalente) y la estructura de directorios.\n2. Identifica: qué es el proyecto, stack/tecnología, decisiones de arquitectura y convenciones/estilo (naming, estructura, patrones).\n3. Guarda la memoria: para cada decisión usa la tool \`mem_save\` con \`type=adr\` y \`topicKey=adr/<slug>\`; para el contexto general usa topics descriptivos. Si \`mem_save\` no está disponible, ejecuta por bash: \`hannigram save "<título>" --content "<texto>" --type adr --topic adr/<slug> --cwd "${cwd}"\`.\n4. No inventes nada que no esté en el proyecto.\n\nEmpieza listando la raíz del proyecto.`,

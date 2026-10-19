@@ -197,6 +197,7 @@ export interface Settings {
 	railWidth?: number; // right rail column width in the fullscreen TUI (default 34, clamped to [20, 100])
 	railHidden?: boolean; // hide the right rail in the fullscreen TUI (default false)
 	railTasksCollapsed?: boolean; // collapse the right rail task list (default false)
+	skipMemory?: boolean; // do not use HanniGram at all: no briefing, no mem_* tools, no daemon (default false)
 	fullscreenCopyOnSelect?: boolean; // default: true; no effect in regular TUI mode
 	fullscreenWheelScrollLines?: WheelScrollLines; // default: "auto"; lines per wheel event, 1-100
 }
@@ -1463,6 +1464,21 @@ export class SettingsManager {
 	setRailTasksCollapsed(collapsed: boolean): void {
 		this.globalSettings.railTasksCollapsed = collapsed;
 		this.markModified("railTasksCollapsed");
+		this.save();
+	}
+
+	/**
+	 * Whether HanniGram is skipped entirely (`/skipmemory`): no briefing, no mem_* tools, no daemon.
+	 * Persists across sessions, so a skipped harness stays skipped until the user re-enables it.
+	 */
+	getSkipMemory(): boolean {
+		return this.settings.skipMemory === true;
+	}
+
+	/** Skip or re-enable HanniGram for this session and the following ones. */
+	setSkipMemory(skip: boolean): void {
+		this.globalSettings.skipMemory = skip;
+		this.markModified("skipMemory");
 		this.save();
 	}
 

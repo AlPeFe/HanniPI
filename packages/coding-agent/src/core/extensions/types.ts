@@ -210,6 +210,12 @@ export interface ExtensionUIContext {
 	/** Collapse or expand the right rail task list (persisted in settings) and repaint it. */
 	setRailTasksCollapsed(collapsed: boolean): void;
 
+	/** Whether HanniGram is skipped entirely: no briefing, no `mem_*` tools, no daemon (persisted in settings). */
+	getSkipMemory(): boolean;
+
+	/** Skip or re-enable HanniGram for this session and the following ones (persisted in settings). */
+	setSkipMemory(skip: boolean): void;
+
 	/** Set a custom footer component, or undefined to restore the built-in footer.
 	 *
 	 * The factory receives a FooterDataProvider for data not otherwise accessible:

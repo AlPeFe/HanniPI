@@ -26,14 +26,21 @@ function createMockPi() {
 	const listeners = new Map<string, ((...args: any[]) => any)[]>();
 	const widgets = new Map<string, string[] | ((...args: any[]) => unknown)>();
 	const sentMessages: string[] = [];
+	const notifications: string[] = [];
 	let railWidth = 34;
 	let railHidden = false;
 	let railTasksCollapsed = false;
+	/** Ajuste `skipMemory` (/skipmemory); el harness lo persiste y la extensión lo lee de getSettings(). */
+	let skipMemory = false;
+	/** Conjunto activo de tools que ve el modelo (mem_* se quitan al omitir la memoria). */
+	let activeTools = ["read", "bash", "mem_save", "mem_search", "mem_context", "mem_session_summary"];
 	/** Patrones del ajuste `extensions` que ve la extensión (tests de MCP desactivado). */
 	const extensionOverrides: string[] = [];
 
 	const ui = {
-		notify: () => {},
+		notify: (message: string) => {
+			notifications.push(message);
+		},
 		select: async () => undefined,
 		setWidget: (name: string, lines?: string[] | ((...args: any[]) => unknown)) => {
 			if (lines === undefined) widgets.delete(name);
@@ -47,6 +54,10 @@ function createMockPi() {
 		getRailHidden: () => railHidden,
 		setRailHidden: (hidden: boolean) => {
 			railHidden = hidden;
+		},
+		getSkipMemory: () => skipMemory,
+		setSkipMemory: (skip: boolean) => {
+			skipMemory = skip;
 		},
 		getRailTasksCollapsed: () => railTasksCollapsed,
 		setRailTasksCollapsed: (collapsed: boolean) => {
@@ -75,14 +86,30 @@ function createMockPi() {
 			arr.push(handler);
 			listeners.set(event, arr);
 		},
-		getSettings: () => ({ extensions: extensionOverrides }),
+		getSettings: () => ({ extensions: extensionOverrides, skipMemory }),
+		getActiveTools: () => [...activeTools],
+		setActiveTools: (names: string[]) => {
+			activeTools = [...names];
+		},
 		sendUserMessage: (content: string) => {
 			sentMessages.push(content);
 		},
 		ui,
 	} as unknown as Parameters<ExtensionFactory>[0];
 
-	return { registeredCommands, shortcuts, tools, listeners, widgets, ui, pi, sentMessages, extensionOverrides };
+	return {
+		registeredCommands,
+		shortcuts,
+		tools,
+		listeners,
+		widgets,
+		ui,
+		pi,
+		sentMessages,
+		notifications,
+		extensionOverrides,
+		getActiveTools: () => [...activeTools],
+	};
 }
 
 async function emit(pi: ReturnType<typeof createMockPi>["pi"], event: string, payload: any, ctx: any) {
@@ -909,5 +936,67 @@ describe("extensión hanniorq", () => {
 			ctx,
 		);
 		expect(railText(widgets, 44)).toContain("skills (1/1)");
+	});
+
+	it("/skipmemory deja HanniGram fuera del juego y /skipmemory off lo devuelve", async () => {
+		const { registeredCommands, listeners, widgets, notifications, pi, getActiveTools } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHermeticExtension(pi);
+		const fetchStub = vi.fn(async () => {
+			throw new Error("HanniGram no debería ni ser contactado");
+		});
+		vi.stubGlobal("fetch", fetchStub);
+		try {
+			const ctx = { cwd: "C:/x", ui: (pi as any).ui };
+			await emit(pi, "session_start", {}, ctx);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			// Con memoria activa sí se habla con el daemon (health del rail).
+			expect(fetchStub).toHaveBeenCalled();
+			expect(getActiveTools().some((name) => name.startsWith("mem_"))).toBe(true);
+
+			// /skipmemory on (sin argumento también alterna; aquí lo pedimos explícito).
+			fetchStub.mockClear();
+			await registeredCommands.get("skipmemory")!.handler("on", ctx);
+			expect((pi as any).getSettings().skipMemory).toBe(true);
+			expect(getActiveTools().some((name) => name.startsWith("mem_"))).toBe(false);
+			expect(notifications.at(-1)).toContain("Memoria omitida");
+			expect(railText(widgets, 44)).toContain("omitida");
+			expect(railText(widgets, 44)).toContain("/skipmemory off");
+
+			// Ni briefing ni guideline de memoria en el system prompt, y ni una petición al daemon.
+			const sections: Record<string, string> = {};
+			const promptGuidelines: string[] = [];
+			await emit(
+				pi,
+				"before_agent_start",
+				{ prompt: "hola", systemPromptOptions: { sections, promptGuidelines, skills: [] } },
+				ctx,
+			);
+			expect(sections.memoria).toBeUndefined();
+			expect(promptGuidelines.join(" ")).not.toContain("mem_context");
+			expect(fetchStub).not.toHaveBeenCalled();
+
+			// Cinturón y tirantes: ninguna llamada mem_* pasa, pero las demás tools no se tocan.
+			const toolCallHandlers = listeners.get("tool_call") ?? [];
+			expect(toolCallHandlers).toHaveLength(1);
+			const blocked = await toolCallHandlers[0]({ toolName: "mem_save", input: {} }, ctx);
+			expect(blocked).toMatchObject({ block: true });
+			expect(blocked.reason).toContain("/skipmemory");
+			expect(await toolCallHandlers[0]({ toolName: "read", input: {} }, ctx)).toBeUndefined();
+
+			// Los comandos que necesitan memoria avisan y no la tocan.
+			await registeredCommands.get("hannigram")!.handler("status", ctx);
+			await registeredCommands.get("explore")!.handler("", ctx);
+			expect(notifications.filter((n) => n.includes("Memoria omitida con /skipmemory"))).toHaveLength(2);
+			expect(fetchStub).not.toHaveBeenCalled();
+
+			// /skipmemory off: vuelven las tools, el rail y el briefing.
+			await registeredCommands.get("skipmemory")!.handler("off", ctx);
+			expect((pi as any).getSettings().skipMemory).toBe(false);
+			expect(getActiveTools().some((name) => name.startsWith("mem_"))).toBe(true);
+			expect(notifications.at(-1)).toContain("activada otra vez");
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 });

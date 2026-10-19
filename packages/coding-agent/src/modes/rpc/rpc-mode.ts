@@ -232,6 +232,14 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			// No rail in RPC mode.
 		},
 
+		getSkipMemory(): boolean {
+			return false;
+		},
+
+		setSkipMemory(_skip: boolean): void {
+			// El flag vive en los ajustes; el modo RPC no gestiona extensiones del harness.
+		},
+
 		setFooter(_factory: unknown): void {
 			// Custom footer not supported in RPC mode - requires TUI access
 		},

@@ -2606,6 +2606,11 @@ export class InteractiveMode {
 				this.settingsManager.setRailTasksCollapsed(collapsed);
 				this.ui.requestRender();
 			},
+			getSkipMemory: () => this.settingsManager.getSkipMemory(),
+			setSkipMemory: (skip) => {
+				this.settingsManager.setSkipMemory(skip);
+				this.ui.requestRender();
+			},
 			setFooter: (factory) => this.setExtensionFooter(factory),
 			setHeader: (factory) => this.setExtensionHeader(factory),
 			setTitle: (title) => this.ui.terminal.setTitle(title),
