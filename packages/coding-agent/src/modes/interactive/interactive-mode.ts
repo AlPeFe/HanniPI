@@ -66,6 +66,7 @@ import {
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
+import { formatNoModelsAvailableMessage } from "../../core/auth-guidance.ts";
 import {
 	CACHE_TTL_MS,
 	type CacheMiss,
@@ -438,6 +439,11 @@ export interface InteractiveModeOptions {
 	initialThemeSetting?: string;
 	/** Terminal implementation. Defaults to the current process terminal. */
 	terminal?: Terminal;
+	/**
+	 * The session starts without a model and the TUI asks for one before the first turn.
+	 * Ignored when the session already has a model (e.g. restored from a resumed session).
+	 */
+	requireModelSelection?: boolean;
 }
 
 export class InteractiveMode {
@@ -1198,6 +1204,13 @@ export class InteractiveMode {
 		}
 
 		void this.maybeWarnAboutAnthropicSubscriptionAuth();
+
+		// HanniPI: sin modelo por defecto en el arranque. La sesión nace sin modelo (salvo
+		// --model/--provider o una sesión reanudada) y aquí se pide elegir uno antes de admitir
+		// turnos: el primero que llegue sin modelo fallaría con "No model selected".
+		if (this.options.requireModelSelection && isUnknownModel(this.session.model)) {
+			await this.promptForStartupModel();
+		}
 
 		// Process initial messages
 		if (initialMessage) {
@@ -5306,7 +5319,42 @@ export class InteractiveMode {
 		});
 	}
 
-	private showModelSelector(initialSearchInput?: string): void {
+	/**
+	 * Modelo obligatorio al arrancar: no hay default silencioso. El primer Esc solo avisa (sin
+	 * modelo no se puede chatear); el segundo sale de Hanni, para no dejar la terminal atrapada.
+	 * Sin modelos configurados no se bloquea (haría falta /login antes): se avisa y se sigue.
+	 */
+	private promptForStartupModel(): Promise<void> {
+		return new Promise((resolve) => {
+			if (this.session.modelRuntime.getAvailableSnapshot().length === 0) {
+				this.showWarning(formatNoModelsAvailableMessage());
+				resolve();
+				return;
+			}
+			let cancels = 0;
+			const openSelector = (): void => {
+				this.showModelSelector(undefined, {
+					onSelected: () => resolve(),
+					onCancel: () => {
+						cancels += 1;
+						if (cancels >= 2) {
+							void this.shutdown();
+							return;
+						}
+						this.showStatus("Sin modelo no se puede empezar: elige uno (Esc otra vez para salir)");
+						openSelector();
+					},
+				});
+			};
+			this.showStatus("Elige un modelo para empezar");
+			openSelector();
+		});
+	}
+
+	private showModelSelector(
+		initialSearchInput?: string,
+		options: { onSelected?: () => void; onCancel?: () => void } = {},
+	): void {
 		this.showSelector((done) => {
 			const selectModel = async (model: Model<any>, persist: boolean) => {
 				try {
@@ -5315,6 +5363,7 @@ export class InteractiveMode {
 					this.statusBar.invalidate();
 					this.updateEditorBorderColor();
 					done();
+					options.onSelected?.();
 					this.showStatus(persist ? `Default model: ${model.provider}/${model.id}` : `Model: ${model.id}`);
 					void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
 					this.checkDaxnutsEasterEgg(model);
@@ -5333,6 +5382,10 @@ export class InteractiveMode {
 				(model) => selectModel(model, false),
 				() => {
 					done();
+					if (options.onCancel) {
+						options.onCancel();
+						return;
+					}
 					this.ui.requestRender();
 				},
 				initialSearchInput,

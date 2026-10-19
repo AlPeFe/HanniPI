@@ -103,6 +103,12 @@ export interface CreateAgentSessionOptions {
 	settingsManager?: SettingsManager;
 	/** Session start event metadata for extension runtime startup. */
 	sessionStartEvent?: SessionStartEvent;
+	/**
+	 * Leave the session without a model instead of resolving a default one (settings default, then
+	 * first available). The caller is responsible for selecting one; used by the interactive TUI to
+	 * ask the user at startup. A model restored from an existing session still applies.
+	 */
+	requireModelSelection?: boolean;
 }
 
 /** Result from createAgentSession */
@@ -232,7 +238,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	// If still no model, use findInitialModel (checks settings default, then provider defaults)
-	if (!model) {
+	if (!model && !options.requireModelSelection) {
 		const result = await findInitialModel({
 			scopedModels: [],
 			isContinuing: hasExistingSession,

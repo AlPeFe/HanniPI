@@ -29,6 +29,7 @@
 - HanniPI: the installer retries its downloads (release lookup, `SHA256SUMS`, `pi-windows-x64.zip`, `hannigram-windows-x64.zip`) up to three times and cleans its `%TEMP%` artifacts when it finishes; a failed attempt no longer leaves ~170 MB behind. Install/update/uninstall failures end with the reason and a non-zero exit code instead of a bare exit.
 - HanniPI: thinking blocks render as a compact summary: code fences are dropped (replaced with a `⋯ (código oculto: N líneas)` note), repeated blank lines collapse, and the text is capped to the first lines with a `… (+N líneas)` mark. Clicking a block cycles summary → full → hidden (`ctrl+t` still toggles hidden/visible globally). Display only: the model still receives the complete thinking and the session transcript keeps it.
 - HanniPI: the rail stacks `tareas` right below `proyecto`, so the work in progress is the first panel the rail shows.
+- HanniPI: una sesión interactiva nueva ya no hereda el modelo por defecto: arranca sin modelo (`no-model` en la barra superior) y pide elegir uno antes del primer turno. `--model`/`--provider` mandan, las sesiones reanudadas conservan el suyo, y el modelo elegido no se guarda como default (Ctrl+S en el selector sí).
 
 ### Fixed
 

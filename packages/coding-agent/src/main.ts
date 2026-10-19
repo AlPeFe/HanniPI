@@ -454,6 +454,7 @@ function buildSessionOptions(
 	hasExistingSession: boolean,
 	modelRuntime: ModelRuntime,
 	settingsManager: SettingsManager,
+	requireModelSelection: boolean,
 ): {
 	options: CreateAgentSessionOptions;
 	cliThinkingFromModel: boolean;
@@ -497,7 +498,7 @@ function buildSessionOptions(
 		}
 	}
 
-	if (!options.model && scopedModels.length > 0 && !hasExistingSession) {
+	if (!requireModelSelection && !options.model && scopedModels.length > 0 && !hasExistingSession) {
 		// Check if saved default is in scoped models - use it if so, otherwise first scoped model
 		const savedProvider = settingsManager.getDefaultProvider();
 		const savedModelId = settingsManager.getDefaultModel();
@@ -717,6 +718,10 @@ export async function main(args: string[], options?: MainOptions) {
 
 	const trustStore = new ProjectTrustStore(agentDir);
 	const sessionCwd = sessionManager.getCwd();
+	// HanniPI: la sesión interactiva no hereda un modelo por defecto. Con --model/--provider el
+	// modelo lo elige la línea de comandos; en cualquier otro caso se arranca sin modelo y la TUI
+	// pide elegirlo antes del primer turno (las sesiones reanudadas conservan el suyo).
+	const requireModelSelection = appMode === "interactive" && !parsed.model && !parsed.provider;
 	const autoTrustOnReloadCwd =
 		parsed.projectTrustOverride === undefined && !hasTrustRequiringProjectResources(sessionCwd)
 			? sessionCwd
@@ -823,6 +828,7 @@ export async function main(args: string[], options?: MainOptions) {
 			sessionManager.buildSessionContext().messages.length > 0,
 			modelRuntime,
 			settingsManager,
+			requireModelSelection && isInitialRuntime,
 		);
 		diagnostics.push(...sessionOptionDiagnostics);
 
@@ -848,6 +854,7 @@ export async function main(args: string[], options?: MainOptions) {
 			excludeTools: sessionOptions.excludeTools,
 			noTools: sessionOptions.noTools,
 			customTools: sessionOptions.customTools,
+			requireModelSelection: requireModelSelection && isInitialRuntime,
 		});
 		const cliThinkingOverride = parsed.thinking !== undefined || cliThinkingFromModel;
 		if (created.session.model && cliThinkingOverride) {
@@ -961,6 +968,7 @@ export async function main(args: string[], options?: MainOptions) {
 			verbose: parsed.verbose,
 			tuiMode: parsed.tuiMode,
 			initialThemeSetting: parsed.useTheme,
+			requireModelSelection,
 		});
 		if (startupBenchmark) {
 			await interactiveMode.init();

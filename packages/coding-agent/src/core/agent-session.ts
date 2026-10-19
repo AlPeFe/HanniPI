@@ -2515,9 +2515,9 @@ export class AgentSession {
 	}
 
 	/**
-	 * Persist the model in use as the default so the next session starts with it.
-	 * Model switching stays session-only until the model is actually used: this runs when a
-	 * turn starts, so the last model used wins (HanniPI default-model behavior).
+	 * Remember the model in use as the default. HanniPI no longer starts sessions with it (a new
+	 * interactive session starts without a model and asks for one), but the selector lists it first.
+	 * Switching stays session-only until a turn starts, so the last model used wins.
 	 */
 	private _persistLastUsedModelAsDefault(): void {
 		const model = this.model;

@@ -62,6 +62,8 @@ export interface CreateAgentSessionFromServicesOptions {
 	excludeTools?: CreateAgentSessionOptions["excludeTools"];
 	noTools?: CreateAgentSessionOptions["noTools"];
 	customTools?: ToolDefinition[];
+	/** Leave the session without a model (the TUI asks for one at startup). */
+	requireModelSelection?: boolean;
 }
 
 /**
@@ -229,5 +231,6 @@ export async function createAgentSessionFromServices(
 		noTools: options.noTools,
 		customTools: options.customTools,
 		sessionStartEvent: options.sessionStartEvent,
+		requireModelSelection: options.requireModelSelection,
 	});
 }

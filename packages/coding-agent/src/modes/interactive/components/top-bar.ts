@@ -139,10 +139,13 @@ export class TopBarComponent implements Component {
 	}
 
 	private modelLabel(state: AgentSession["state"]): string {
-		const modelName = state.model?.id || "no-model";
-		const thinking = state.model?.reasoning ? ` • ${state.thinkingLevel || "off"}` : "";
+		// The agent keeps an "unknown" placeholder until a model is selected (HanniPI pide elegir
+		// uno al arrancar); pintarlo como "no-model" evita un nombre técnico que no existe.
+		const unknown = state.model?.provider === "unknown" && state.model.id === "unknown";
+		const modelName = unknown ? "no-model" : state.model?.id || "no-model";
+		const thinking = !unknown && state.model?.reasoning ? ` • ${state.thinkingLevel || "off"}` : "";
 		let label = `${modelName}${thinking}`;
-		if (state.model && this.footerData.getAvailableProviderCount() > 1) {
+		if (!unknown && state.model && this.footerData.getAvailableProviderCount() > 1) {
 			label = `(${state.model.provider}) ${label}`;
 		}
 		const routed = this.session.routedModel;

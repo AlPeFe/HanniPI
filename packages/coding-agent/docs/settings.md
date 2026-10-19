@@ -8,12 +8,12 @@ This reference lists user-configurable settings, their types, defaults, and purp
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `defaultProvider` | string | Automatic | Startup AI provider. |
-| `defaultModel` | string | Automatic | Startup model ID. |
+| `defaultProvider` | string | Automatic | Preferred provider in the model picker. An interactive session does not start with it selected. |
+| `defaultModel` | string | Automatic | Preferred model in the model picker. A new interactive session starts without a model and asks for one; `--model`/`--provider` pick it up front. |
 | `defaultThinkingLevel` | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"medium"` | Startup thinking level. |
 | `modelThinkingLevels` | object | None | Per-model startup thinking levels keyed by exact `provider/modelId`. |
 | `thinkingBudgets` | object | Built-in budgets | Token budgets for `minimal`, `low`, `medium`, and `high` thinking levels. |
-| `enabledModels` | `string[]` | All available models | Model patterns used for startup selection and model cycling. Uses the same format as `--models`. |
+| `enabledModels` | `string[]` | All available models | Model patterns that scope the model picker and model cycling. Uses the same format as `--models`. |
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in the transcript. A visible block is shown as a compact summary (code fences removed, first lines only); click it to cycle summary → full → hidden. Display only: the model still receives the complete thinking. |
 | `showCacheMissNotices` | boolean | `false` | Show notices for significant cache misses, successful cache warming, compaction usage, and provider recovery. |
 | `cacheWarming` | `"off" \| "streaming" \| "idle"` | `"streaming"` | Keep eligible provider prompt caches warm during active runs or, with `"idle"`, between runs. Global setting only. |
