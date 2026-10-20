@@ -1,6 +1,6 @@
 {
 	"name": "@earendil-works/pi-agent-core",
-	"version": "0.2.18-hannipi",
+	"version": "0.2.19-hannipi",
 	"description": "General-purpose agent with transport abstraction, state management, and attachment support",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -23,7 +23,7 @@
 		"prepublishOnly": "npm run build"
 	},
 	"dependencies": {
-		"@earendil-works/pi-ai": "^0.2.18-hannipi",
+		"@earendil-works/pi-ai": "^0.2.19-hannipi",
 		"typebox": "1.3.27"
 	},
 	"keywords": [
