@@ -16,7 +16,7 @@ Verify: `npm run check` y `.\pi-test.ps1` en un terminal de Orca (arranque pide 
 - [x] S4 `npm run check` y prueba funcional en la TUI — 6dea9bdba
 
 ## Siguiente
-Nada pendiente. Decidir si ambos cambios entran en la próxima release (0.2.18) siguiendo `.pi/skills/release.md`.
+Publicado en [v0.2.18-hannipi](https://github.com/AlPeFe/HanniPI/releases/tag/v0.2.18-hannipi) (bump e64b1690b). Nada pendiente.
 
 ## Verificación funcional
 - `npm run check` limpio (biome, locks, shrinkwrap, `tsc --noEmit`, entry graphs, browser-smoke) tras S1-S3.
