@@ -703,6 +703,66 @@ describe("extensión hanniorq", () => {
 		}
 	});
 
+	it("inyecta el briefing una sola vez: cambiarlo a mitad de sesión tiraría la caché del prefijo", async () => {
+		const { listeners, pi } = createMockPi();
+		(pi as any).__listeners = listeners;
+		createHermeticExtension(pi);
+		const cwd = mkdtempSync(join(tmpdir(), "hanniorq-briefing-once-"));
+		let observations = 1;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: unknown) => {
+				const target = String(url);
+				if (target.includes("/api/sessions")) return Response.json([]);
+				if (target.includes("/api/observations"))
+					return Response.json(
+						Array.from({ length: observations }, (_, index) => ({
+							id: index + 1,
+							title: `decisión ${index + 1}`,
+							type: "adr",
+						})),
+					);
+				return new Response("", { status: 404 });
+			}),
+		);
+		try {
+			const ctx = { cwd, ui: (pi as any).ui };
+			await emit(pi, "session_start", {}, ctx);
+			const first = {
+				type: "before_agent_start",
+				prompt: "hola",
+				systemPrompt: "",
+				systemPromptOptions: { sections: {} as Record<string, string>, promptGuidelines: [] as string[] },
+			};
+			await emit(pi, "before_agent_start", first, ctx);
+			expect(first.systemPromptOptions.sections.memoria).toContain("decisiones y convenciones guardadas");
+
+			// La memoria cambia (mem_save): el briefing ya inyectado NO se reescribe.
+			observations = 2;
+			await emit(
+				pi,
+				"tool_execution_end",
+				{
+					toolName: "mem_save",
+					isError: false,
+					result: { content: [{ type: "text", text: "Saved observation #2" }] },
+				},
+				ctx,
+			);
+			const second = {
+				type: "before_agent_start",
+				prompt: "otra",
+				systemPrompt: "",
+				systemPromptOptions: { sections: {} as Record<string, string>, promptGuidelines: [] as string[] },
+			};
+			await emit(pi, "before_agent_start", second, ctx);
+			expect(second.systemPromptOptions.sections.memoria).toBeUndefined();
+		} finally {
+			vi.unstubAllGlobals();
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
 	it("guarda un handoff rodante si el turno deja trabajo y no hay resumen de sesion", async () => {
 		const { listeners, pi } = createMockPi();
 		(pi as any).__listeners = listeners;

@@ -367,6 +367,15 @@ const MEMORY_GUIDELINE =
 
 let briefing: { cwd: string; value: MemoryBriefing } | undefined;
 
+/**
+ * cwd en el que ya se inyectó el briefing en el system prompt. Se inyecta UNA vez por sesión:
+ * reinyectarlo cuando cambia la memoria (cada `mem_save` mueve el contador del briefing) reescribe
+ * el system prompt y tira la caché de prefijo del proveedor, así que el siguiente turno paga el
+ * contexto entero a precio de entrada. El modelo conserva el briefing en el contexto y
+ * `mem_search`/`mem_context` siguen ahí para lo que cambie después.
+ */
+let briefingInjectedFor: string | undefined;
+
 function oneLine(text: string | undefined, max: number): string {
 	const flat = (typeof text === "string" ? text : "").replace(/\s+/g, " ").trim();
 	return flat.length <= max ? flat : `${flat.slice(0, max - 1).trimEnd()}…`;
@@ -457,7 +466,7 @@ async function loadMemoryBriefing(cwd: string): Promise<MemoryBriefing | undefin
 	return value;
 }
 
-/** Invalida el briefing cacheado: la memoria cambió y el prompt debe reflejarlo. */
+/** Descarta el briefing cacheado (cambio de sesión o /skipmemory): el siguiente turno lo relee. */
 function invalidateMemoryBriefing(): void {
 	briefing = undefined;
 }
@@ -1454,7 +1463,8 @@ export function createHanniorqExtension(
 				else memTurn.created++;
 				// Un resumen de sesión de verdad deja el handoff rodante sin papel.
 				if (event.toolName === "mem_session_summary") handoffSuperseded = true;
-				invalidateMemoryBriefing();
+				// El briefing ya inyectado NO se refresca aquí a propósito: cambiar el system prompt
+				// a mitad de sesión invalida la caché de prefijo del proveedor (ver briefingInjectedFor).
 			}
 			// Refresca el rail derecho cuando cambia estado relevante (memoria/sODD/tareas).
 			if (
@@ -1503,6 +1513,7 @@ export function createHanniorqExtension(
 					memoryCache = { up: false, checked: false, skipped: false };
 				}
 				invalidateMemoryBriefing();
+				briefingInjectedFor = undefined;
 				refreshRail(ctx.ui, cwd);
 				ctx.ui.notify(
 					skip
@@ -1631,8 +1642,13 @@ export function createHanniorqExtension(
 			if (invoked) markSkillUsed(invoked);
 			// /skipmemory: ni briefing ni guideline de memoria. El resto del handler (skills) sigue.
 			if (memorySkipped()) return;
-			const memory = await loadMemoryBriefing(cwd);
-			if (memory) event.systemPromptOptions.sections.memoria = memory.text;
+			if (briefingInjectedFor !== cwd) {
+				const memory = await loadMemoryBriefing(cwd);
+				if (memory) {
+					event.systemPromptOptions.sections.memoria = memory.text;
+					briefingInjectedFor = cwd;
+				}
+			}
 			const guidelines = event.systemPromptOptions.promptGuidelines;
 			if (!guidelines.includes(MEMORY_GUIDELINE)) guidelines.push(MEMORY_GUIDELINE);
 		});
@@ -1655,6 +1671,7 @@ export function createHanniorqExtension(
 			soddWorking = false;
 			sessionWork.goal = undefined;
 			handoffSuperseded = false;
+			briefingInjectedFor = undefined;
 			invalidateMemoryBriefing();
 			if (memorySkipped()) hideMemoryTools();
 			updateSoddIndicator(ctx.ui, cwd);
