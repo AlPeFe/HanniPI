@@ -22,8 +22,8 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { type Component, Key, Panel, ScrollView, Spacer, type StackChild, Text, VStack } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { getAgentDir } from "../../config.ts";
@@ -282,6 +282,189 @@ async function hannigram<T>(path: string, init?: RequestInit): Promise<T | undef
 	} catch {
 		return undefined;
 	}
+}
+
+// ---------------------------------------------------------------------------
+// /dumpgram — volcado de la memoria del proyecto a ficheros .md legibles
+// ---------------------------------------------------------------------------
+
+/** Observación tal y como la devuelve `/api/observations` (camelCase). */
+export interface DumpObservation {
+	id: number;
+	title: string;
+	content: string;
+	topicKey?: string;
+	type?: string;
+	what?: string;
+	why?: string;
+	where?: string;
+	learned?: string;
+	createdAtUtc?: string;
+	updatedAtUtc?: string;
+	state?: string;
+}
+
+interface DumpFile {
+	name: string;
+	title: string;
+	intro: string;
+	types: string[];
+}
+
+/** Un fichero por concepto. Un tipo que no esté en ninguna lista cae en `contexto.md`. */
+const DUMP_FILES: DumpFile[] = [
+	{
+		name: "decisiones.md",
+		title: "Decisiones y convenciones",
+		intro: "Lo que está decidido y hay que respetar al tocar el repo.",
+		types: ["adr", "decision"],
+	},
+	{
+		name: "hecho.md",
+		title: "Qué se ha hecho",
+		intro: "Trabajo cerrado: arreglos, features y releases, con el porqué.",
+		types: ["bugfix", "feature", "release"],
+	},
+	{
+		name: "sesiones.md",
+		title: "Sesiones y estado en curso",
+		intro: "Handoffs y resúmenes de sesión: en qué se quedó el trabajo.",
+		types: ["handoff", "session_summary", "summary"],
+	},
+	{
+		name: "contexto.md",
+		title: "Descubrimientos, patrones y contexto",
+		intro: "Hallazgos, patrones y notas que no son ni decisiones ni trabajo cerrado.",
+		types: [],
+	},
+];
+
+const KNOWN_DUMP_TYPES = new Set(DUMP_FILES.flatMap((file) => file.types));
+
+function dumpDay(value?: string): string {
+	if (!value) return "";
+	const date = new Date(value);
+	return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
+}
+
+/** Observaciones vivas, de la más reciente a la más antigua (por actualización). */
+function sortDumpObservations(observations: DumpObservation[]): DumpObservation[] {
+	return observations
+		.filter((o) => o.state !== "archived")
+		.sort((a, b) => (b.updatedAtUtc ?? "").localeCompare(a.updatedAtUtc ?? "") || b.id - a.id);
+}
+
+function renderDumpObservation(o: DumpObservation): string {
+	const meta = [
+		o.type ?? "obs",
+		o.topicKey ? `\`${o.topicKey}\`` : undefined,
+		dumpDay(o.updatedAtUtc) || undefined,
+		`#${o.id}`,
+	]
+		.filter(Boolean)
+		.join(" · ");
+	const parts = [`### ${o.title}`, "", meta, "", o.content.trim()];
+	for (const [label, value] of [
+		["Qué", o.what],
+		["Por qué", o.why],
+		["Dónde", o.where],
+		["Aprendido", o.learned],
+	] as const) {
+		if (value?.trim()) parts.push("", `**${label}:** ${value.trim()}`);
+	}
+	return parts.join("\n");
+}
+
+function dumpHeader(title: string, intro: string, options: MemoryDumpOptions, count: number): string {
+	return [
+		`# ${title}`,
+		"",
+		intro,
+		"",
+		`_${options.project} · ${dumpDay(options.generatedAt.toISOString())} · ${count} ${count === 1 ? "observación" : "observaciones"} · volcado de la memoria del proyecto con \`/dumpgram\`, no editar a mano._`,
+	].join("\n");
+}
+
+export interface MemoryDumpOptions {
+	project: string;
+	/** Directorio de salida, relativo al repo (solo informativo en el contenido). */
+	dir: string;
+	generatedAt: Date;
+}
+
+/**
+ * Volcado determinista de la memoria del proyecto: observaciones → ficheros .md.
+ * Sin LLM y sin red, para que el resultado sea fiel y repetible.
+ */
+export function renderMemoryDump(
+	observations: DumpObservation[],
+	options: MemoryDumpOptions,
+): Array<{ name: string; content: string }> {
+	const sorted = sortDumpObservations(observations);
+	const files = DUMP_FILES.map((file) => {
+		const picked = sorted.filter((o) =>
+			file.types.length > 0 ? file.types.includes(o.type ?? "") : !KNOWN_DUMP_TYPES.has(o.type ?? ""),
+		);
+		const body =
+			picked.length > 0
+				? picked.map(renderDumpObservation).join("\n\n---\n\n")
+				: "_No hay observaciones de este tipo._";
+		return {
+			name: file.name,
+			file,
+			picked,
+			content: `${dumpHeader(file.title, file.intro, options, picked.length)}\n\n${body}\n`,
+		};
+	});
+
+	// El handoff más reciente abre el índice: es lo que un recién llegado necesita primero.
+	const latest = sorted.find((o) => DUMP_FILES.find((f) => f.name === "sesiones.md")?.types.includes(o.type ?? ""));
+	const index = [
+		`# Memoria del proyecto — ${options.project}`,
+		"",
+		"Volcado de la memoria del proyecto generado por `/dumpgram`: qué se ha decidido, qué se ha hecho y en qué se quedó el trabajo. Está pensado para que una persona (o un agente sin acceso a la base de datos) entienda el repo leyendo estos ficheros.",
+		"",
+		`_Generado el ${dumpDay(options.generatedAt.toISOString())} desde la memoria de HanniGram · ${sorted.length} ${sorted.length === 1 ? "observación" : "observaciones"} · no editar a mano: se regenera con \`/dumpgram\`._`,
+		"",
+		"## Estado en curso",
+		"",
+		latest ? `${renderDumpObservation(latest)}` : "_Sin handoff guardado: revisa `hecho.md` y `contexto.md`._",
+		"",
+		"## Ficheros",
+		"",
+		"| Fichero | Contenido | Observaciones |",
+		"| --- | --- | --- |",
+		...files.map((f) => `| [\`${options.dir}/${f.name}\`](${f.name}) | ${f.file.title} | ${f.picked.length} |`),
+		"",
+		"## Índice de temas",
+		"",
+	];
+	const topics = new Map<string, DumpObservation[]>();
+	let untopiced = 0;
+	for (const o of sorted) {
+		if (!o.topicKey) {
+			untopiced += 1;
+			continue;
+		}
+		topics.set(o.topicKey, [...(topics.get(o.topicKey) ?? []), o]);
+	}
+	if (topics.size === 0) {
+		index.push("_Sin observaciones con tema._");
+	} else {
+		index.push("| Tema | Última observación | Observaciones |");
+		index.push("| --- | --- | --- |");
+		for (const [topic, list] of topics) {
+			const target = files.find((f) => f.picked.some((o) => o.id === list[0]?.id));
+			index.push(`| \`${topic}\` | ${list[0]?.title ?? ""} | ${list.length}${target ? ` → ${target.name}` : ""} |`);
+		}
+	}
+	if (untopiced > 0)
+		index.push("", `_Además hay ${untopiced} ${untopiced === 1 ? "observación" : "observaciones"} sin tema._`);
+
+	return [
+		{ name: "README.md", content: `${index.join("\n")}\n` },
+		...files.map((f) => ({ name: f.name, content: f.content })),
+	];
 }
 
 /** Lee las observaciones recientes del proyecto (para el resumen). */
@@ -2003,6 +2186,10 @@ export function createHanniorqExtension(
 						desc: "Genera un fichero agents.md (contexto + ADRs resumidos por el LLM) para harness externos que no usan HanniGram.",
 					},
 					{
+						cmd: "/dumpgram [ruta]",
+						desc: "Vuelca la memoria del proyecto a .md (decisiones, hecho, sesiones, contexto) para leerla sin HanniGram.",
+					},
+					{
 						cmd: "/explore",
 						desc: "Explora el proyecto (md, README, estructura) y construye su memoria inicial en HanniGram la primera vez.",
 					},
@@ -2077,6 +2264,52 @@ export function createHanniorqExtension(
 				ctx.ui.notify(`Generando ${target} con ${obs.length} observaciones (vía LLM).`, "info");
 				pi.sendUserMessage(
 					`Genera el fichero \`${target}\` en la raíz del proyecto (${cwd}) para agentes/harnesses de IA que NO usan HanniGram, de modo que arranquen con contexto sin depender de este daemon.\n\nResume en ese fichero:\n- Qué es el proyecto y su stack/estructura.\n- Decisiones de arquitectura (ADR) y convenciones/estilos a respetar.\n- Reglas o patrones relevantes.\n\nEscribe \`${target}\` con el resultado. Sé conciso y no inventes nada que no esté en la memoria ni en el proyecto.\n\nMemoria de HanniGram (${obs.length} observaciones):\n${memBlock}`,
+				);
+			},
+		});
+
+		// =================================================================
+		// /dumpgram — volcado de la memoria del proyecto a ficheros .md del
+		// repo, para que otra persona lo lea sin HanniGram. Determinista: lee
+		// las observaciones del proyecto activo y las escribe tal cual, sin
+		// resumir con el LLM (no hay invención ni coste de tokens).
+		// =================================================================
+		pi.registerCommand("dumpgram", {
+			description: "Volcar la memoria del proyecto a docs/memoria/*.md para leerla sin HanniGram",
+			handler: async (args, ctx) => {
+				const cwd = ctx.cwd ?? process.cwd();
+				if (memoryBlocked(ctx.ui)) return;
+				const target = args.trim().split(/\s+/)[0] || "docs/memoria";
+				const observations =
+					(await hannigram<DumpObservation[]>(
+						`/api/observations?${new URLSearchParams({ cwd, limit: "1000" })}`,
+					)) ?? [];
+				if (observations.length === 0) {
+					ctx.ui.notify(
+						"No hay memoria en HanniGram para este proyecto. Usa /explore para construirla.",
+						"warning",
+					);
+					return;
+				}
+				const outDir = resolve(cwd, target);
+				const files = renderMemoryDump(observations, {
+					project: projectName(cwd),
+					dir: target.replace(/\\/g, "/").replace(/\/+$/, ""),
+					generatedAt: new Date(),
+				});
+				try {
+					mkdirSync(outDir, { recursive: true });
+					for (const file of files) writeFileSync(join(outDir, file.name), file.content);
+				} catch (e) {
+					ctx.ui.notify(
+						`No pude escribir el dump en ${target}: ${e instanceof Error ? e.message : String(e)}`,
+						"error",
+					);
+					return;
+				}
+				ctx.ui.notify(
+					`Dump de memoria: ${files.length} ficheros en ${target}/ (${observations.length} observaciones del proyecto).`,
+					"info",
 				);
 			},
 		});
