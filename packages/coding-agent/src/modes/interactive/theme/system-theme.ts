@@ -54,6 +54,10 @@ const FAMILIES = {
 	yellow: { hue: 82.36, saturation: { min: 0.5, max: 1 }, slot: 3 },
 	orange: { hue: 52, saturation: { min: 0.12, max: 0.85 }, slot: 3 },
 	violet: { hue: 295, saturation: { min: 0.2, max: 0.6 }, slot: 5 },
+	// Marca HanniPI: rosa pastel. `pink` pinta acentos y bordes con color; `pinkPanel`
+	// da los fondos suaves (saturación baja para que un fondo no se coma el texto).
+	pink: { hue: 339.5, saturation: { min: 0.2, max: 0.62 }, slot: 5 },
+	pinkPanel: { hue: 339.5, saturation: { min: 0.08, max: 0.34 }, slot: 5 },
 	calamine: { hue: 202.43, saturation: { min: 0.1, max: 0.74 }, slot: 6 },
 	thinkingSlate: { hue: 231.49, saturation: { min: 0.08, max: 0.2 }, slot: 4 },
 	thinkingBlue: { hue: 231.49, saturation: { min: 0.2, max: 0.45 }, slot: 4 },
@@ -66,10 +70,10 @@ const FAMILIES = {
 type FamilyName = keyof typeof FAMILIES;
 
 const TOKEN_FAMILIES: Record<ThemeToken, FamilyName> = {
-	selectedBg: "blue",
+	selectedBg: "pinkPanel",
 	searchMatchBg: "orange",
-	userMessageBg: "blue",
-	customMessageBg: "violet",
+	userMessageBg: "pinkPanel",
+	customMessageBg: "pinkPanel",
 	toolPendingBg: "neutral",
 	toolSuccessBg: "green",
 	toolErrorBg: "red",
@@ -96,13 +100,13 @@ const TOKEN_FAMILIES: Record<ThemeToken, FamilyName> = {
 	searchMatchText: "neutral",
 	borderMuted: "neutral",
 
-	accent: "violet",
-	borderAccent: "violet",
-	customMessageLabel: "violet",
+	accent: "pink",
+	borderAccent: "pink",
+	customMessageLabel: "pink",
 	mdCode: "violet",
-	mdListBullet: "violet",
+	mdListBullet: "pink",
 	syntaxType: "violet",
-	border: "blue",
+	border: "pink",
 	mdLink: "blue",
 	syntaxKeyword: "blue",
 	syntaxVariable: "calamine",
