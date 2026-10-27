@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="HanniPI banner — Hanni mascot with wordmark" src="docs/images/hannibanner.png" width="480">
+  <img alt="HanniPI — Hanni, conejito mascota, con wordmark rosa pastel" src="docs/images/hannibanner.png" width="560">
 </p>
 <p align="center">
   <strong>HanniPI</strong> — tu harness de desarrollo de software, con memoria persistente y flujo de trabajo sODD.
@@ -13,7 +13,8 @@
 
 **HanniPI** es un harness de desarrollo de software en terminal, con **memoria persistente por proyecto** (HanniGram), un **flujo de trabajo atómico** (sODD) y **gestión de extensiones** integrada. Es un proyecto **standalone** (nace del harness [pi](https://github.com/earendil-works/pi) de earendil-works, del que ya no depende).
 
-La mascota es **Hanni** — la compañera que te acompaña en cada sesión de desarrollo.
+La mascota es **Hanni** — la compañera que te acompaña en cada sesión de desarrollo: un conejito
+sticker de estética Y2K, rosa pastel y lila con un toque denim, que también abre la TUI en ASCII.
 
 ## ¿Por qué HanniPI?
 
@@ -219,6 +220,33 @@ npm install --ignore-scripts  # instala dependencias sin lifecycle scripts
 npm run build                 # compila todos los paquetes
 npm run check                 # lint, formato y type check
 ./test.sh                     # tests (omite los que dependen de LLM sin API keys)
+```
+
+## Marca
+
+Los assets viven en `docs/images/` y son todo el branding del proyecto:
+
+| fichero | uso |
+|---|---|
+| `hannibanner.png` | banner del README y cabecera de presentación (1600×520) |
+| `hanni-avatar.png` | icono cuadrado (1024×1024) para GitHub y avatares |
+| `hanni-mascot.png` | conejito suelto con fondo transparente, para donde haga falta |
+
+Paleta: rosa `#FF9EC8` (principal), rosa claro `#FFD9EC`, lila `#D9B0FF` y denim `#8FB4FF` como
+acento. El nombre va en **Rysana Mono**, la misma tipografía que la TUI, así el logo y el harness
+comparten letra. En la terminal el logo se dibuja con bloques y estos colores (con degradado por
+filas), sin depender de imágenes ni de la fuente:
+
+```
+  ✦              ✧
+     ▄▄▄▄  ▄▄▄▄
+    ▐████▌▐████▌
+    ▐██████████▌
+    ██ ◕    ◕ ██
+    ██   ⌣    ██
+     ▀████████▀
+       ▀▀▀▀▀▀
+      h a n n i
 ```
 
 ## Licencia
