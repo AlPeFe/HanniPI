@@ -35,6 +35,7 @@
 - HanniPI: thinking blocks render as a compact summary: code fences are dropped (replaced with a `⋯ (código oculto: N líneas)` note), repeated blank lines collapse, and the text is capped to the first lines with a `… (+N líneas)` mark. Clicking a block cycles summary → full → hidden (`ctrl+t` still toggles hidden/visible globally). Display only: the model still receives the complete thinking and the session transcript keeps it.
 - HanniPI: the rail stacks `tareas` right below `proyecto`, so the work in progress is the first panel the rail shows.
 - HanniPI: una sesión interactiva nueva ya no hereda el modelo por defecto: arranca sin modelo (`no-model` en la barra superior) y pide elegir uno antes del primer turno. `--model`/`--provider` mandan, las sesiones reanudadas conservan el suyo, y el modelo elegido no se guarda como default (Ctrl+S en el selector sí).
+- HanniPI: `/helpme` ya no es una lista fija escrita a mano: se genera del registro de comandos de la sesión (extensiones, incluidos los built-in como `mcp`/`llama`) más el catálogo de core, así que un comando nuevo aparece solo y no puede quedarse fuera. Un test comprueba que todo lo registrado sale en el listado.
 
 ### Fixed
 

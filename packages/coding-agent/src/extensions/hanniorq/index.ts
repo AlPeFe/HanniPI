@@ -34,6 +34,7 @@ import type {
 	ToolDefinition,
 } from "../../core/extensions/types.ts";
 import type { Settings } from "../../core/settings-manager.ts";
+import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import { loadMcpConfig } from "../mcp/config.ts";
 import { getMcpConnectionStatuses, subscribeMcpConnectionStatuses } from "../mcp/status.ts";
 import { ensureHanniGramDaemon } from "./hannigram-daemon.ts";
@@ -1772,6 +1773,54 @@ export function projectFacts(cwd: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// /helpme — lista de comandos. La PRESENCIA la mandan el registro de extensiones
+// y `BUILTIN_SLASH_COMMANDS` (core); `COMMAND_USAGE` solo añade el uso resumido,
+// así que un comando nuevo aparece en la lista aunque no esté en ese mapa.
+// ---------------------------------------------------------------------------
+
+/** Uso resumido para el listado; un comando sin entrada se muestra como `/nombre`. */
+const COMMAND_USAGE: Record<string, string> = {
+	helpme: "/helpme",
+	hanniorq: "/hanniorq on|off|status|plan|new|run|watch|close|resume|rail|tasks|clear",
+	hannigram: "/hannigram init|status|adr <título>",
+	skipmemory: "/skipmemory [on|off]",
+	hannidump: "/hannidump [ruta]",
+	dumpgram: "/dumpgram [ruta]",
+	extract: "/extract [--dir <ruta>] [--overwrite|--version]",
+	explore: "/explore",
+	task: "/task new|list|plan <petición>",
+};
+
+/** Una fila del listado de `/helpme`. */
+export interface HelpRow {
+	cmd: string;
+	desc: string;
+}
+
+/**
+ * Filas de `/helpme`: comandos de extensión (los que hay realmente en la sesión) y de core. Pura, para
+ * poder comprobar en un test que ningún comando registrado se queda fuera del listado.
+ */
+export function helpRows(
+	extensionCommands: ReadonlyArray<{ name: string; description?: string }>,
+	builtins: ReadonlyArray<{ name: string; description: string; argumentHint?: string }> = BUILTIN_SLASH_COMMANDS,
+): { hannipi: HelpRow[]; core: HelpRow[] } {
+	const hannipi = extensionCommands
+		.map((command) => ({ cmd: COMMAND_USAGE[command.name] ?? `/${command.name}`, desc: command.description ?? "" }))
+		.sort((a, b) => a.cmd.localeCompare(b.cmd));
+	// `/helpme` primero: es la puerta de entrada al resto.
+	const entry = hannipi.findIndex((row) => row.cmd.startsWith("/helpme"));
+	if (entry > 0) hannipi.unshift(...hannipi.splice(entry, 1));
+	const core = builtins
+		.map((command) => ({
+			cmd: `/${command.name}${command.argumentHint ? ` ${command.argumentHint}` : ""}`,
+			desc: command.description,
+		}))
+		.sort((a, b) => a.cmd.localeCompare(b.cmd));
+	return { hannipi, core };
+}
+
+// ---------------------------------------------------------------------------
 // Extensión
 // ---------------------------------------------------------------------------
 
@@ -2420,53 +2469,39 @@ export function createHanniorqExtension(
 
 		// =================================================================
 		// /helpme — listado maestro de comandos HanniPI (qué hace cada uno).
+		// Lista VIVA: los comandos de extensión salen del registro y los de
+		// core del catálogo del autocompletado, así que un comando nuevo
+		// aparece aquí sin tocar este handler y no se puede quedar fuera.
 		// =================================================================
 		pi.registerCommand("helpme", {
 			description: "Lista los comandos de HanniPI y para qué sirven",
 			handler: async (_args, ctx) => {
-				const commands: Array<{ cmd: string; desc: string }> = [
-					{ cmd: "/helpme", desc: "Este listado de comandos." },
-					{
-						cmd: "/hannidump [ruta]",
-						desc: "Genera un fichero agents.md (contexto + ADRs resumidos por el LLM) para harness externos que no usan HanniGram.",
-					},
-					{
-						cmd: "/dumpgram [ruta]",
-						desc: "Vuelca la memoria del proyecto a .md (decisiones, hecho, sesiones, contexto) para leerla sin HanniGram.",
-					},
-					{
-						cmd: "/extract [--dir <ruta>] [--overwrite|--version]",
-						desc: "Retrato del proyecto en .md por tipología (README, architecture, stack, design, conventions) para que otro harness lea sin reexplorar. No pisa documentos existentes.",
-					},
-					{
-						cmd: "/explore",
-						desc: "Explora el proyecto (md, README, estructura) y construye su memoria inicial en HanniGram la primera vez.",
-					},
-					{
-						cmd: "/task new|list|plan <petición>",
-						desc: "Fichas sODD: crear/listar/clasificar trabajo (trivial → inline, sustancial → ficha).",
-					},
-					{
-						cmd: "/hanniorq on|off|status|plan|new|run|watch|close|resume",
-						desc: "Orquestador sODD: activa/desactiva, arranca por pasos, vigila subagentes, cierra con resumen.",
-					},
-					{
-						cmd: "/hannigram init|status|adr <título>",
-						desc: "Memoria del proyecto: instancia la BD + exporta .hannigram/memory.md, consulta estado, guarda ADRs.",
-					},
-					{
-						cmd: "/skipmemory [on|off]",
-						desc: "Omitir HanniGram por completo (briefing, tools mem_*, daemon). Persiste hasta que lo apagues.",
-					},
-					{ cmd: "/model", desc: "Seleccionar proveedor/modelo." },
-					{ cmd: "/session", desc: "Info y estadísticas de la sesión actual." },
-					{ cmd: "/new", desc: "Nueva sesión." },
-					{ cmd: "/compact", desc: "Compactar manualmente el contexto." },
-					{ cmd: "/reload", desc: "Recargar extensiones, skills, prompts y temas." },
-					{ cmd: "/quit", desc: "Salir." },
-				];
-				const chunks = commands.map((c) => `• ${c.cmd}\n${c.desc}`);
-				ctx.ui.notify(`Comandos de HanniPI:\n\n${chunks.join("\n\n")}`, "info");
+				const available = pi.getCommands();
+				const { hannipi, core } = helpRows(available.filter((command) => command.source === "extension"));
+				const extras = available.filter((command) => command.source !== "extension");
+				const skills = extras.filter((command) => command.source === "skill").length;
+				const prompts = extras.filter((command) => command.source === "prompt").length;
+				const commands = [...hannipi, ...core];
+				const row = (entry: { cmd: string; desc: string }) => `• ${entry.cmd}\n${entry.desc}`;
+				const resourceLine = [
+					skills > 0 ? `${skills} skills (/skill:<nombre>)` : "",
+					prompts > 0 ? `${prompts} prompts` : "",
+				]
+					.filter(Boolean)
+					.join(" · ");
+				const text = [
+					`Comandos de HanniPI (${hannipi.length} propios + ${core.length} de core):`,
+					"",
+					hannipi.map(row).join("\n\n"),
+					"",
+					"Core:",
+					"",
+					core.map(row).join("\n\n"),
+					resourceLine ? `\n${resourceLine}` : "",
+				]
+					.join("\n")
+					.trim();
+				ctx.ui.notify(text, "info");
 				try {
 					const picked = await ctx.ui.select(
 						"Ayuda de comandos (HanniPI)",
