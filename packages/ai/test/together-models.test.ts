@@ -58,7 +58,7 @@ describe("Together models", () => {
 			thinkingFormat: "openai",
 		});
 
-		const deepSeekV4 = getModel("together", "deepseek-ai/DeepSeek-V4-Flash-0731");
+		const deepSeekV4 = getModel("together", "deepseek-ai/DeepSeek-V4.1-Flash");
 		expect(deepSeekV4.thinkingLevelMap).toEqual({
 			minimal: null,
 			low: null,
@@ -69,9 +69,9 @@ describe("Together models", () => {
 			thinkingFormat: "together",
 		});
 
-		const minimax = getModel("together", "MiniMaxAI/MiniMax-M2.7");
-		expect(minimax.thinkingLevelMap).toEqual({ off: null, minimal: null, low: null, medium: null });
-		expect(minimax.compat?.thinkingFormat).toBeUndefined();
+		const minimax = getModel("together", "MiniMaxAI/MiniMax-M3");
+		expect(minimax.thinkingLevelMap).toEqual({ minimal: null, low: null, medium: null });
+		expect(minimax.compat?.thinkingFormat).toBe("together");
 		expect(minimax.compat?.supportsReasoningEffort).toBe(false);
 	});
 
