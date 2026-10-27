@@ -3,48 +3,51 @@ import { theme } from "../theme/theme.ts";
 
 // Paleta de marca de Hanni: todo rosa, en tonos. Los colores de marca no siguen al tema
 // (son la identidad), solo el modo de color del terminal.
-const SPARK_PINK = rgbColor(255, 168, 210); // destellos
-const WORDMARK_PINK = rgbColor(255, 111, 174); // el nombre, más saturado
+const NAME_PINK = rgbColor(255, 111, 174); // el nombre, el rosa más saturado
 const ART_COLORS = [
 	rgbColor(255, 217, 236), // orejas
-	rgbColor(255, 194, 222),
-	rgbColor(255, 168, 210), // frente
-	rgbColor(255, 158, 200), // cara
-	rgbColor(255, 140, 189),
-	rgbColor(255, 122, 176), // barbilla, el rosa más profundo del bloque
+	rgbColor(255, 233, 244), // frente
+	rgbColor(255, 217, 236), // cara
+	rgbColor(255, 233, 244), // hocico
+	rgbColor(255, 194, 222), // barbilla
+	rgbColor(255, 140, 189), // cuerpo
 ] as const;
 const RESET = "\x1b[0m";
 
 type RGB = ReturnType<typeof rgbColor>;
 
 /**
- * El conejito de Hanni en pixel-art de bloques (sticker Y2K, todo en rosa) con el nombre en
- * minúsculas espaciadas debajo. El arte es un bloque centrado: todas las filas miden lo mismo,
- * así el header lo pinta tal cual venga.
+ * Hanni en pixel-art de bloques: cabeza redonda con orejas, nariz de corazón, cuerpo con
+ * otro corazón (el mismo personaje que el logo de `docs/images/`) y el nombre debajo. El
+ * bloque va centrado: todas las filas miden lo mismo, así el header lo pinta tal cual venga.
  *
- *   ✦              ✧
- *      ▄▄▄▄  ▄▄▄▄
- *     ▐████▌▐████▌
- *     ▐██████████▌
- *     ██ ◕    ◕ ██
- *     ██   ⌣    ██
- *      ▀████████▀
- *        ▀▀▀▀▀▀
- *       h a n n i
+ *      ▐▌  ▐▌
+ *      ██  ██
+ *   ▄████████▄
+ *   ▐██████████▌
+ *   █ ◕      ◕ █
+ *   █    ♥     █
+ *   ▀██████████▀
+ *     ▐██████▌
+ *     ▐█ ♥ █▌
+ *     ▀██████▀
+ *     h a n n i
  */
 const ART_ROWS: ReadonlyArray<{ text: string; color: RGB }> = [
-	{ text: "  ✦              ✧  ", color: SPARK_PINK },
-	{ text: "     ▄▄▄▄  ▄▄▄▄     ", color: ART_COLORS[0] },
-	{ text: "    ▐████▌▐████▌    ", color: ART_COLORS[0] },
-	{ text: "    ▐██████████▌    ", color: ART_COLORS[1] },
-	{ text: "    ██ ◕    ◕ ██    ", color: ART_COLORS[2] },
-	{ text: "    ██   ⌣    ██    ", color: ART_COLORS[3] },
-	{ text: "     ▀████████▀     ", color: ART_COLORS[4] },
-	{ text: "       ▀▀▀▀▀▀       ", color: ART_COLORS[5] },
-	{ text: "      h a n n i     ", color: WORDMARK_PINK },
+	{ text: "     ▐▌  ▐▌     ", color: ART_COLORS[0] },
+	{ text: "     ██  ██     ", color: ART_COLORS[0] },
+	{ text: "  ▄████████▄    ", color: ART_COLORS[1] },
+	{ text: "  ▐██████████▌  ", color: ART_COLORS[1] },
+	{ text: "  █ ◕      ◕ █  ", color: ART_COLORS[2] },
+	{ text: "  █    ♥     █  ", color: ART_COLORS[3] },
+	{ text: "  ▀██████████▀  ", color: ART_COLORS[4] },
+	{ text: "    ▐██████▌    ", color: ART_COLORS[5] },
+	{ text: "    ▐█ ♥ █▌     ", color: ART_COLORS[5] },
+	{ text: "    ▀██████▀    ", color: ART_COLORS[5] },
+	{ text: "    h a n n i   ", color: NAME_PINK },
 ];
 
-/** Ancho del bloque: la fila más larga (el arte ya viene cuadrado, pero no se asume). */
+/** Ancho del bloque: la fila más larga. */
 function artWidth(): number {
 	return Math.max(...ART_ROWS.map((row) => [...row.text].length));
 }
@@ -56,7 +59,7 @@ function centered(row: string, width: number): string {
 	return `${" ".repeat(pad)}${row}${" ".repeat(Math.max(0, width - length - pad))}`;
 }
 
-/** El logo completo: conejito + nombre, con el degradado de rosas por filas. */
+/** El logo completo: personaje + nombre, con los rosas por filas. */
 export function hanniLogoLines(): string[] {
 	const mode = theme.getColorMode();
 	const width = artWidth();
@@ -71,8 +74,8 @@ export function supportsHanniLogo(): boolean {
 	return !isAppleTerminalSession();
 }
 
-/** Fallback de una línea: el nombre con el destello de la marca, para terminales sin bloques. */
+/** Fallback de una línea: el nombre con el corazón de la marca, para terminales sin bloques. */
 export function hanniWordmark(): string {
 	const mode = theme.getColorMode();
-	return `${foregroundAnsi(WORDMARK_PINK, mode)}hanni${RESET}${foregroundAnsi(SPARK_PINK, mode)}✦${RESET}`;
+	return `${foregroundAnsi(NAME_PINK, mode)}hanni${RESET}${foregroundAnsi(ART_COLORS[0], mode)}♥${RESET}`;
 }

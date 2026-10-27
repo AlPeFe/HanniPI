@@ -11,23 +11,23 @@ describe("logo de Hanni", () => {
 	it("es un bloque cuadrado: todas las filas miden lo mismo", () => {
 		initTheme("dark");
 		const lines = hanniLogoLines().map(strip);
-		expect(lines).toHaveLength(9);
+		expect(lines).toHaveLength(11);
 		const widths = new Set(lines.map((line) => [...line].length));
-		expect([...widths]).toEqual([20]);
+		expect([...widths]).toEqual([16]);
 	});
 
 	it("lleva el conejito (ojos y boca) y el nombre", () => {
 		initTheme("dark");
 		const text = hanniLogoLines().map(strip).join("\n");
 		expect(text).toContain("◕");
-		expect(text).toContain("⌣");
+		expect(text).toContain("♥");
 		expect(text).toContain("h a n n i");
-		expect(text).toContain("✦");
+		expect(text).toContain("♥");
 	});
 
 	it("el fallback de una línea mantiene la marca", () => {
 		initTheme("dark");
 		const wordmark = strip(hanniWordmark());
-		expect(wordmark).toBe("hanni✦");
+		expect(wordmark).toBe("hanni♥");
 	});
 });

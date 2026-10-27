@@ -1,13 +1,15 @@
 ```
-  ✦              ✧
-     ▄▄▄▄  ▄▄▄▄
-    ▐████▌▐████▌
-    ▐██████████▌
-    ██ ◕    ◕ ██
-    ██   ⌣    ██
-     ▀████████▀
-       ▀▀▀▀▀▀
-      h a n n i
+     ▐▌  ▐▌
+     ██  ██
+  ▄████████▄
+  ▐██████████▌
+  █ ◕      ◕ █
+  █    ♥     █
+  ▀██████████▀
+    ▐██████▌
+    ▐█ ♥ █▌
+    ▀██████▀
+    h a n n i
 ```
 <p align="center">
   <strong>HanniPI</strong> — tu harness de desarrollo de software, con memoria persistente y flujo de trabajo sODD.
@@ -229,20 +231,21 @@ npm run check                 # lint, formato y type check
 
 ## Marca
 
-El logo **es ASCII**: el mismo bloque que abre la TUI, aquí arriba y en la terminal. Se dibuja con
-bloques, degradado de rosas por filas y el nombre en **Rysana Mono**, la tipografía del propio
-harness, así que no depende de fuentes ni de imágenes.
+Hanni es un **sticker kawaii de línea gruesa**: cabeza redonda, orejas largas, nariz y barriga en
+forma de corazón, relleno plano en crema y rosa. El mismo personaje se dibuja de dos formas:
 
-Para GitHub quedan los assets de `docs/images/`, generados desde el mismo dibujo:
+- **Terminal (y este README):** el bloque ASCII de arriba, con bloques, rosas por filas y el nombre
+  en **Rysana Mono**, la tipografía del harness. No depende de fuentes ni de imágenes.
+- **GitHub:** los assets de `docs/images/`, dibujados desde la misma idea.
 
 | fichero | uso |
 |---|---|
 | `hanni-avatar.png` | icono cuadrado (1024×1024): avatar del repo y de la cuenta |
-| `hannibanner.png` | banner 1600×520 para la social preview y presentaciones |
-| `hanni-mascot.png` | conejito suelto con fondo transparente |
+| `hannibanner.png` | banner 1600×520 con el personaje y `hanni`, para la social preview |
+| `hanni-mascot.png` | la mascota suelta con fondo transparente |
 
 Se regeneran con `python scripts/generate-brand.py` (PIL + Rysana Mono) y salen idénticos. Paleta:
-rosa `#FF9EC8` (principal), `#FFD9EC` (claro) y `#FF6FAE` (saturado).
+crema `#FFF9F4`, rosa `#FFC2DE`, rosa saturado `#FF7AB0` y línea `#4A3A44`.
 
 ## Licencia
 

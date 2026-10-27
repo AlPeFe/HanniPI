@@ -1,7 +1,10 @@
-"""Genera el branding de Hanni: banner, avatar y mascota (PNG) con PIL.
+"""Genera el branding de Hanni: mascota, banner y avatar (PNG) con PIL.
 
-Estética: Y2K / revista de los 2000, todo en rosa, conejito sticker y el nombre en Rysana
-Mono (la fuente del propio harness). Nada de fuentes ni assets externos.
+Estilo: sticker kawaii de línea gruesa y relleno plano (crema y rosa), con la nariz y la
+barriga en forma de corazón, y el nombre `hanni` al lado. Todo en rosa. Sin fuentes ni
+assets externos: la tipografía es la Rysana Mono del propio harness y el dibujo son formas.
+
+Uso: python scripts/generate-brand.py
 """
 
 from __future__ import annotations
@@ -9,158 +12,143 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parent.parent
 FONT_DIR = ROOT / "packages/coding-agent/src/modes/interactive/assets/fonts/rysana/ttf"
 OUT = ROOT / "docs/images"
-OUT.mkdir(parents=True, exist_ok=True)
 
-PINK = (255, 158, 200)
-PINK_DEEP = (255, 111, 174)
-PINK_SOFT = (255, 217, 236)
-CREAM = (255, 247, 251)
-PINK_MID = (255, 168, 210)
-PINK_DARK = (214, 79, 140)
-PINK_EDGE = (198, 74, 133)
-INK = (94, 59, 82)
+OUTLINE = (74, 58, 68)  # plum oscuro de la línea
+CREAM = (255, 249, 244)
+PINK = (255, 194, 222)
+PINK_SOFT = (255, 224, 238)
+PINK_DEEP = (255, 122, 176)
+BG_SOFT = (255, 236, 246)
 
 SS = 2  # supersampling
 
 
-def gradient(size: tuple[int, int], a: tuple[int, int, int], b: tuple[int, int, int], c: tuple[int, int, int]) -> Image.Image:
-    """Gradiente diagonal suave a partir de una imagen 3x3 reescalada."""
-    mid = tuple((x + y + z) // 3 for x, y, z in zip(a, b, c))
-    small = Image.new("RGB", (3, 3), mid)
+def gradient(size: tuple[int, int], a: tuple[int, int, int], b: tuple[int, int, int]) -> Image.Image:
+    """Gradiente vertical suave entre dos rosas (imagen 1x2 reescalada)."""
+    small = Image.new("RGB", (1, 2))
     small.putpixel((0, 0), a)
-    small.putpixel((2, 0), b)
-    small.putpixel((0, 2), b)
-    small.putpixel((2, 2), c)
+    small.putpixel((0, 1), b)
     return small.resize(size, Image.BICUBIC)
 
 
-def rounded_mask(size: tuple[int, int], radius: int) -> Image.Image:
-    mask = Image.new("L", size, 0)
-    ImageDraw.Draw(mask).rounded_rectangle((0, 0, size[0] - 1, size[1] - 1), radius=radius, fill=255)
-    return mask
+def heart(draw: ImageDraw.ImageDraw, cx: float, cy: float, size: float, fill) -> None:
+    """Corazón de cuatro lóbulos, centrado en (cx, cy)."""
+    r = size / 2
+    draw.ellipse((cx - r, cy - r * 0.9, cx, cy + r * 0.1), fill=fill)
+    draw.ellipse((cx, cy - r * 0.9, cx + r, cy + r * 0.1), fill=fill)
+    draw.polygon([(cx - r, cy - r * 0.15), (cx + r, cy - r * 0.15), (cx, cy + r)], fill=fill)
 
 
-def sparkle(draw: ImageDraw.ImageDraw, cx: float, cy: float, r: float, fill: tuple[int, int, int]) -> None:
-    """Destello de cuatro puntas (✦) dibujado como polígono cóncavo."""
-    w = r * 0.30
-    points = [
-        (cx, cy - r),
-        (cx + w, cy - w),
-        (cx + r, cy),
-        (cx + w, cy + w),
-        (cx, cy + r),
-        (cx - w, cy + w),
-        (cx - r, cy),
-        (cx - w, cy - w),
-    ]
-    draw.polygon(points, fill=fill)
-
-
-def bunny(size: int) -> Image.Image:
-    """Conejito sticker sobre fondo transparente, con un lazo denim."""
-    s = size * SS
+def mascot(height: int) -> Image.Image:
+    """La mascota entera: cabeza redonda con orejas, nariz de corazón, cuerpo con corazón."""
+    s = height * SS
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    u = s / 100.0  # unidad: 100x100 de rejilla
+    u = s / 100.0
+    line = max(2, int(2.6 * u))
 
-    def r(*vals: float) -> tuple[float, ...]:
-        return tuple(v * u for v in vals)
+    def px(*values: float) -> tuple[float, ...]:
+        return tuple(v * u for v in values)
 
-    # orejas (cápsulas), con el interior rosa
-    for cx, tilt in ((37.0, -7), (63.0, 7)):
-        d.rounded_rectangle(r(cx - 7.5 + tilt, 3, cx + 7.5 + tilt, 48), radius=7.5 * u, fill=CREAM, outline=PINK, width=int(2.4 * u))
-        d.rounded_rectangle(r(cx - 3.2 + tilt, 10, cx + 3.2 + tilt, 41), radius=3.2 * u, fill=PINK_SOFT)
+    # bracitos y pies (detrás del cuerpo)
+    for x0 in (25.0, 67.0):
+        d.ellipse(px(x0, 74, x0 + 9, 84), fill=CREAM, outline=OUTLINE, width=line)
+    for x0 in (39.0, 53.0):
+        d.ellipse(px(x0, 92, x0 + 8, 100), fill=CREAM, outline=OUTLINE, width=line)
+
+    # cuerpo (huevo) con parche de barriga
+    d.ellipse(px(33, 58, 67, 98), fill=CREAM, outline=OUTLINE, width=line)
+    d.ellipse(px(39, 74, 61, 94), fill=PINK, outline=OUTLINE, width=max(2, int(1.6 * u)))
+    heart(d, 50 * u, 85 * u, 9 * u, PINK_DEEP)
+
+    # orejas (cápsulas) con interior rosa
+    for cx, tilt in ((36.0, -5), (64.0, 5)):
+        d.rounded_rectangle(px(cx - 8 + tilt, 2, cx + 8 + tilt, 44), radius=8 * u, fill=CREAM, outline=OUTLINE, width=line)
+        d.rounded_rectangle(px(cx - 3.6 + tilt, 8, cx + 3.6 + tilt, 36), radius=3.6 * u, fill=PINK_SOFT)
 
     # cabeza
-    d.rounded_rectangle(r(16, 34, 84, 92), radius=27 * u, fill=CREAM, outline=PINK, width=int(2.8 * u))
-
-    # lazo denim sobre la oreja derecha (detalle Y2K)
-    d.polygon([r(71, 25), r(61, 19.5), r(62.5, 30.5)], fill=PINK_DARK)
-    d.polygon([r(71, 25), r(81, 19.5), r(79.5, 30.5)], fill=PINK_DARK)
-    d.ellipse(r(67, 20.8, 75, 29.2), fill=PINK, outline=PINK_DEEP, width=int(1.1 * u))
+    d.rounded_rectangle(px(15, 26, 85, 72), radius=25 * u, fill=CREAM, outline=OUTLINE, width=line)
 
     # mejillas
-    for cx in (30.0, 70.0):
-        d.ellipse(r(cx - 7.5, 60, cx + 7.5, 68), fill=(255, 205, 228))
+    for cx in (28.0, 72.0):
+        d.ellipse(px(cx - 7, 54, cx + 7, 62), fill=PINK)
 
-    # ojos y boca
+    # ojos
     for cx in (38.0, 62.0):
-        d.ellipse(r(cx - 4.4, 47, cx + 4.4, 56.4), fill=INK)
-        d.ellipse(r(cx - 1.8, 48.4, cx + 0.8, 51.4), fill=(255, 255, 255))
-    d.arc(r(45.5, 59, 54.5, 68), start=20, end=160, fill=INK, width=int(2.0 * u))
+        d.ellipse(px(cx - 3.4, 42, cx + 3.4, 49.4), fill=OUTLINE)
+        d.ellipse(px(cx - 1.5, 43.2, cx + 0.2, 45.3), fill=(255, 255, 255))
 
-    return img.resize((size, size), Image.LANCZOS)
+    # nariz de corazón
+    heart(d, 50 * u, 53 * u, 7 * u, PINK_DEEP)
+
+    return img.resize((height, height), Image.LANCZOS)
 
 
-def letterspaced(draw: ImageDraw.ImageDraw, xy: tuple[float, float], text: str, font, fill, spacing: float, stroke: int = 0, stroke_fill=None) -> float:
+def letterspaced(draw: ImageDraw.ImageDraw, xy: tuple[float, float], text: str, font, fill, spacing: float) -> None:
     x, y = xy
     for ch in text:
-        draw.text((x, y), ch, font=font, fill=fill, stroke_width=stroke, stroke_fill=stroke_fill)
+        draw.text((x, y), ch, font=font, fill=fill)
         x += draw.textlength(ch, font=font) + spacing
-    return x
 
 
 def banner() -> None:
-    w, h = 1600 * SS, 520 * SS
-    base = gradient((w, h), (255, 238, 247), (255, 214, 236), (255, 198, 229))
-    card = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    card.paste(base, (0, 0), rounded_mask((w, h), 72 * SS))
-    d = ImageDraw.Draw(card)
+    w, h = 1600, 520
+    img = gradient((w * SS, h * SS), BG_SOFT, (255, 214, 236)).convert("RGBA")
+    mask = Image.new("L", (w * SS, h * SS), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, w * SS - 1, h * SS - 1), radius=64 * SS, fill=255)
+    img.putalpha(mask)
+    d = ImageDraw.Draw(img)
 
-    # marco interior translúcido
-    d.rounded_rectangle((26 * SS, 26 * SS, w - 26 * SS, h - 26 * SS), radius=54 * SS, outline=(255, 255, 255, 150), width=int(3 * SS))
+    # marco interior
+    d.rounded_rectangle(
+        (24 * SS, 24 * SS, (w - 24) * SS, (h - 24) * SS),
+        radius=48 * SS,
+        outline=OUTLINE + (60,),
+        width=int(2 * SS),
+    )
 
-    # destellos
-    for cx, cy, r, color in (
-        (150, 110, 26, PINK),
-        (1430, 140, 34, PINK_DARK),
-        (1340, 430, 18, PINK),
-        (250, 420, 15, PINK_DARK),
-    ):
-        sparkle(d, cx * SS, cy * SS, r * SS, color + (255,))
+    # mascota
+    art = mascot(430 * SS)
+    img.alpha_composite(art, (90 * SS, 40 * SS))
 
-    # conejito
-    mascot = bunny(330 * SS)
-    card.alpha_composite(mascot, (140 * SS, 95 * SS))
+    # nombre y tagline
+    bold = ImageFont.truetype(str(FONT_DIR / "RysanaMono-Bold.ttf"), 220 * SS)
+    letterspaced(d, (600 * SS, 110 * SS), "hanni", bold, OUTLINE + (255,), spacing=12 * SS)
 
-    # wordmark
-    bold = ImageFont.truetype(str(FONT_DIR / "RysanaMono-Bold.ttf"), 210 * SS)
-    letterspaced(d, (500 * SS, 128 * SS), "hanni", bold, PINK_DEEP + (255,), spacing=14 * SS, stroke=int(7 * SS), stroke_fill=(255, 255, 255, 235))
+    small = ImageFont.truetype(str(FONT_DIR / "RysanaMono-Regular.ttf"), 44 * SS)
+    letterspaced(d, (606 * SS, 388 * SS), "memory · sodd · autonomy", small, PINK_DEEP + (255,), spacing=4 * SS)
 
-    # tagline
-    small = ImageFont.truetype(str(FONT_DIR / "RysanaMono-Regular.ttf"), 46 * SS)
-    letterspaced(d, (505 * SS, 372 * SS), "memory · sodd · autonomy", small, PINK_DARK + (255,), spacing=4 * SS)
-
-    card.resize((1600, 520), Image.LANCZOS).save(OUT / "hannibanner.png", optimize=True)
+    img.resize((w, h), Image.LANCZOS).save(OUT / "hannibanner.png", optimize=True)
 
 
 def avatar() -> None:
     size = 1024
     s = size * SS
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    bg = gradient((s, s), (255, 228, 243), (255, 196, 226), (255, 178, 214))
+    bg = gradient((s, s), (255, 226, 242), (255, 198, 229))
     circle = Image.new("L", (s, s), 0)
     ImageDraw.Draw(circle).ellipse((0, 0, s - 1, s - 1), fill=255)
     img.paste(bg, (0, 0), circle)
     d = ImageDraw.Draw(img)
-    d.ellipse((28 * SS, 28 * SS, s - 28 * SS, s - 28 * SS), outline=PINK_DARK + (255,), width=int(9 * SS))
-    mascot = bunny(700 * SS)
-    img.alpha_composite(mascot, ((s - 700 * SS) // 2, 150 * SS))
+    d.ellipse((26 * SS, 26 * SS, s - 26 * SS, s - 26 * SS), outline=OUTLINE + (255,), width=int(7 * SS))
+    art = mascot(720 * SS)
+    img.alpha_composite(art, ((s - 720 * SS) // 2, 150 * SS))
     img.resize((size, size), Image.LANCZOS).save(OUT / "hanni-avatar.png", optimize=True)
 
 
-def mascot() -> None:
-    bunny(512).save(OUT / "hanni-mascot.png", optimize=True)
+def mascot_file() -> None:
+    mascot(512).save(OUT / "hanni-mascot.png", optimize=True)
 
 
 if __name__ == "__main__":
+    OUT.mkdir(parents=True, exist_ok=True)
     banner()
     avatar()
-    mascot()
+    mascot_file()
     for path in sorted(OUT.glob("*.png")):
         print(path.name, path.stat().st_size, "bytes")
