@@ -1,6 +1,14 @@
-<p align="center">
-  <img alt="HanniPI — Hanni, conejito mascota, con wordmark rosa pastel" src="docs/images/hannibanner.png" width="560">
-</p>
+```
+  ✦              ✧
+     ▄▄▄▄  ▄▄▄▄
+    ▐████▌▐████▌
+    ▐██████████▌
+    ██ ◕    ◕ ██
+    ██   ⌣    ██
+     ▀████████▀
+       ▀▀▀▀▀▀
+      h a n n i
+```
 <p align="center">
   <strong>HanniPI</strong> — tu harness de desarrollo de software, con memoria persistente y flujo de trabajo sODD.
 </p>
@@ -12,9 +20,6 @@
 # HanniPI — Harness de desarrollo con memoria
 
 **HanniPI** es un harness de desarrollo de software en terminal, con **memoria persistente por proyecto** (HanniGram), un **flujo de trabajo atómico** (sODD) y **gestión de extensiones** integrada. Es un proyecto **standalone** (nace del harness [pi](https://github.com/earendil-works/pi) de earendil-works, del que ya no depende).
-
-La mascota es **Hanni** — la compañera que te acompaña en cada sesión de desarrollo: un conejito
-sticker de estética Y2K, rosa pastel y lila con un toque denim, que también abre la TUI en ASCII.
 
 ## ¿Por qué HanniPI?
 
@@ -224,32 +229,20 @@ npm run check                 # lint, formato y type check
 
 ## Marca
 
-Los assets viven en `docs/images/` y son todo el branding del proyecto:
+El logo **es ASCII**: el mismo bloque que abre la TUI, aquí arriba y en la terminal. Se dibuja con
+bloques, degradado de rosas por filas y el nombre en **Rysana Mono**, la tipografía del propio
+harness, así que no depende de fuentes ni de imágenes.
+
+Para GitHub quedan los assets de `docs/images/`, generados desde el mismo dibujo:
 
 | fichero | uso |
 |---|---|
-| `hannibanner.png` | banner del README y cabecera de presentación (1600×520) |
-| `hanni-avatar.png` | icono cuadrado (1024×1024) para GitHub y avatares |
-| `hanni-mascot.png` | conejito suelto con fondo transparente, para donde haga falta |
+| `hanni-avatar.png` | icono cuadrado (1024×1024): avatar del repo y de la cuenta |
+| `hannibanner.png` | banner 1600×520 para la social preview y presentaciones |
+| `hanni-mascot.png` | conejito suelto con fondo transparente |
 
-Los tres se regeneran con la misma receta y salen idénticos: `python scripts/generate-brand.py` (PIL + la Rysana Mono del repo). Para GitHub, sube `docs/images/hanni-avatar.png` como avatar del repositorio/cuenta cuando cambie la marca.
-
-Paleta: rosa `#FF9EC8` (principal), rosa claro `#FFD9EC`, lila `#D9B0FF` y denim `#8FB4FF` como
-acento. El nombre va en **Rysana Mono**, la misma tipografía que la TUI, así el logo y el harness
-comparten letra. En la terminal el logo se dibuja con bloques y estos colores (con degradado por
-filas), sin depender de imágenes ni de la fuente:
-
-```
-  ✦              ✧
-     ▄▄▄▄  ▄▄▄▄
-    ▐████▌▐████▌
-    ▐██████████▌
-    ██ ◕    ◕ ██
-    ██   ⌣    ██
-     ▀████████▀
-       ▀▀▀▀▀▀
-      h a n n i
-```
+Se regeneran con `python scripts/generate-brand.py` (PIL + Rysana Mono) y salen idénticos. Paleta:
+rosa `#FF9EC8` (principal), `#FFD9EC` (claro) y `#FF6FAE` (saturado).
 
 ## Licencia
 

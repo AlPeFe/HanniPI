@@ -1,7 +1,7 @@
 """Genera el branding de Hanni: banner, avatar y mascota (PNG) con PIL.
 
-Estética: Y2K / revista de los 2000, rosa pastel → lila, acento denim, conejito sticker y
-el nombre en Rysana Mono (la fuente del propio harness). Nada de fuentes ni assets externos.
+Estética: Y2K / revista de los 2000, todo en rosa, conejito sticker y el nombre en Rysana
+Mono (la fuente del propio harness). Nada de fuentes ni assets externos.
 """
 
 from __future__ import annotations
@@ -20,9 +20,9 @@ PINK = (255, 158, 200)
 PINK_DEEP = (255, 111, 174)
 PINK_SOFT = (255, 217, 236)
 CREAM = (255, 247, 251)
-LILAC = (217, 176, 255)
-LILAC_DEEP = (166, 122, 220)
-DENIM = (143, 180, 255)
+PINK_MID = (255, 168, 210)
+PINK_DARK = (214, 79, 140)
+PINK_EDGE = (198, 74, 133)
 INK = (94, 59, 82)
 
 SS = 2  # supersampling
@@ -80,9 +80,9 @@ def bunny(size: int) -> Image.Image:
     d.rounded_rectangle(r(16, 34, 84, 92), radius=27 * u, fill=CREAM, outline=PINK, width=int(2.8 * u))
 
     # lazo denim sobre la oreja derecha (detalle Y2K)
-    d.polygon([r(71, 25), r(61, 19.5), r(62.5, 30.5)], fill=DENIM)
-    d.polygon([r(71, 25), r(81, 19.5), r(79.5, 30.5)], fill=DENIM)
-    d.ellipse(r(67, 20.8, 75, 29.2), fill=DENIM, outline=(90, 130, 210), width=int(1.1 * u))
+    d.polygon([r(71, 25), r(61, 19.5), r(62.5, 30.5)], fill=PINK_DARK)
+    d.polygon([r(71, 25), r(81, 19.5), r(79.5, 30.5)], fill=PINK_DARK)
+    d.ellipse(r(67, 20.8, 75, 29.2), fill=PINK, outline=PINK_DEEP, width=int(1.1 * u))
 
     # mejillas
     for cx in (30.0, 70.0):
@@ -107,7 +107,7 @@ def letterspaced(draw: ImageDraw.ImageDraw, xy: tuple[float, float], text: str, 
 
 def banner() -> None:
     w, h = 1600 * SS, 520 * SS
-    base = gradient((w, h), (255, 236, 245), (255, 214, 236), (227, 214, 255))
+    base = gradient((w, h), (255, 238, 247), (255, 214, 236), (255, 198, 229))
     card = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     card.paste(base, (0, 0), rounded_mask((w, h), 72 * SS))
     d = ImageDraw.Draw(card)
@@ -117,10 +117,10 @@ def banner() -> None:
 
     # destellos
     for cx, cy, r, color in (
-        (150, 110, 26, DENIM),
-        (1430, 140, 34, LILAC_DEEP),
-        (1340, 430, 18, DENIM),
-        (250, 420, 15, LILAC_DEEP),
+        (150, 110, 26, PINK),
+        (1430, 140, 34, PINK_DARK),
+        (1340, 430, 18, PINK),
+        (250, 420, 15, PINK_DARK),
     ):
         sparkle(d, cx * SS, cy * SS, r * SS, color + (255,))
 
@@ -134,7 +134,7 @@ def banner() -> None:
 
     # tagline
     small = ImageFont.truetype(str(FONT_DIR / "RysanaMono-Regular.ttf"), 46 * SS)
-    letterspaced(d, (505 * SS, 372 * SS), "memory · sodd · autonomy", small, LILAC_DEEP + (255,), spacing=4 * SS)
+    letterspaced(d, (505 * SS, 372 * SS), "memory · sodd · autonomy", small, PINK_DARK + (255,), spacing=4 * SS)
 
     card.resize((1600, 520), Image.LANCZOS).save(OUT / "hannibanner.png", optimize=True)
 
@@ -143,12 +143,12 @@ def avatar() -> None:
     size = 1024
     s = size * SS
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    bg = gradient((s, s), (255, 222, 240), (255, 190, 222), (226, 205, 255))
+    bg = gradient((s, s), (255, 228, 243), (255, 196, 226), (255, 178, 214))
     circle = Image.new("L", (s, s), 0)
     ImageDraw.Draw(circle).ellipse((0, 0, s - 1, s - 1), fill=255)
     img.paste(bg, (0, 0), circle)
     d = ImageDraw.Draw(img)
-    d.ellipse((28 * SS, 28 * SS, s - 28 * SS, s - 28 * SS), outline=LILAC_DEEP + (255,), width=int(9 * SS))
+    d.ellipse((28 * SS, 28 * SS, s - 28 * SS, s - 28 * SS), outline=PINK_DARK + (255,), width=int(9 * SS))
     mascot = bunny(700 * SS)
     img.alpha_composite(mascot, ((s - 700 * SS) // 2, 150 * SS))
     img.resize((size, size), Image.LANCZOS).save(OUT / "hanni-avatar.png", optimize=True)
