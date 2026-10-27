@@ -250,6 +250,12 @@ function visibleWorktreeFiles(cwd: string, files: readonly string[]): string[] {
 	});
 }
 
+/** Sha corto de HEAD, o "?" si el directorio no es un repositorio. */
+function headSha(cwd: string): string {
+	const result = git(cwd, ["rev-parse", "--short", "HEAD"]);
+	return result.ok && result.out ? result.out : "?";
+}
+
 function lastCommit(cwd: string): string {
 	return git(cwd, ["log", "-1", "--format=%h %s"]).out || "ninguno";
 }
@@ -2141,6 +2147,8 @@ export interface GoalArgs {
 	verify: string[];
 	/** Pide al agente que escriba los pasos (no los ejecuta). */
 	plan: boolean;
+	/** Sin asistente: escribe la ficha con lo que haya en los argumentos. */
+	quick: boolean;
 	maxIterations?: number;
 	maxIdle?: number;
 	maxTokens?: number;
@@ -2152,6 +2160,7 @@ export function parseGoalArgs(input: string): GoalArgs {
 	const doneWhen: string[] = [];
 	const verify: string[] = [];
 	let plan = false;
+	let quick = false;
 	let maxIterations: number | undefined;
 	let maxIdle: number | undefined;
 	let maxTokens: number | undefined;
@@ -2177,6 +2186,9 @@ export function parseGoalArgs(input: string): GoalArgs {
 			case "--plan":
 				plan = true;
 				break;
+			case "--quick":
+				quick = true;
+				break;
 			case "--max-iterations":
 				maxIterations = positive();
 				break;
@@ -2190,7 +2202,7 @@ export function parseGoalArgs(input: string): GoalArgs {
 				if (!token.startsWith("--")) words.push(token);
 		}
 	}
-	return { goal: words.join(" ").trim(), doneWhen, verify, plan, maxIterations, maxIdle, maxTokens };
+	return { goal: words.join(" ").trim(), doneWhen, verify, plan, quick, maxIterations, maxIdle, maxTokens };
 }
 
 /**
@@ -2225,7 +2237,7 @@ function goalSheetTemplate(options: {
 	goal: string;
 	project: string;
 	base: string;
-	args: GoalArgs;
+	args: { doneWhen: string[]; verify: string[]; maxIterations?: number; maxIdle?: number; maxTokens?: number };
 }): string {
 	const { slug, goal, project, base, args } = options;
 	const sheet: GoalSheet = {
@@ -2254,6 +2266,309 @@ function goalSheetTemplate(options: {
 	return `${front}# ${slug}\nObjetivo: ${goal}\nAlcance: (pendiente) · Fuera: (pendiente)\nVerify: ${args.verify[0] ?? "(pendiente)"}\n\n## Pasos\n\n## Siguiente\nEscribe los pasos en \`## Pasos\` (uno por linea, \`- [ ] S1 …\`) y después /hanniorq autonomy on + /hanniorq auto.\n`;
 }
 
+/** Lo que se escribe en la ficha desde `/hanniorq goal` (rápido o asistente). */
+export interface GoalWriteInput {
+	goal: string;
+	doneWhen: string[];
+	verify: string[];
+	/** Solo se toca si el llamante lo decide (el asistente siempre pregunta). */
+	autonomy?: "off" | "guarded";
+	maxIterations?: number;
+	maxIdle?: number;
+	maxTokens?: number;
+}
+
+/** Crea la ficha (si no hay ninguna activa) o actualiza su frontmatter con el goal. */
+function writeGoalSheet(cwd: string, input: GoalWriteInput): { path: string; slug: string; created: boolean } {
+	const oddDir = getOddDir(cwd);
+	let path = getActiveTaskPath(cwd);
+	let slug = getActiveSlug(cwd);
+	let created = false;
+	if (!path || !existsSync(path)) {
+		const base = slugify(input.goal).slice(0, 48) || "goal";
+		slug = base;
+		const tasksDir = join(oddDir, "tasks");
+		let suffix = 2;
+		while (existsSync(join(tasksDir, `${slug}.md`))) slug = `${base}-${suffix++}`;
+		path = join(tasksDir, `${slug}.md`);
+		mkdirSync(tasksDir, { recursive: true });
+		writeFileSync(
+			path,
+			goalSheetTemplate({
+				slug,
+				goal: input.goal,
+				project: projectName(cwd),
+				base: headSha(cwd),
+				args: input,
+			}),
+		);
+		writeFileSync(join(oddDir, ".active"), slug);
+		created = true;
+	}
+	// En una ficha existente solo se tocan los campos que llegan (los límites, si los hay).
+	const fields: Record<string, string | string[] | undefined> = { goal: input.goal };
+	if (input.doneWhen.length > 0) fields.done_when = input.doneWhen;
+	if (input.verify.length > 0) fields.verify = input.verify;
+	if (input.autonomy !== undefined) fields.autonomy = input.autonomy;
+	if (input.maxIterations !== undefined) fields.max_iterations = String(input.maxIterations);
+	if (input.maxIdle !== undefined) fields.max_idle = String(input.maxIdle);
+	if (input.maxTokens !== undefined) fields.max_tokens = String(input.maxTokens);
+	writeFileSync(path, setSheetFields(readFileSync(path, "utf-8"), fields));
+	return { path, slug: slug ?? "ficha", created };
+}
+
+/** Comandos de verificación que ya existen en el proyecto (para no escribirlos a mano). */
+export function verifyCandidates(cwd: string): string[] {
+	const candidates: string[] = [];
+	const pkgPath = join(cwd, "package.json");
+	if (existsSync(pkgPath)) {
+		try {
+			const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { scripts?: Record<string, string> };
+			for (const name of ["check", "test", "lint", "typecheck", "build"]) {
+				if (pkg.scripts?.[name]) candidates.push(`npm run ${name}`);
+			}
+		} catch {
+			/* package.json ilegible: se ofrece escribirlo a mano */
+		}
+	}
+	if (existsSync(join(cwd, "test.sh"))) candidates.push("./test.sh");
+	return candidates;
+}
+
+/** Plan pedido en el asistente: cuando el agente termine de escribirlo, se lanza `auto` o se avisa. */
+interface PendingPlan {
+	slug: string;
+	maxSteps: number;
+	launch: boolean;
+}
+let pendingPlan: PendingPlan | undefined;
+
+/**
+ * Arranca el bucle si la ficha lo permite. Devuelve `false` (y explica por qué) cuando no: sin ficha, sin
+ * goal, con `autonomy: off`, sin pasos pendientes o con uno ya en curso.
+ */
+function tryStartAuto(options: {
+	cwd: string;
+	ui: ExtensionUIContext;
+	pi: Parameters<ExtensionFactory>[0];
+	maxSteps?: number;
+}): boolean {
+	const { cwd, ui, pi } = options;
+	const taskPath = getActiveTaskPath(cwd);
+	if (!taskPath || !existsSync(taskPath)) {
+		ui.notify('No hay ficha activa: /hanniorq goal "<objetivo>" primero.', "warning");
+		return false;
+	}
+	if (autoRun) {
+		ui.notify("Ya hay una ejecución automática en curso (/hanniorq stop para cortarla).", "warning");
+		return false;
+	}
+	const text = readFileSync(taskPath, "utf-8");
+	const sheet = parseGoalSheet(text);
+	if (!sheet.goal) {
+		ui.notify('La ficha no tiene goal: /hanniorq goal "<objetivo>"', "warning");
+		return false;
+	}
+	if (sheet.autonomy === "off") {
+		ui.notify("Autonomía apagada en la ficha (autonomy: off). Enciéndela con /hanniorq autonomy on.", "warning");
+		return false;
+	}
+	const steps = sheetSteps(text);
+	const pending = steps.filter((step) => !step.done);
+	if (pending.length === 0) {
+		ui.notify("No quedan pasos pendientes en la ficha: revisa `done_when`, verifica y /hanniorq close.", "info");
+		return false;
+	}
+	const requested = options.maxSteps;
+	const cap = sheet.limits.maxIterations ?? AUTO_MAX_STEPS;
+	const maxSteps = Math.max(1, Math.min(requested ?? AUTO_DEFAULT_STEPS, cap, AUTO_MAX_STEPS));
+	autoRun = {
+		slug: getActiveSlug(cwd) ?? "ficha",
+		maxSteps,
+		stepsRun: 0,
+		idle: 0,
+		tokensAtStart: sessionTokens,
+		maxTokens: sheet.limits.maxTokens,
+		maxIdle: sheet.limits.maxIdle,
+		lastSha: headSha(cwd),
+		lastDone: steps.length - pending.length,
+		goal: sheet.goal,
+	};
+	autoAborted = false;
+	ui.notify(
+		`auto: hasta ${maxSteps} pasos · ${formatTokensShort(sheet.limits.maxTokens)} tok · para si no hay progreso en ${sheet.limits.maxIdle}. /hanniorq stop lo corta.`,
+		"info",
+	);
+	autoSending = true;
+	pi.sendUserMessage(
+		autoPrompt({
+			slug: autoRun.slug,
+			sheet,
+			step: pending[0] as SheetStep,
+			iteration: 1,
+			maxSteps,
+			tokensLeft: sheet.limits.maxTokens,
+		}),
+	);
+	renderRail(ui, cwd);
+	return true;
+}
+
+/**
+ * Asistente de `/hanniorq goal`: pregunta objetivo, criterios, verificación, límites, autonomía y
+ * plan, escribe la ficha y encadena el plan y el lanzamiento sin pasos manuales.
+ */
+async function runGoalWizard(
+	pi: Parameters<ExtensionFactory>[0],
+	ctx: ExtensionContext,
+	seed: GoalArgs,
+): Promise<void> {
+	const cwd = ctx.cwd ?? process.cwd();
+	const ui = ctx.ui;
+	try {
+		// 1. objetivo
+		const seededGoal = seed.goal.trim();
+		const goal =
+			seededGoal || ((await ui.editor("Objetivo del goal (comportamiento observable, una frase)", "")) ?? "").trim();
+		if (!goal) {
+			ui.notify("goal cancelado (sin objetivo).", "info");
+			return;
+		}
+		// 2. criterios de terminado
+		let doneWhen = seed.doneWhen;
+		if (doneWhen.length === 0) {
+			const raw = await ui.editor("Criterios de terminado (uno por línea; vacío = ninguno)", "");
+			doneWhen = (raw ?? "")
+				.split("\n")
+				.map((line) => line.trim())
+				.filter((line) => line !== "");
+		}
+		// 3. verificación (lo que ya existe en el proyecto, sin inventar)
+		let verify = seed.verify;
+		if (verify.length === 0) {
+			const picked = await ui.select("Verificación (se ejecuta al cerrar cada paso)", [
+				...verifyCandidates(cwd),
+				"Otro comando…",
+				"Ninguno",
+			]);
+			if (picked === "Otro comando…") {
+				const command = (await ui.input("Comando de verificación", "npm run check"))?.trim();
+				if (command) verify = [command];
+			} else if (picked && picked !== "Ninguno") {
+				verify = [picked];
+			}
+		}
+		// 4. límites
+		let maxIterations = seed.maxIterations;
+		let maxIdle = seed.maxIdle;
+		let maxTokens = seed.maxTokens;
+		if (maxIterations === undefined && maxTokens === undefined) {
+			const preset = await ui.select("Límites de la ejecución desatendida", [
+				"Conservador · 2 pasos · 100k tok",
+				"Normal · 3 pasos · 200k tok",
+				"Amplio · 5 pasos · 400k tok",
+				"Personalizado…",
+			]);
+			if (preset?.startsWith("Conservador")) {
+				maxIterations = 2;
+				maxTokens = 100_000;
+			} else if (preset?.startsWith("Amplio")) {
+				maxIterations = 5;
+				maxTokens = 400_000;
+				maxIdle = 2;
+			} else if (preset?.startsWith("Personalizado")) {
+				const steps = Number.parseInt((await ui.input("Pasos por lanzamiento", "3")) ?? "", 10);
+				const tokens = Number.parseInt((await ui.input("Presupuesto de tokens", "200000")) ?? "", 10);
+				if (Number.isFinite(steps) && steps > 0) maxIterations = Math.min(steps, AUTO_MAX_STEPS);
+				if (Number.isFinite(tokens) && tokens > 0) maxTokens = tokens;
+			} else {
+				maxIterations = AUTO_DEFAULT_STEPS;
+				maxTokens = AUTO_DEFAULT_MAX_TOKENS;
+			}
+		}
+		// 5. autonomía y 6. plan/lanzamiento
+		const guarded = await ui.confirm(
+			"¿Encender la ejecución desatendida de esta ficha?",
+			"guarded: solo ejecuta pasos ya escritos, con verify y commit por paso.",
+		);
+		const taskPathNow = getActiveTaskPath(cwd);
+		const existingPending =
+			taskPathNow && existsSync(taskPathNow)
+				? sheetSteps(readFileSync(taskPathNow, "utf-8")).filter((step) => !step.done).length
+				: 0;
+		const plan = await ui.confirm(
+			"¿Que el agente proponga los pasos ahora?",
+			"Escribe 3-6 pasos atómicos en la ficha. No implementa nada.",
+		);
+		// Solo se pregunta por lanzar si hay algo que lanzar: el plan, o pasos ya escritos.
+		const launch =
+			guarded && (plan || existingPending > 0)
+				? await ui.confirm(
+						plan ? "¿Lanzo auto cuando el plan esté listo?" : "¿Lanzo auto ahora?",
+						"No = revisas los pasos y lanzas tú /hanniorq auto.",
+					)
+				: false;
+		// 7. escribir la ficha
+		const written = writeGoalSheet(cwd, {
+			goal,
+			doneWhen,
+			verify,
+			autonomy: guarded ? "guarded" : "off",
+			maxIterations,
+			maxIdle,
+			maxTokens,
+		});
+		const sheet = parseGoalSheet(readFileSync(written.path, "utf-8"));
+		const pending = sheetSteps(readFileSync(written.path, "utf-8")).filter((step) => !step.done).length;
+		const summary = [
+			`goal en odd/tasks/${written.slug}.md${written.created ? " (ficha nueva)" : ""}: ${goal}`,
+			`autonomía: ${guarded ? "guarded" : "off"} · límites ${maxIterations ?? AUTO_DEFAULT_STEPS} pasos · ${formatTokensShort(maxTokens ?? AUTO_DEFAULT_MAX_TOKENS)} tok`,
+		];
+		if (!guarded) summary.push("para ejecutarlo: /hanniorq autonomy on + /hanniorq auto");
+		ui.notify(summary.join("\n"), "info");
+		renderRail(ui, cwd);
+		// 8. encadenar plan → lanzamiento
+		if (plan && pending === 0) {
+			pendingPlan = { slug: written.slug, maxSteps: maxIterations ?? AUTO_DEFAULT_STEPS, launch };
+			autoSending = true;
+			pi.sendUserMessage(goalPlanPrompt({ slug: written.slug, sheet, cwd }));
+			if (launch) ui.notify("plan en marcha; auto arrancará solo al terminarlo.", "info");
+			return;
+		}
+		if (plan) ui.notify("la ficha ya tiene pasos: no vuelvo a planificar.", "info");
+		if (launch) tryStartAuto({ cwd, ui, pi, maxSteps: maxIterations });
+		if (!plan && !launch && !guarded) return;
+	} catch {
+		ui.notify("goal cancelado (diálogo cerrado).", "info");
+	}
+}
+
+/** El plan terminó: si el asistente pidió lanzar, arranca `auto`; si no, avisa para revisar. */
+async function planSettle(pi: Parameters<ExtensionFactory>[0], ctx: ExtensionContext): Promise<void> {
+	const pending = pendingPlan;
+	if (!pending) return;
+	pendingPlan = undefined;
+	const cwd = ctx.cwd ?? process.cwd();
+	const taskPath = getActiveTaskPath(cwd);
+	if (!taskPath || !existsSync(taskPath)) {
+		ctx.ui.notify("El plan terminó pero no hay ficha activa: revisa odd/tasks.", "warning");
+		return;
+	}
+	const steps = sheetSteps(readFileSync(taskPath, "utf-8")).filter((step) => !step.done);
+	if (steps.length === 0) {
+		ctx.ui.notify(
+			"El plan no ha escrito pasos en `## Pasos`: revisa la ficha y lanza /hanniorq auto cuando esté.",
+			"warning",
+		);
+		return;
+	}
+	if (!pending.launch) {
+		ctx.ui.notify(`Plan listo: ${steps.length} pasos. Revísalos y lanza /hanniorq auto.`, "info");
+		return;
+	}
+	tryStartAuto({ cwd, ui: ctx.ui, pi, maxSteps: pending.maxSteps });
+}
+
 /**
  * Un paso del bucle desatendido: mira el progreso real (commit nuevo o paso marcado) y las guardas, y
  * o reenvía el turno siguiente o para. Nunca decide el plan: solo encadena pasos ya escritos.
@@ -2276,7 +2591,7 @@ async function autoSettle(pi: Parameters<ExtensionFactory>[0], ctx: ExtensionCon
 	}
 	const steps = sheetSteps(text);
 	const done = steps.filter((step) => step.done).length;
-	const head = git(cwd, ["rev-parse", "--short", "HEAD"]).out;
+	const head = headSha(cwd);
 	const progressed = head !== run.lastSha || done > run.lastDone;
 	run.idle = progressed ? 0 : run.idle + 1;
 	run.lastSha = head;
@@ -2650,6 +2965,10 @@ export function createHanniorqExtension(
 			// Autonomía: el prompt que manda el bucle consume el flag; si escribes tú, el bucle se corta.
 			if (autoSending) autoSending = false;
 			else if (autoRun) cancelAuto(ctx.ui, cwd, "has escrito tú");
+			else if (pendingPlan) {
+				pendingPlan = undefined;
+				ctx.ui.notify("plan cancelado: has escrito tú.", "info");
+			}
 			if (!sessionWork.goal) sessionWork.goal = oneLine(event.prompt, 200) || undefined;
 			// Skills: catálogo del system prompt, y el ciclo de uso — un prompt nuevo cierra el anterior
 			// (`en uso` → `activado`), y si el prompt es `/skill:<nombre>` ese skill empieza en uso.
@@ -2676,7 +2995,7 @@ export function createHanniorqExtension(
 		// El run terminó: lo que estaba en uso queda como activado (ya se cargó en esta sesión).
 		pi.on("agent_settled", (_event, ctx) => {
 			if (deactivateSkillsInUse()) renderRail(ctx.ui, ctx.cwd ?? process.cwd());
-			void autoSettle(pi, ctx);
+			void (autoRun ? autoSettle(pi, ctx) : planSettle(pi, ctx));
 		});
 
 		// Indicador sODD: pinta si hay ficha activa (al iniciar la sesión,
@@ -2746,8 +3065,8 @@ export function createHanniorqExtension(
 								desc: "Activa/desactiva la capa orquestadora: con on, cada petición se clasifica (trivial vs ficha).",
 							},
 							{
-								cmd: '/hanniorq goal "<objetivo>"',
-								desc: "Pone el objetivo en la ficha (frontmatter: goal, done_when, verify, límites) y la crea si no hay ninguna activa. No ejecuta nada. Con --plan, el agente propone los pasos (sin implementarlos).",
+								cmd: '/hanniorq goal ["<objetivo>"]',
+								desc: "Asistente completo: objetivo → criterios → verificación → límites → autonomía → plan → lanzamiento. Escribe la ficha y, si dices que sí, encadena el plan y arranca auto sin pasos manuales. Con --quick escribe la ficha sin preguntar (scripts).",
 							},
 							{
 								cmd: "/hanniorq autonomy on|off|status",
@@ -2889,56 +3208,40 @@ export function createHanniorqExtension(
 					case "goal": {
 						// El goal y sus criterios viven en el frontmatter de la ficha: una sola verdad, diffable.
 						const goalArgs = parseGoalArgs(args.trim().replace(/^goal\s*/, ""));
+						// Por defecto es un asistente (objetivo → criterios → verify → límites → plan → lanzar).
+						// `--quick` (o una UI sin diálogos, p. ej. RPC) escribe la ficha y ya.
+						const wizard =
+							!goalArgs.quick &&
+							typeof ctx.ui.confirm === "function" &&
+							typeof ctx.ui.select === "function" &&
+							typeof ctx.ui.editor === "function";
+						if (wizard) {
+							await runGoalWizard(pi, ctx, goalArgs);
+							return;
+						}
 						if (!goalArgs.goal) {
 							ctx.ui.notify(
-								'Uso: /hanniorq goal "<objetivo>" [--plan] [--done "<condición>"] [--verify "<comando>"] [--max-iterations N] [--max-tokens N] [--max-idle N]',
+								'Uso: /hanniorq goal "<objetivo>" (asistente) · /hanniorq goal "<objetivo>" --quick [--plan] [--done "<condición>"] [--verify "<comando>"] [--max-iterations N] [--max-tokens N] [--max-idle N]',
 								"warning",
 							);
 							return;
 						}
-						let path = taskPath;
-						let slug = getActiveSlug(cwd);
-						let created = false;
-						if (!path || !existsSync(path)) {
-							// Sin ficha activa: se crea una con el goal dentro (los pasos los escribe el usuario).
-							const base = slugify(goalArgs.goal).slice(0, 48) || "goal";
-							slug = base;
-							const tasksDir = join(oddDir, "tasks");
-							let suffix = 2;
-							while (existsSync(join(tasksDir, `${slug}.md`))) slug = `${base}-${suffix++}`;
-							path = join(tasksDir, `${slug}.md`);
-							mkdirSync(tasksDir, { recursive: true });
-							writeFileSync(
-								path,
-								goalSheetTemplate({
-									slug,
-									goal: goalArgs.goal,
-									project: projectName(cwd),
-									base: git(cwd, ["rev-parse", "--short", "HEAD"]).out || "?",
-									args: goalArgs,
-								}),
-							);
-							writeFileSync(join(oddDir, ".active"), slug);
-							created = true;
-						} else {
-							// Ficha existente: solo se tocan los campos indicados (los límites, si se pasan).
-							const fields: Record<string, string | string[] | undefined> = { goal: goalArgs.goal };
-							if (goalArgs.doneWhen.length > 0) fields.done_when = goalArgs.doneWhen;
-							if (goalArgs.verify.length > 0) fields.verify = goalArgs.verify;
-							if (goalArgs.maxIterations !== undefined) fields.max_iterations = String(goalArgs.maxIterations);
-							if (goalArgs.maxIdle !== undefined) fields.max_idle = String(goalArgs.maxIdle);
-							if (goalArgs.maxTokens !== undefined) fields.max_tokens = String(goalArgs.maxTokens);
-							writeFileSync(path, setSheetFields(readFileSync(path, "utf-8"), fields));
-						}
-						const sheet = parseGoalSheet(readFileSync(path, "utf-8"));
-						const steps = sheetSteps(readFileSync(path, "utf-8"));
-						const pending = steps.filter((step) => !step.done).length;
-						// `--plan`: el agente escribe los pasos (plan propuesto), pero no implementa nada. Así
-						// `goal --plan` → revisar → `auto` es el flujo completo sin editar el fichero a mano.
+						const written = writeGoalSheet(cwd, {
+							goal: goalArgs.goal,
+							doneWhen: goalArgs.doneWhen,
+							verify: goalArgs.verify,
+							maxIterations: goalArgs.maxIterations,
+							maxIdle: goalArgs.maxIdle,
+							maxTokens: goalArgs.maxTokens,
+						});
+						const text = readFileSync(written.path, "utf-8");
+						const sheet = parseGoalSheet(text);
+						const pending = sheetSteps(text).filter((step) => !step.done).length;
+						// `--plan`: el agente escribe los pasos (plan propuesto), pero no implementa nada.
 						const willPlan = goalArgs.plan && pending === 0;
 						ctx.ui.notify(
 							[
-								`goal en odd/tasks/${slug}.md${created ? " (ficha nueva)" : ""}: ${goalArgs.goal}`,
+								`goal en odd/tasks/${written.slug}.md${written.created ? " (ficha nueva)" : ""}: ${goalArgs.goal}`,
 								`autonomía: ${sheet.autonomy === "guarded" ? "guarded" : "off (enciéndela con /hanniorq autonomy on)"}`,
 								pending > 0
 									? `${pending} pasos pendientes: lánzalos con /hanniorq auto`
@@ -2949,11 +3252,7 @@ export function createHanniorqExtension(
 							"info",
 						);
 						if (willPlan) {
-							const planSheet = parseGoalSheet(readFileSync(path, "utf-8"));
-							// El slug puede venir de la ficha activa o del nombre del fichero (ficha sin `.active`).
-							const planSlug =
-								slug ?? (path.replace(/\\/g, "/").split("/").pop() ?? "ficha").replace(/\.md$/, "");
-							pi.sendUserMessage(goalPlanPrompt({ slug: planSlug, sheet: planSheet, cwd }));
+							pi.sendUserMessage(goalPlanPrompt({ slug: written.slug, sheet, cwd }));
 						}
 						renderRail(ctx.ui, cwd);
 						return;
@@ -2989,78 +3288,13 @@ export function createHanniorqExtension(
 						return;
 					}
 					case "auto": {
-						if (!taskPath || !existsSync(taskPath)) {
-							ctx.ui.notify('No hay ficha activa: /hanniorq goal "<objetivo>" primero.', "warning");
-							return;
-						}
-						if (autoRun) {
-							ctx.ui.notify(
-								"Ya hay una ejecución automática en curso (/hanniorq stop para cortarla).",
-								"warning",
-							);
-							return;
-						}
-						const text = readFileSync(taskPath, "utf-8");
-						const sheet = parseGoalSheet(text);
-						if (!sheet.goal) {
-							ctx.ui.notify('La ficha no tiene goal: /hanniorq goal "<objetivo>"', "warning");
-							return;
-						}
-						if (sheet.autonomy === "off") {
-							ctx.ui.notify(
-								"Autonomía apagada en la ficha (autonomy: off). Enciéndela con /hanniorq autonomy on.",
-								"warning",
-							);
-							return;
-						}
-						const steps = sheetSteps(text);
-						const pending = steps.filter((step) => !step.done);
-						if (pending.length === 0) {
-							ctx.ui.notify(
-								"No quedan pasos pendientes en la ficha: revisa `done_when`, verifica y /hanniorq close.",
-								"info",
-							);
-							return;
-						}
 						const requested = Number.parseInt(rest[0] ?? "", 10);
-						const cap = sheet.limits.maxIterations ?? AUTO_MAX_STEPS;
-						const maxSteps = Math.max(
-							1,
-							Math.min(
-								Number.isFinite(requested) && requested > 0 ? requested : AUTO_DEFAULT_STEPS,
-								cap,
-								AUTO_MAX_STEPS,
-							),
-						);
-						autoRun = {
-							slug: getActiveSlug(cwd) ?? "ficha",
-							maxSteps,
-							stepsRun: 0,
-							idle: 0,
-							tokensAtStart: sessionTokens,
-							maxTokens: sheet.limits.maxTokens,
-							maxIdle: sheet.limits.maxIdle,
-							lastSha: git(cwd, ["rev-parse", "--short", "HEAD"]).out,
-							lastDone: steps.length - pending.length,
-							goal: sheet.goal,
-						};
-						autoAborted = false;
-						ctx.ui.notify(
-							`auto: hasta ${maxSteps} pasos · ${formatTokensShort(sheet.limits.maxTokens)} tok · para si no hay progreso en ${sheet.limits.maxIdle}. /hanniorq stop lo corta.`,
-							"info",
-						);
-						autoSending = true;
-						pi.sendUserMessage(
-							autoPrompt({
-								slug: autoRun.slug,
-								sheet,
-								step: pending[0] as SheetStep,
-								iteration: 1,
-								maxSteps,
-								tokensLeft: sheet.limits.maxTokens,
-							}),
-						);
-						renderRail(ctx.ui, cwd);
+						tryStartAuto({
+							cwd,
+							ui: ctx.ui,
+							pi,
+							maxSteps: Number.isFinite(requested) && requested > 0 ? requested : undefined,
+						});
 						return;
 					}
 					case "stop": {

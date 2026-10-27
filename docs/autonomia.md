@@ -62,35 +62,41 @@ marcado `[x]`. Si el turno no deja ninguna de las dos cosas, cuenta como iteraci
 
 ## 2. Cómo se lanza
 
-### Ruta corta (lo normal)
+### Ruta corta: el asistente (lo normal)
 
 ```text
-/hanniorq goal "arreglar el rail para que muestre el origen de cada tarea" --plan
+/hanniorq goal
 ```
 
-Crea la ficha (o actualiza la activa) con el `goal` en el frontmatter y, con **`--plan`**, pide al agente que
-proponga los pasos en `## Pasos` (3-6, atómicos, cada uno con su `verify` cuando aplique). El agente **no
-implementa nada**: solo escribe el plan. Tú lo revisas.
+Abre el asistente y pregunta, en este orden:
 
-Sin `--plan`, la ficha se crea con `## Pasos` vacío y los escribes tú.
+1. **Objetivo** (si lo escribes en el comando —`/hanniorq goal "…"`— no lo vuelve a preguntar).
+2. **Criterios de terminado** (`done_when`), uno por línea.
+3. **Verificación**: te ofrece los comandos que ya existen en el proyecto (`npm run check`, `npm run test`,
+   `./test.sh`…), «Otro comando…» o «Ninguno».
+4. **Límites**: Conservador (2 pasos · 100k tok) / Normal (3 · 200k) / Amplio (5 · 400k) / Personalizado.
+5. **¿Autonomía?** → escribe `autonomy: guarded` en esa ficha.
+6. **¿Que el agente proponga los pasos?** → el agente escribe 3-6 pasos atómicos en `## Pasos` y **no
+   implementa nada**.
+7. **¿Lanzo `auto` cuando el plan esté listo?** → si dices que sí, encadena plan → `auto` sin que toques nada.
+
+Con todo eso escribe la ficha y, si dijiste que sí, lanza. **Un solo comando de principio a fin.**
+
+Si respondes **no** al lanzamiento, verás el plan escrito y podrás revisarlo y lanzarlo con
+`/hanniorq auto`. Si la ficha ya tenía pasos pendientes, no vuelve a planificar.
+
+### Ruta rápida (scripts, sin asistente)
 
 ```text
-/hanniorq goal "…" --done "las tres fuentes se ven" --verify "npm run check" --max-tokens 150000
+/hanniorq goal "arreglar el rail" --quick [--plan] [--done "…"] [--verify "npm run check"] [--max-tokens 150000]
 ```
 
-`--done` y `--verify` se pueden repetir. `--max-iterations`, `--max-idle` y `--max-tokens` fijan los
-límites. Los acentos y espacios van entre comillas (el parser las respeta).
+`--quick` escribe la ficha con lo que lleve el comando y no pregunta nada (es también el comportamiento
+automático cuando la UI no soporta diálogos, p. ej. RPC). Con `--plan`, pide el plan al agente. `--done` y
+`--verify` se pueden repetir; los espacios van entre comillas.
 
-Revisa los pasos y después:
-
-```text
-/hanniorq autonomy on      # autonomy: guarded en ESA ficha
-/hanniorq auto             # hasta 3 pasos
-/hanniorq auto 5           # hasta 5 (limitado por max_iterations y por el techo de 10)
-```
-
-**Nada se ejecuta hasta `auto`.** `goal`, `goal --plan` y `autonomy on` solo escriben la ficha; `auto` es el
-único que manda turnos al agente.
+**Nada se ejecuta sin `auto`.** `goal` (asistente o `--quick`) y `autonomy on` solo escriben la ficha; el
+único que manda turnos es `auto`, y en el asistente solo si respondiste que sí al lanzamiento.
 
 ### Ruta con ficha existente
 

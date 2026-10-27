@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ import {
 	setSheetFields,
 	sheetSteps,
 	splitArgs,
+	verifyCandidates,
 } from "../src/extensions/hanniorq/index.ts";
 
 const theme = {
@@ -21,8 +22,16 @@ const theme = {
 
 type Handler = (args: string, ctx: unknown) => Promise<void>;
 
+/** Diálogos del asistente; los tests los guionizan (o los omiten para simular una UI sin soporte). */
+interface Dialogs {
+	editor?: (title: string, prefill?: string) => Promise<string | undefined>;
+	select?: (title: string, options: string[]) => Promise<string | undefined>;
+	confirm?: (title: string, message: string) => Promise<boolean>;
+	input?: (title: string, placeholder?: string) => Promise<string | undefined>;
+}
+
 /** Monta la extensión y devuelve sus comandos + lo que se envía al agente y se notifica. */
-function mount(): {
+function mount(dialogs: Dialogs = {}): {
 	run: (args: string, cwd: string) => Promise<void>;
 	settle: (cwd: string) => Promise<void>;
 	sent: string[];
@@ -50,25 +59,31 @@ function mount(): {
 	createHanniorqExtension()(pi);
 
 	const run = async (args: string, cwd: string): Promise<void> => {
-		await commands.get("hanniorq")?.handler(args, { cwd, ui: uiFor(cwd, notices), getContextUsage: () => undefined });
+		await commands
+			.get("hanniorq")
+			?.handler(args, { cwd, ui: uiFor(cwd, notices, dialogs), getContextUsage: () => undefined });
 	};
 	const settle = async (cwd: string): Promise<void> => {
 		for (const handler of handlers.get("agent_settled") ?? []) {
-			await handler({ type: "agent_settled" }, { cwd, ui: uiFor(cwd, notices), getContextUsage: () => undefined });
+			await handler(
+				{ type: "agent_settled" },
+				{ cwd, ui: uiFor(cwd, notices, dialogs), getContextUsage: () => undefined },
+			);
 		}
 		await new Promise((resolve) => setTimeout(resolve, 0));
 	};
 	return { run, settle, sent, notices };
 }
 
-/** UI mínima que aguanta el rail (paneles, tema, widgets). */
-function uiFor(_cwd: string, notices: string[]): Record<string, unknown> {
+/** UI mínima que aguanta el rail (paneles, tema, widgets) + los diálogos del test. */
+function uiFor(_cwd: string, notices: string[], dialogs: Dialogs = {}): Record<string, unknown> {
 	return {
 		notify: (message: string) => notices.push(message),
 		setWidget: () => {},
 		getRailTasksCollapsed: () => false,
 		getRailWidth: () => 34,
 		theme,
+		...dialogs,
 	};
 }
 
@@ -343,6 +358,7 @@ describe("/hanniorq goal --plan: propone pasos, no implementa", () => {
 	it("si la ficha ya tiene pasos pendientes, no vuelve a planificar", async () => {
 		const cwd = project();
 		const { run, sent, notices } = mount();
+		await run("stop", cwd);
 		await run('goal "arreglar el rail"', cwd);
 		const path = join(cwd, "odd", "tasks", "arreglar-el-rail.md");
 		writeFileSync(
@@ -357,5 +373,126 @@ describe("/hanniorq goal --plan: propone pasos, no implementa", () => {
 	it("parseGoalArgs reconoce --plan", () => {
 		expect(parseGoalArgs('"x" --plan').plan).toBe(true);
 		expect(parseGoalArgs('"x"').plan).toBe(false);
+	});
+});
+
+/** Diálogos guionizados: cada método consume la siguiente respuesta. */
+function scripted(answers: {
+	editors?: Array<string | undefined>;
+	selects?: Array<string | undefined>;
+	confirms?: boolean[];
+	inputs?: Array<string | undefined>;
+}): Dialogs {
+	const editors = [...(answers.editors ?? [])];
+	const selects = [...(answers.selects ?? [])];
+	const confirms = [...(answers.confirms ?? [])];
+	const inputs = [...(answers.inputs ?? [])];
+	return {
+		editor: async () => editors.shift(),
+		select: async () => selects.shift(),
+		confirm: async () => confirms.shift() ?? true,
+		input: async () => inputs.shift(),
+	};
+}
+
+describe("/hanniorq goal: asistente interactivo", () => {
+	it("pregunta todo y encadena plan -> lanzamiento sin pasos manuales", async () => {
+		const cwd = project();
+		const { run, settle, sent, notices } = mount(
+			scripted({
+				editors: [""], // criterios (vacío)
+				selects: ["npm run check", "Conservador · 2 pasos · 100k tok"],
+				confirms: [true, true, true], // autonomía, plan, lanzar
+			}),
+		);
+		await run("stop", cwd);
+		await run('goal "arreglar el rail"', cwd);
+
+		// 1) la ficha queda configurada con lo que dijo el asistente
+		const path = join(cwd, "odd", "tasks", "arreglar-el-rail.md");
+		const front = readFileSync(path, "utf-8");
+		expect(front).toContain("autonomy: guarded");
+		expect(front).toContain("max_iterations: 2");
+		expect(front).toContain("max_tokens: 100000");
+		expect(front).toContain("verify:");
+		expect(front).toContain("- npm run check");
+
+		// 2) pide el plan y avisa de que lanzará solo
+		expect(sent).toHaveLength(1);
+		expect(sent[0]).toContain("Escribe el plan del goal");
+		expect(notices.join(String.fromCharCode(10))).toContain("auto arrancará solo");
+
+		// 3) el agente escribe los pasos y, al terminar el turno, el lanzamiento es automático
+		writeFileSync(
+			path,
+			readFileSync(path, "utf-8").replace(
+				"## Pasos",
+				["## Pasos", "- [ ] S1 implementar (verify: true)", "- [ ] S2 documentar"].join(String.fromCharCode(10)),
+			),
+		);
+		await settle(cwd);
+		expect(sent).toHaveLength(2);
+		expect(sent[1]).toContain("hanniorq auto · iteración 1/2");
+		expect(sent[1]).toContain("S1 implementar");
+		await run("stop", cwd);
+	});
+
+	it("si respondes que no al lanzamiento, deja el plan listo y para", async () => {
+		const cwd = project();
+		const { run, settle, sent, notices } = mount(
+			scripted({
+				editors: [""],
+				selects: ["Ninguno", "Normal · 3 pasos · 200k tok"],
+				confirms: [true, true, false],
+			}),
+		);
+		await run('goal "arreglar el rail"', cwd);
+		const path = join(cwd, "odd", "tasks", "arreglar-el-rail.md");
+		writeFileSync(
+			path,
+			readFileSync(path, "utf-8").replace("## Pasos", ["## Pasos", "- [ ] S1 algo"].join(String.fromCharCode(10))),
+		);
+		await settle(cwd);
+		expect(sent).toHaveLength(1);
+		expect(notices.join(String.fromCharCode(10))).toContain("Plan listo: 1 pasos");
+	});
+
+	it("cancelar el objetivo no crea ficha", async () => {
+		const cwd = project();
+		const { run, notices } = mount(scripted({ editors: [undefined] }));
+		await run("goal", cwd);
+		expect(notices.join(String.fromCharCode(10))).toContain("goal cancelado");
+		expect(existsSync(join(cwd, "odd"))).toBe(false);
+	});
+
+	it("sin autonomía, no pregunta por el lanzamiento y deja la ficha en off", async () => {
+		const cwd = project();
+		const { run, sent } = mount(
+			scripted({
+				editors: ["criterio"],
+				selects: ["Ninguno", "Normal · 3 pasos · 200k tok"],
+				confirms: [false, true],
+			}),
+		);
+		await run("stop", cwd);
+		await run('goal "arreglar el rail"', cwd);
+		// autonomy off: se puede planificar, pero no se pregunta por lanzar ni se lanza nada
+		expect(sent).toHaveLength(1);
+		expect(sent[0]).toContain("Escribe el plan del goal");
+		const text = readFileSync(join(cwd, "odd", "tasks", "arreglar-el-rail.md"), "utf-8");
+		expect(text).toContain("autonomy: off");
+		expect(text).toContain("done_when:");
+	});
+});
+
+describe("candidatos de verificación", () => {
+	it("saca los scripts del package.json y test.sh", () => {
+		const cwd = project();
+		writeFileSync(
+			join(cwd, "package.json"),
+			JSON.stringify({ name: "demo", scripts: { check: "tsc", test: "vitest", deploy: "x" } }),
+		);
+		writeFileSync(join(cwd, "test.sh"), "#!/bin/sh");
+		expect(verifyCandidates(cwd)).toEqual(["npm run check", "npm run test", "./test.sh"]);
 	});
 });
