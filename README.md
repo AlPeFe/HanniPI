@@ -60,7 +60,11 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 **Comandos:**
 
 ```
-/hanniorq on | off | status        # activa/desactiva el modo orquestador
+/hanniorq on | off | status        # activa/desactiva el modo orquestador; status incluye goal y autonomía
+/hanniorq goal "<objetivo>"        # fija el goal (y sus criterios/límites) en la ficha; no ejecuta
+/hanniorq autonomy on | off | status  # ejecución desatendida de ESA ficha (autonomy: guarded | off)
+/hanniorq auto [<n>]               # encadena hasta n pasos YA escritos, con verify y commit por paso
+/hanniorq stop                     # corta la ejecución automática; la ficha queda abierta
 /hanniorq rail [<n>]               # muestra/oculta el rail derecho, o fija su ancho en columnas
 /hanniorq plan "<petición>"        # clasifica: trivial → inline; sustancial → ficha
 /hanniorq run [Tn]                 # ejecuta la siguiente tarea; si es grande y spliteable y hay tool subagent, delega partes
@@ -73,6 +77,32 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 - **Línea de memoria al cerrar el turno:** si el turno usó HanniGram, la última línea del output lo resume — `hannigram → memory: +1 nuevo · ~2 update · -1 borrado · ≫3 leído` (solo lo que pasó; `nuevo` vs `update` sale del resultado de `mem_save`). Si el turno no tocó la memoria, no se pinta nada.
 
 **El resumen de `/hanniorq close`** incluye una sección **Memoria (HanniGram)** que refleja cómo se ha trabajado la memoria en la sesión: observaciones leídas, espejo de la ficha (topic `odd/<slug>/tasks`) y resumen de sesión. Si el daemon de HanniGram no está disponible, se marca `PENDIENTE` en vez de inventar el guardado.
+
+### 🤖 Autonomía acotada — `/hanniorq goal` + `auto`
+
+HanniPI puede ejecutar **solo los pasos que ya están escritos en la ficha**, uno detrás de otro, con verificación y commit entre cada uno, y parar sola. No planifica, no añade trabajo y no se auto-evalúa.
+
+```text
+/hanniorq goal "cada tarea del rail muestra de dónde viene" \
+  --done "≡ ▤ ⛁ visibles por fila" --verify "npm run check" --max-tokens 150000
+# escribes los pasos en odd/tasks/<slug>.md
+/hanniorq autonomy on
+/hanniorq auto 3
+```
+
+El estado vive en el **frontmatter de la ficha** (`goal`, `done_when`, `verify`, `autonomy`, `max_iterations`, `max_idle`, `max_tokens`): una sola verdad, diffable y editable a mano. **Progreso = commit nuevo o un paso más marcado `[x]`**, no la opinión del modelo. El bucle para cuando:
+
+| motivo | qué hacer |
+|---|---|
+| `plan terminado` | revisa `done_when`, verifica y `/hanniorq close` |
+| techo de pasos de la invocación | relanza `/hanniorq auto` |
+| `sin progreso` (n iteraciones) | arregla el paso o el verify y relanza |
+| `presupuesto agotado` | sube `max_tokens` o parte la ficha |
+| turno abortado (Esc), `/hanniorq stop` o escribes tú | retoma cuando quieras |
+
+Mientras corre: panel `goal` en el rail (`auto 2/3 · 45k/200k tok · idle 0/1`) y `/hanniorq status`. La ficha nunca se borra ni se revierte: los commits son la red de seguridad.
+
+Guía completa (campos, motivos de parada, ejemplos y cuándo **no** usarlo): [docs/autonomia.md](docs/autonomia.md).
 
 ### 🧾 `/extract` — retrato del proyecto para otros harness
 

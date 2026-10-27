@@ -1302,6 +1302,25 @@ function railSections(ui: ExtensionUIContext, cwd: string, width: number = RAIL_
 		],
 	});
 
+	// Goal: el objetivo que se está ejecutando y, si hay bucle, por dónde va. Va justo debajo de
+	// proyecto porque es la intención de la sesión; los pasos concretos viven en `tareas`.
+	const goal = activeGoal(cwd);
+	if (goal) {
+		const goalLines: string[] = wrapLines(goal.sheet.goal ?? "", W - 2, 2).map((line) => theme.fg("text", line));
+		const stateBits = [
+			goal.sheet.autonomy === "guarded" ? theme.fg("success", "guarded") : theme.fg("muted", "off"),
+			`${goal.done}/${goal.total} pasos`,
+		];
+		goalLines.push(theme.fg("muted", stateBits.join(" · ")));
+		if (autoRun) {
+			const tokens = sessionTokens - autoRun.tokensAtStart;
+			goalLines.push(
+				`${theme.fg("warning", `auto ${autoRun.stepsRun}/${autoRun.maxSteps}`)} ${theme.fg("muted", `· ${formatTokensShort(tokens)}/${formatTokensShort(autoRun.maxTokens)} tok · idle ${autoRun.idle}/${autoRun.maxIdle}`)}`,
+			);
+		}
+		sections.push({ title: "goal", lines: goalLines });
+	}
+
 	// Tareas — lo primero que se ve (justo debajo de proyecto): es el trabajo en curso, y con los
 	// paneles por concepto el rail ya no cabe entero, así que lo importante tiene que ir arriba (el
 	// rail muestra el principio; ver `follow` en renderRail). Las define el harness (tool `todo`) para
@@ -1773,6 +1792,499 @@ export function projectFacts(cwd: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Autonomía acotada: goal en la ficha + `/hanniorq auto`.
+//
+// El estado de ejecución vive en el frontmatter de `odd/tasks/<slug>.md`:
+//   goal, done_when, verify, autonomy, max_iterations, max_idle, max_tokens
+// El bucle SOLO ejecuta pasos ya escritos en `## Pasos`: no planifica, no añade
+// trabajo y no se auto-evalúa. Si un paso no deja rastro (commit o [x]), cuenta
+// como iteración sin progreso y para.
+// ---------------------------------------------------------------------------
+
+/** Límites duros de una ejecución desatendida. */
+export interface GoalLimits {
+	/** Techo de pasos por invocación (`max_iterations`). */
+	maxIterations?: number;
+	/** Iteraciones seguidas sin commit nuevo ni paso marcado (por defecto 1). */
+	maxIdle: number;
+	/** Tokens que puede gastar la invocación entera (por defecto 200k). */
+	maxTokens: number;
+}
+
+/** Lo que la ficha declara sobre el objetivo que se está ejecutando. */
+export interface GoalSheet {
+	goal?: string;
+	doneWhen: string[];
+	verify: string[];
+	autonomy: "off" | "guarded";
+	limits: GoalLimits;
+}
+
+/** Pasos por defecto de una invocación de `/hanniorq auto`. */
+const AUTO_DEFAULT_STEPS = 3;
+/** Techo absoluto de pasos por invocación, pase lo que pase en la ficha. */
+const AUTO_MAX_STEPS = 10;
+const AUTO_DEFAULT_MAX_TOKENS = 200_000;
+const AUTO_DEFAULT_MAX_IDLE = 1;
+
+/** Texto sin comillas (JSON o simples) o tal cual. */
+function unquoteScalar(value: string): string {
+	const trimmed = value.trim();
+	if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+		try {
+			return String(JSON.parse(trimmed));
+		} catch {
+			return trimmed.slice(1, -1);
+		}
+	}
+	if (trimmed.length >= 2 && trimmed.startsWith("'") && trimmed.endsWith("'")) return trimmed.slice(1, -1);
+	return trimmed;
+}
+
+/**
+ * Frontmatter de la ficha como pares clave → escalar o lista. Subconjunto de YAML a propósito: claves
+ * planas, `clave: valor`, `clave: [a, b]` y listas de bloque (`- item`). Cualquier otra línea se ignora.
+ */
+export function parseFrontmatter(text: string): Map<string, string | string[]> {
+	const fields = new Map<string, string | string[]>();
+	const lines = text.split("\n");
+	if (lines[0]?.trim() !== "---") return fields;
+	let current: string | undefined;
+	for (let index = 1; index < lines.length; index++) {
+		const line = lines[index] ?? "";
+		if (line.trim() === "---") break;
+		const item = /^\s+-\s+(.*)$/.exec(line);
+		if (item && current) {
+			const list = fields.get(current);
+			if (Array.isArray(list)) list.push(unquoteScalar(item[1] ?? ""));
+			continue;
+		}
+		const pair = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
+		if (!pair) continue;
+		const key = pair[1] ?? "";
+		const rest = (pair[2] ?? "").trim();
+		current = key;
+		if (rest === "") {
+			fields.set(key, []);
+			continue;
+		}
+		if (rest.startsWith("[") && rest.endsWith("]")) {
+			const inner = rest.slice(1, -1).trim();
+			fields.set(key, inner === "" ? [] : inner.split(",").map(unquoteScalar));
+			continue;
+		}
+		fields.set(key, unquoteScalar(rest));
+	}
+	return fields;
+}
+
+/** Una clave del frontmatter como texto ("" si no está). */
+function frontmatterScalar(fields: Map<string, string | string[]>, key: string): string {
+	const value = fields.get(key);
+	if (typeof value === "string") return value.trim();
+	return Array.isArray(value) && value.length > 0 ? (value[0] ?? "").trim() : "";
+}
+
+/** Una clave del frontmatter como lista (vacía si no está o está vacía). */
+function frontmatterList(fields: Map<string, string | string[]>, key: string): string[] {
+	const value = fields.get(key);
+	const list = Array.isArray(value) ? value : typeof value === "string" && value.trim() !== "" ? [value] : [];
+	return list.map((item) => item.trim()).filter((item) => item !== "");
+}
+
+/** Lee `goal`, criterios, verificación, autonomía y límites del frontmatter de la ficha. */
+export function parseGoalSheet(text: string): GoalSheet {
+	const fields = parseFrontmatter(text);
+	const number = (key: string): number | undefined => {
+		const parsed = Number.parseInt(frontmatterScalar(fields, key), 10);
+		return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+	};
+	return {
+		goal: frontmatterScalar(fields, "goal") || undefined,
+		doneWhen: frontmatterList(fields, "done_when"),
+		verify: frontmatterList(fields, "verify"),
+		autonomy: frontmatterScalar(fields, "autonomy").toLowerCase() === "guarded" ? "guarded" : "off",
+		limits: {
+			maxIterations: number("max_iterations"),
+			maxIdle: number("max_idle") ?? AUTO_DEFAULT_MAX_IDLE,
+			maxTokens: number("max_tokens") ?? AUTO_DEFAULT_MAX_TOKENS,
+		},
+	};
+}
+
+/** Un valor de frontmatter: texto plano si es seguro, JSON entre comillas si no. */
+function formatFrontmatterValue(value: string): string {
+	return /^[A-Za-z0-9_./-][^#:\n]*$/.test(value) ? value : JSON.stringify(value);
+}
+
+/** Una clave y su valor como líneas de frontmatter. */
+function renderFrontmatterField(key: string, value: string | string[]): string[] {
+	if (!Array.isArray(value)) return [`${key}: ${formatFrontmatterValue(value)}`];
+	if (value.length === 0) return [`${key}: []`];
+	return [`${key}:`, ...value.map((item) => `  - ${formatFrontmatterValue(item)}`)];
+}
+
+/**
+ * Reescribe campos del frontmatter conservando el resto del fichero (y su orden). Si la ficha no tiene
+ * frontmatter, lo crea delante. Un valor `undefined` borra la clave.
+ */
+export function setSheetFields(text: string, fields: Record<string, string | string[] | undefined>): string {
+	const lines = text.split("\n");
+	let block: string[] = [];
+	let rest = lines;
+	if (lines[0]?.trim() === "---") {
+		const end = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
+		if (end > 0) {
+			block = lines.slice(1, end);
+			rest = lines.slice(end + 1);
+		}
+	}
+	const entries: Array<{ key?: string; lines: string[] }> = [];
+	for (const line of block) {
+		const pair = /^([A-Za-z0-9_-]+):/.exec(line);
+		if (pair) entries.push({ key: pair[1], lines: [line] });
+		else if (entries.length > 0) entries[entries.length - 1]?.lines.push(line);
+		else entries.push({ lines: [line] });
+	}
+	for (const [key, value] of Object.entries(fields)) {
+		const replacement = value === undefined ? [] : renderFrontmatterField(key, value);
+		const existing = entries.find((entry) => entry.key === key);
+		if (existing) {
+			if (replacement.length === 0) entries.splice(entries.indexOf(existing), 1);
+			else existing.lines = replacement;
+			continue;
+		}
+		if (replacement.length > 0) entries.push({ key, lines: replacement });
+	}
+	return ["---", ...entries.flatMap((entry) => entry.lines), "---", ...rest].join("\n");
+}
+
+/** Un paso de `## Pasos`: id (`S1`), estado y texto. */
+export interface SheetStep {
+	id: string;
+	done: boolean;
+	text: string;
+}
+
+/** Pasos de la sección `## Pasos`, con su id y estado. Una ficha sin esa sección no tiene pasos. */
+export function sheetSteps(text: string): SheetStep[] {
+	const steps: SheetStep[] = [];
+	let inPasos = false;
+	for (const line of text.split("\n")) {
+		if (line.startsWith("## ")) {
+			inPasos = line.startsWith("## Pasos");
+			continue;
+		}
+		if (!inPasos) continue;
+		const match = /^-\s*\[( |x|X)\]\s*(.*)$/.exec(line);
+		if (!match) continue;
+		const body = (match[2] ?? "").trim();
+		steps.push({
+			done: (match[1] ?? " ") !== " ",
+			id: /^([A-Za-z]+\d+)\b/.exec(body)?.[1] ?? `S${steps.length + 1}`,
+			text: body,
+		});
+	}
+	return steps;
+}
+
+/** Foto de la ejecución desatendida que decide si el bucle sigue o para. */
+export interface AutoProgress {
+	stepsRun: number;
+	maxSteps: number;
+	idle: number;
+	maxIdle: number;
+	tokens: number;
+	maxTokens: number;
+	pending: number;
+}
+
+/**
+ * Decide el siguiente movimiento del bucle y por qué. Pura (sin sesión ni daemon) para poder testear el
+ * orden de las guardas: plan terminado > pasos de la invocación > sin progreso > presupuesto.
+ */
+export function autoOutcome(progress: AutoProgress): { stop: boolean; reason: string } {
+	if (progress.pending === 0) return { stop: true, reason: "plan terminado: no quedan pasos pendientes" };
+	if (progress.stepsRun >= progress.maxSteps) {
+		return { stop: true, reason: `hecho: ${progress.stepsRun} de ${progress.maxSteps} pasos de esta invocación` };
+	}
+	if (progress.idle >= progress.maxIdle) {
+		const times = progress.idle === 1 ? "iteración" : "iteraciones";
+		return { stop: true, reason: `sin progreso en ${progress.idle} ${times} (ni commit ni paso marcado)` };
+	}
+	if (progress.tokens >= progress.maxTokens) {
+		return {
+			stop: true,
+			reason: `presupuesto agotado (${formatTokensShort(progress.tokens)}/${formatTokensShort(progress.maxTokens)} tok)`,
+		};
+	}
+	return { stop: false, reason: "" };
+}
+
+/** Ejecución desatendida en curso (una por sesión). */
+interface AutoRun {
+	slug: string;
+	maxSteps: number;
+	stepsRun: number;
+	idle: number;
+	tokensAtStart: number;
+	maxTokens: number;
+	maxIdle: number;
+	lastSha: string;
+	lastDone: number;
+	goal?: string;
+}
+
+let autoRun: AutoRun | undefined;
+/** El siguiente `before_agent_start` es nuestro, no del usuario (para no cancelar el bucle). */
+let autoSending = false;
+/** El último turno se abortó (Esc): el bucle no debe reenviarse. */
+let autoAborted = false;
+/** Tokens acumulados en la sesión (todas las respuestas del modelo). */
+let sessionTokens = 0;
+
+/** Tokens de una respuesta del modelo (input + output + caché). */
+function usageTokens(usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }): number {
+	return (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+}
+
+/** Ficha activa con su goal (para el rail y para `status`). */
+function activeGoal(cwd: string): { sheet: GoalSheet; slug: string; done: number; total: number } | undefined {
+	const slug = getActiveSlug(cwd);
+	const path = getActiveTaskPath(cwd);
+	if (!slug || !path || !existsSync(path)) return undefined;
+	let text: string;
+	try {
+		text = readFileSync(path, "utf-8");
+	} catch {
+		return undefined;
+	}
+	const sheet = parseGoalSheet(text);
+	if (!sheet.goal) return undefined;
+	const steps = sheetSteps(text);
+	return { sheet, slug, done: steps.filter((step) => step.done).length, total: steps.length };
+}
+
+/** Prompt del paso que toca: autocontenido y con las reglas de la ejecución desatendida. */
+function autoPrompt(options: {
+	slug: string;
+	sheet: GoalSheet;
+	step: SheetStep;
+	iteration: number;
+	maxSteps: number;
+	tokensLeft: number;
+}): string {
+	const { slug, sheet, step, iteration, maxSteps, tokensLeft } = options;
+	const stepVerify = /verify:\s*([^)]+)/.exec(step.text)?.[1]?.trim();
+	const verify = stepVerify ?? sheet.verify[0] ?? "la que corresponda al paso (proporcionada, sin ceremonia)";
+	return [
+		`[hanniorq auto · iteración ${iteration}/${maxSteps}] Ejecuta SOLO el siguiente paso pendiente de la ficha \`odd/tasks/${slug}.md\`: «${step.text}».`,
+		"",
+		"Reglas de esta ejecución desatendida:",
+		`1. Implementa el paso. Nada de trabajo extra, nada de reescribir el plan ni de reordenar pasos.`,
+		`2. Verifica con \`${verify}\`. Si falla, arréglalo (máximo 2 intentos).`,
+		"3. Commit atómico siguiendo la convención del repo.",
+		`4. En la ficha: marca \`- [x] ${step.id} … — <sha7>\` y reescribe \`## Siguiente\` con el paso siguiente exacto.`,
+		"5. Si el paso no es ejecutable, el verify sigue fallando o hay que decidir algo de diseño: PARA, no lo inventes y explica el bloqueo en dos líneas.",
+		"",
+		`Objetivo: ${sheet.goal ?? "(sin goal en la ficha)"}. Presupuesto restante de esta invocación: ${formatTokensShort(tokensLeft)} tok.`,
+	].join("\n");
+}
+
+/** Para el bucle y deja el goal abierto (la ficha sigue en `active`). */
+function cancelAuto(ui: ExtensionUIContext, cwd: string, reason: string): void {
+	const run = autoRun;
+	autoRun = undefined;
+	autoSending = false;
+	if (!run) return;
+	const finished = /^(hecho|plan terminado)/.test(reason);
+	const next = finished
+		? "\nSi el plan está terminado: revisa `done_when`, verifica lo que falte y /hanniorq close."
+		: "\nLa ficha y su goal siguen abiertos: retoma con /hanniorq auto cuando lo hayas revisado.";
+	ui.notify(`auto detenido (${run.slug}): ${reason}.${next}`, finished ? "info" : "warning");
+	renderRail(ui, cwd);
+}
+
+/**
+ * Divide argumentos respetando comillas (`/hanniorq goal "arreglar el rail" --verify "npm run check"`).
+ * Sin esto, un goal con espacios llegaba troceado al parser de flags.
+ */
+export function splitArgs(input: string): string[] {
+	const args: string[] = [];
+	let current = "";
+	let quote: string | undefined;
+	for (const char of input) {
+		if (quote) {
+			if (char === quote) quote = undefined;
+			else current += char;
+			continue;
+		}
+		if (char === '"' || char === "'") {
+			quote = char;
+			continue;
+		}
+		if (/\s/.test(char)) {
+			if (current !== "") args.push(current);
+			current = "";
+			continue;
+		}
+		current += char;
+	}
+	if (current !== "") args.push(current);
+	return args;
+}
+
+/** Argumentos de `/hanniorq goal`. */
+export interface GoalArgs {
+	goal: string;
+	doneWhen: string[];
+	verify: string[];
+	maxIterations?: number;
+	maxIdle?: number;
+	maxTokens?: number;
+}
+
+/** Parsea `/hanniorq goal "<objetivo>" [--done <cond>] [--verify <cmd>] [--max-iterations N] [--max-tokens N]`. */
+export function parseGoalArgs(input: string): GoalArgs {
+	const words: string[] = [];
+	const doneWhen: string[] = [];
+	const verify: string[] = [];
+	let maxIterations: number | undefined;
+	let maxIdle: number | undefined;
+	let maxTokens: number | undefined;
+	const tokens = splitArgs(input);
+	for (let index = 0; index < tokens.length; index++) {
+		const token = tokens[index] ?? "";
+		const value = (): string => tokens[++index] ?? "";
+		const positive = (): number | undefined => {
+			const parsed = Number.parseInt(value(), 10);
+			return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+		};
+		switch (token) {
+			case "--done": {
+				const item = value();
+				if (item) doneWhen.push(item);
+				break;
+			}
+			case "--verify": {
+				const item = value();
+				if (item) verify.push(item);
+				break;
+			}
+			case "--max-iterations":
+				maxIterations = positive();
+				break;
+			case "--max-idle":
+				maxIdle = positive();
+				break;
+			case "--max-tokens":
+				maxTokens = positive();
+				break;
+			default:
+				if (!token.startsWith("--")) words.push(token);
+		}
+	}
+	return { goal: words.join(" ").trim(), doneWhen, verify, maxIterations, maxIdle, maxTokens };
+}
+
+/** Plantilla de ficha nueva cuando `/hanniorq goal` crea el fichero. */
+function goalSheetTemplate(options: {
+	slug: string;
+	goal: string;
+	project: string;
+	base: string;
+	args: GoalArgs;
+}): string {
+	const { slug, goal, project, base, args } = options;
+	const sheet: GoalSheet = {
+		goal,
+		doneWhen: args.doneWhen,
+		verify: args.verify,
+		autonomy: "off",
+		limits: {
+			maxIterations: args.maxIterations,
+			maxIdle: args.maxIdle ?? AUTO_DEFAULT_MAX_IDLE,
+			maxTokens: args.maxTokens ?? AUTO_DEFAULT_MAX_TOKENS,
+		},
+	};
+	const front = setSheetFields("", {
+		topic_key: `${project}/feat/${slug}`,
+		status: "active",
+		base,
+		goal: sheet.goal ?? "",
+		done_when: sheet.doneWhen,
+		verify: sheet.verify,
+		autonomy: sheet.autonomy,
+		max_iterations: args.maxIterations !== undefined ? String(args.maxIterations) : undefined,
+		max_idle: String(sheet.limits.maxIdle),
+		max_tokens: String(sheet.limits.maxTokens),
+	});
+	return `${front}# ${slug}\nObjetivo: ${goal}\nAlcance: (pendiente) · Fuera: (pendiente)\nVerify: ${args.verify[0] ?? "(pendiente)"}\n\n## Pasos\n\n## Siguiente\nEscribe los pasos en \`## Pasos\` (uno por linea, \`- [ ] S1 …\`) y después /hanniorq autonomy on + /hanniorq auto.\n`;
+}
+
+/**
+ * Un paso del bucle desatendido: mira el progreso real (commit nuevo o paso marcado) y las guardas, y
+ * o reenvía el turno siguiente o para. Nunca decide el plan: solo encadena pasos ya escritos.
+ */
+async function autoSettle(pi: Parameters<ExtensionFactory>[0], ctx: ExtensionContext): Promise<void> {
+	const run = autoRun;
+	if (!run) return;
+	const cwd = ctx.cwd ?? process.cwd();
+	if (autoAborted) {
+		cancelAuto(ctx.ui, cwd, "turno abortado");
+		return;
+	}
+	run.stepsRun++;
+	let text: string;
+	try {
+		text = readFileSync(join(getOddDir(cwd), "tasks", `${run.slug}.md`), "utf-8");
+	} catch {
+		cancelAuto(ctx.ui, cwd, "la ficha desapareció");
+		return;
+	}
+	const steps = sheetSteps(text);
+	const done = steps.filter((step) => step.done).length;
+	const head = git(cwd, ["rev-parse", "--short", "HEAD"]).out;
+	const progressed = head !== run.lastSha || done > run.lastDone;
+	run.idle = progressed ? 0 : run.idle + 1;
+	run.lastSha = head;
+	run.lastDone = done;
+	const tokens = sessionTokens - run.tokensAtStart;
+	const pending = steps.filter((step) => !step.done);
+	const outcome = autoOutcome({
+		stepsRun: run.stepsRun,
+		maxSteps: run.maxSteps,
+		idle: run.idle,
+		maxIdle: run.maxIdle,
+		tokens,
+		maxTokens: run.maxTokens,
+		pending: pending.length,
+	});
+	if (outcome.stop) {
+		cancelAuto(ctx.ui, cwd, outcome.reason);
+		return;
+	}
+	const sheet = parseGoalSheet(text);
+	const next = pending[0];
+	if (!next) {
+		cancelAuto(ctx.ui, cwd, "no quedan pasos pendientes");
+		return;
+	}
+	autoSending = true;
+	pi.sendUserMessage(
+		autoPrompt({
+			slug: run.slug,
+			sheet,
+			step: next,
+			iteration: run.stepsRun + 1,
+			maxSteps: run.maxSteps,
+			tokensLeft: Math.max(0, run.maxTokens - tokens),
+		}),
+	);
+	renderRail(ctx.ui, cwd);
+}
+
+// ---------------------------------------------------------------------------
 // /helpme — lista de comandos. La PRESENCIA la mandan el registro de extensiones
 // y `BUILTIN_SLASH_COMMANDS` (core); `COMMAND_USAGE` solo añade el uso resumido,
 // así que un comando nuevo aparece en la lista aunque no esté en ese mapa.
@@ -1781,7 +2293,7 @@ export function projectFacts(cwd: string): string {
 /** Uso resumido para el listado; un comando sin entrada se muestra como `/nombre`. */
 const COMMAND_USAGE: Record<string, string> = {
 	helpme: "/helpme",
-	hanniorq: "/hanniorq on|off|status|plan|new|run|watch|close|resume|rail|tasks|clear",
+	hanniorq: "/hanniorq goal|autonomy|auto|stop|on|off|status|plan|new|run|watch|close|resume|rail|tasks|clear",
 	hannigram: "/hannigram init|status|adr <título>",
 	skipmemory: "/skipmemory [on|off]",
 	hannidump: "/hannidump [ruta]",
@@ -1876,6 +2388,7 @@ export function createHanniorqExtension(
 			memTurn = emptyMemTurnSummary();
 			turnSoddTouched = false;
 			soddWorking = true;
+			autoAborted = false;
 			renderRail(ctx.ui, ctx.cwd ?? process.cwd());
 		});
 
@@ -2060,9 +2573,19 @@ export function createHanniorqExtension(
 		// Resumen de fin de turno: widget pequeñito (abajo) con tools usadas,
 		// si sODD se usó y si se escribió en memoria de HanniGram — estilo
 		// "updated skill" de Hermes.
-		pi.on("turn_end", (_event, ctx) => {
+		pi.on("turn_end", (event, ctx) => {
 			trackContext(ctx);
 			const cwd = ctx.cwd ?? process.cwd();
+			// Presupuesto de la autonomía: tokens reales de cada respuesta del modelo.
+			const message = event.message as {
+				role?: string;
+				usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
+				stopReason?: string;
+			};
+			if (message.role === "assistant") {
+				if (message.usage) sessionTokens += usageTokens(message.usage);
+				if (message.stopReason === "aborted") autoAborted = true;
+			}
 			soddWorking = false;
 			const ind = soddIndicator(cwd);
 			const parts: string[] = [];
@@ -2092,6 +2615,9 @@ export function createHanniorqExtension(
 		// se cachea por sesión, así que no cuesta una petición por turno.
 		pi.on("before_agent_start", async (event, ctx) => {
 			const cwd = ctx.cwd ?? process.cwd();
+			// Autonomía: el prompt que manda el bucle consume el flag; si escribes tú, el bucle se corta.
+			if (autoSending) autoSending = false;
+			else if (autoRun) cancelAuto(ctx.ui, cwd, "has escrito tú");
 			if (!sessionWork.goal) sessionWork.goal = oneLine(event.prompt, 200) || undefined;
 			// Skills: catálogo del system prompt, y el ciclo de uso — un prompt nuevo cierra el anterior
 			// (`en uso` → `activado`), y si el prompt es `/skill:<nombre>` ese skill empieza en uso.
@@ -2118,6 +2644,7 @@ export function createHanniorqExtension(
 		// El run terminó: lo que estaba en uso queda como activado (ya se cargó en esta sesión).
 		pi.on("agent_settled", (_event, ctx) => {
 			if (deactivateSkillsInUse()) renderRail(ctx.ui, ctx.cwd ?? process.cwd());
+			void autoSettle(pi, ctx);
 		});
 
 		// Indicador sODD: pinta si hay ficha activa (al iniciar la sesión,
@@ -2162,7 +2689,8 @@ export function createHanniorqExtension(
 		});
 
 		pi.registerCommand("hanniorq", {
-			description: "Orquestador sODD: help|on|off|status|plan|new|run|watch|close|resume|rail|tasks|clear",
+			description:
+				"Orquestador sODD: help|goal|autonomy|auto|stop|on|off|status|plan|new|run|watch|close|resume|rail|tasks|clear",
 			handler: async (args, ctx) => {
 				const [sub, ...rest] = args.trim().split(/\s+/);
 				const cwd = ctx.cwd ?? process.cwd();
@@ -2186,8 +2714,24 @@ export function createHanniorqExtension(
 								desc: "Activa/desactiva la capa orquestadora: con on, cada petición se clasifica (trivial vs ficha).",
 							},
 							{
+								cmd: '/hanniorq goal "<objetivo>"',
+								desc: "Pone el objetivo en la ficha (frontmatter: goal, done_when, verify, límites) y la crea si no hay ninguna activa. No ejecuta nada.",
+							},
+							{
+								cmd: "/hanniorq autonomy on|off|status",
+								desc: "Enciende/apaga la ejecución desatendida de ESA ficha (autonomy: guarded|off) y muestra su estado.",
+							},
+							{
+								cmd: "/hanniorq auto [n]",
+								desc: "Encadena hasta n pasos YA escritos en la ficha, con verify y commit entre cada uno; para sin progreso o al agotar presupuesto. No planifica.",
+							},
+							{
+								cmd: "/hanniorq stop",
+								desc: "Corta la ejecución automática en curso; la ficha y su goal quedan abiertos.",
+							},
+							{
 								cmd: "/hanniorq status",
-								desc: "Estado del orquestador: activo/inactivo + ficha activa actual + resumen de lo que se está haciendo.",
+								desc: "Estado del orquestador: activo/inactivo, ficha activa, goal, autonomía, límites y, si corre, iteración y tokens.",
 							},
 							{
 								cmd: "/hanniorq new <slug>",
@@ -2288,10 +2832,199 @@ export function createHanniorqExtension(
 					}
 					case "status": {
 						const slug = getActiveSlug(cwd);
-						ctx.ui.notify(
+						const lines = [
 							`hanniorq: ${state.on ? "ON" : "OFF"}${slug ? ` · ficha activa: odd/tasks/${slug}.md` : " · sin ficha activa"}`,
+						];
+						const goal = activeGoal(cwd);
+						if (goal) {
+							lines.push(`goal: ${goal.sheet.goal}`);
+							lines.push(
+								`autonomía: ${goal.sheet.autonomy === "guarded" ? "guarded" : "off"} · pasos ${goal.done}/${goal.total} · límites ${goal.sheet.limits.maxIterations ?? AUTO_MAX_STEPS} pasos · ${formatTokensShort(goal.sheet.limits.maxTokens)} tok · idle ${goal.sheet.limits.maxIdle}`,
+							);
+							if (goal.sheet.doneWhen.length > 0) lines.push(`done_when: ${goal.sheet.doneWhen.join(" · ")}`);
+						} else if (slug) {
+							lines.push('sin goal en la ficha: /hanniorq goal "<objetivo>"');
+						}
+						if (autoRun) {
+							const tokens = sessionTokens - autoRun.tokensAtStart;
+							lines.push(
+								`auto: ${autoRun.stepsRun}/${autoRun.maxSteps} pasos · ${formatTokensShort(tokens)}/${formatTokensShort(autoRun.maxTokens)} tok · idle ${autoRun.idle}/${autoRun.maxIdle}`,
+							);
+						}
+						ctx.ui.notify(lines.join("\n"), "info");
+						return;
+					}
+					case "goal": {
+						// El goal y sus criterios viven en el frontmatter de la ficha: una sola verdad, diffable.
+						const goalArgs = parseGoalArgs(args.trim().replace(/^goal\s*/, ""));
+						if (!goalArgs.goal) {
+							ctx.ui.notify(
+								'Uso: /hanniorq goal "<objetivo>" [--done "<condición>"] [--verify "<comando>"] [--max-iterations N] [--max-tokens N] [--max-idle N]',
+								"warning",
+							);
+							return;
+						}
+						let path = taskPath;
+						let slug = getActiveSlug(cwd);
+						let created = false;
+						if (!path || !existsSync(path)) {
+							// Sin ficha activa: se crea una con el goal dentro (los pasos los escribe el usuario).
+							const base = slugify(goalArgs.goal).slice(0, 48) || "goal";
+							slug = base;
+							const tasksDir = join(oddDir, "tasks");
+							let suffix = 2;
+							while (existsSync(join(tasksDir, `${slug}.md`))) slug = `${base}-${suffix++}`;
+							path = join(tasksDir, `${slug}.md`);
+							mkdirSync(tasksDir, { recursive: true });
+							writeFileSync(
+								path,
+								goalSheetTemplate({
+									slug,
+									goal: goalArgs.goal,
+									project: projectName(cwd),
+									base: git(cwd, ["rev-parse", "--short", "HEAD"]).out || "?",
+									args: goalArgs,
+								}),
+							);
+							writeFileSync(join(oddDir, ".active"), slug);
+							created = true;
+						} else {
+							// Ficha existente: solo se tocan los campos indicados (los límites, si se pasan).
+							const fields: Record<string, string | string[] | undefined> = { goal: goalArgs.goal };
+							if (goalArgs.doneWhen.length > 0) fields.done_when = goalArgs.doneWhen;
+							if (goalArgs.verify.length > 0) fields.verify = goalArgs.verify;
+							if (goalArgs.maxIterations !== undefined) fields.max_iterations = String(goalArgs.maxIterations);
+							if (goalArgs.maxIdle !== undefined) fields.max_idle = String(goalArgs.maxIdle);
+							if (goalArgs.maxTokens !== undefined) fields.max_tokens = String(goalArgs.maxTokens);
+							writeFileSync(path, setSheetFields(readFileSync(path, "utf-8"), fields));
+						}
+						const sheet = parseGoalSheet(readFileSync(path, "utf-8"));
+						const steps = sheetSteps(readFileSync(path, "utf-8"));
+						const pending = steps.filter((step) => !step.done).length;
+						ctx.ui.notify(
+							[
+								`goal en odd/tasks/${slug}.md${created ? " (ficha nueva)" : ""}: ${goalArgs.goal}`,
+								`autonomía: ${sheet.autonomy === "guarded" ? "guarded" : "off (enciéndela con /hanniorq autonomy on)"}`,
+								pending > 0
+									? `${pending} pasos pendientes: lánzalos con /hanniorq auto`
+									: "sin pasos pendientes todavía: escríbelos en `## Pasos` y vuelve a /hanniorq auto",
+							].join("\n"),
 							"info",
 						);
+						renderRail(ctx.ui, cwd);
+						return;
+					}
+					case "autonomy": {
+						const mode = (rest[0] ?? "status").toLowerCase();
+						if (!taskPath || !existsSync(taskPath)) {
+							ctx.ui.notify('No hay ficha activa: /hanniorq goal "<objetivo>" primero.', "warning");
+							return;
+						}
+						const text = readFileSync(taskPath, "utf-8");
+						const sheet = parseGoalSheet(text);
+						if (mode === "status") {
+							ctx.ui.notify(
+								`autonomía: ${sheet.autonomy === "guarded" ? "guarded (solo ejecuta pasos ya escritos)" : "off"}${autoRun ? ` · en curso ${autoRun.stepsRun}/${autoRun.maxSteps}` : ""}`,
+								"info",
+							);
+							return;
+						}
+						if (mode !== "on" && mode !== "off") {
+							ctx.ui.notify("Uso: /hanniorq autonomy on|off|status", "warning");
+							return;
+						}
+						writeFileSync(taskPath, setSheetFields(text, { autonomy: mode === "on" ? "guarded" : "off" }));
+						if (mode === "off" && autoRun) cancelAuto(ctx.ui, cwd, "autonomía apagada");
+						ctx.ui.notify(
+							mode === "on"
+								? "autonomía guarded: /hanniorq auto ejecutará solo los pasos escritos en la ficha, con verify y commit por paso. Para con /hanniorq stop."
+								: "autonomía off: /hanniorq auto no ejecuta nada.",
+							"info",
+						);
+						renderRail(ctx.ui, cwd);
+						return;
+					}
+					case "auto": {
+						if (!taskPath || !existsSync(taskPath)) {
+							ctx.ui.notify('No hay ficha activa: /hanniorq goal "<objetivo>" primero.', "warning");
+							return;
+						}
+						if (autoRun) {
+							ctx.ui.notify(
+								"Ya hay una ejecución automática en curso (/hanniorq stop para cortarla).",
+								"warning",
+							);
+							return;
+						}
+						const text = readFileSync(taskPath, "utf-8");
+						const sheet = parseGoalSheet(text);
+						if (!sheet.goal) {
+							ctx.ui.notify('La ficha no tiene goal: /hanniorq goal "<objetivo>"', "warning");
+							return;
+						}
+						if (sheet.autonomy === "off") {
+							ctx.ui.notify(
+								"Autonomía apagada en la ficha (autonomy: off). Enciéndela con /hanniorq autonomy on.",
+								"warning",
+							);
+							return;
+						}
+						const steps = sheetSteps(text);
+						const pending = steps.filter((step) => !step.done);
+						if (pending.length === 0) {
+							ctx.ui.notify(
+								"No quedan pasos pendientes en la ficha: revisa `done_when`, verifica y /hanniorq close.",
+								"info",
+							);
+							return;
+						}
+						const requested = Number.parseInt(rest[0] ?? "", 10);
+						const cap = sheet.limits.maxIterations ?? AUTO_MAX_STEPS;
+						const maxSteps = Math.max(
+							1,
+							Math.min(
+								Number.isFinite(requested) && requested > 0 ? requested : AUTO_DEFAULT_STEPS,
+								cap,
+								AUTO_MAX_STEPS,
+							),
+						);
+						autoRun = {
+							slug: getActiveSlug(cwd) ?? "ficha",
+							maxSteps,
+							stepsRun: 0,
+							idle: 0,
+							tokensAtStart: sessionTokens,
+							maxTokens: sheet.limits.maxTokens,
+							maxIdle: sheet.limits.maxIdle,
+							lastSha: git(cwd, ["rev-parse", "--short", "HEAD"]).out,
+							lastDone: steps.length - pending.length,
+							goal: sheet.goal,
+						};
+						autoAborted = false;
+						ctx.ui.notify(
+							`auto: hasta ${maxSteps} pasos · ${formatTokensShort(sheet.limits.maxTokens)} tok · para si no hay progreso en ${sheet.limits.maxIdle}. /hanniorq stop lo corta.`,
+							"info",
+						);
+						autoSending = true;
+						pi.sendUserMessage(
+							autoPrompt({
+								slug: autoRun.slug,
+								sheet,
+								step: pending[0] as SheetStep,
+								iteration: 1,
+								maxSteps,
+								tokensLeft: sheet.limits.maxTokens,
+							}),
+						);
+						renderRail(ctx.ui, cwd);
+						return;
+					}
+					case "stop": {
+						if (!autoRun) {
+							ctx.ui.notify("No hay ejecución automática en curso.", "info");
+							return;
+						}
+						cancelAuto(ctx.ui, cwd, "detenido por ti");
 						return;
 					}
 					case "plan": {
@@ -2449,7 +3182,7 @@ export function createHanniorqExtension(
 					}
 					default:
 						ctx.ui.notify(
-							"Uso: /hanniorq on|off|status|plan|new <slug>|run|watch|close|resume|rail|tasks|clear",
+							"Uso: /hanniorq goal|autonomy|auto|stop|on|off|status|plan|new <slug>|run|watch|close|resume|rail|tasks|clear",
 							"warning",
 						);
 				}

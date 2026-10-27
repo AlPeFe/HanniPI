@@ -28,6 +28,7 @@ Versión reducida de ODD (Organic Driven Development) para un agente único con 
 - **Pregunta solo ante duda real o decisión con consecuencias.** No sobrepreguntes; apóyate en la persona detrás del harness.
 - **Sin TDD ni miles de tests:** test solo si el caso concreto lo exige; si no, verificación funcional.
 - **Pregunta antes de pushear cambios grandes o abrir una PR.** Los commits atómicos no necesitan confirmación.
+- **Ejecución desatendida:** si el usuario quiere encadenar pasos sin ir diciendo "sigue", la palanca es `/hanniorq auto` (ficha con `autonomy: guarded` y `goal` en el frontmatter): el bucle ejecuta solo los pasos ya escritos, con verify y commit por paso. No planifiques ni reordenes dentro de él; si un paso no es ejecutable, para y explica el bloqueo.
 - **Resumen:** por puntos; al final, resumen corto y decidido (pocas líneas) + guardar en memoria (`mem_save`) solo lo que merezca recordarse. Resúmenes claros, humanos y escaneables (lectura vertical, sin abrumar).
 
 ## Flujo
