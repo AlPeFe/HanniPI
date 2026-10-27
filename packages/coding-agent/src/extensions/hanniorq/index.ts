@@ -2139,6 +2139,8 @@ export interface GoalArgs {
 	goal: string;
 	doneWhen: string[];
 	verify: string[];
+	/** Pide al agente que escriba los pasos (no los ejecuta). */
+	plan: boolean;
 	maxIterations?: number;
 	maxIdle?: number;
 	maxTokens?: number;
@@ -2149,6 +2151,7 @@ export function parseGoalArgs(input: string): GoalArgs {
 	const words: string[] = [];
 	const doneWhen: string[] = [];
 	const verify: string[] = [];
+	let plan = false;
 	let maxIterations: number | undefined;
 	let maxIdle: number | undefined;
 	let maxTokens: number | undefined;
@@ -2171,6 +2174,9 @@ export function parseGoalArgs(input: string): GoalArgs {
 				if (item) verify.push(item);
 				break;
 			}
+			case "--plan":
+				plan = true;
+				break;
 			case "--max-iterations":
 				maxIterations = positive();
 				break;
@@ -2184,7 +2190,33 @@ export function parseGoalArgs(input: string): GoalArgs {
 				if (!token.startsWith("--")) words.push(token);
 		}
 	}
-	return { goal: words.join(" ").trim(), doneWhen, verify, maxIterations, maxIdle, maxTokens };
+	return { goal: words.join(" ").trim(), doneWhen, verify, plan, maxIterations, maxIdle, maxTokens };
+}
+
+/**
+ * Prompt de `/hanniorq goal … --plan`: propone el plan en `## Pasos` y no implementa nada. El humano
+ * revisa y lanza `auto`, así que planificar aquí no le quita el control al bucle.
+ */
+function goalPlanPrompt(options: { slug: string; sheet: GoalSheet; cwd: string }): string {
+	const { slug, sheet, cwd } = options;
+	const verify =
+		sheet.verify.length > 0 ? sheet.verify.join(" · ") : "(sin verify global: el que corresponda a cada paso)";
+	return [
+		`[hanniorq plan] Escribe el plan del goal en la ficha \`odd/tasks/${slug}.md\` (${cwd}). No implementes nada.`,
+		"",
+		`Objetivo: ${sheet.goal ?? "(sin goal)"}`,
+		`Criterios (done_when): ${sheet.doneWhen.length > 0 ? sheet.doneWhen.join(" · ") : "(no definidos)"}`,
+		`Verificación (verify): ${verify}`,
+		"",
+		"Haz solo esto:",
+		"1. Lee lo mínimo para planificar: la ficha y los ficheros que el goal toca.",
+		"2. Escribe entre 3 y 6 pasos atómicos en `## Pasos`, con id (`S1`, `S2`, …) y, cuando aplique, su `(verify: <comando>)`.",
+		"3. Cada paso debe ser ejecutable y verificable por separado; nada de pasos que se pisen entre sí.",
+		"4. Rellena `## Siguiente` con el primer paso exacto.",
+		"5. No ejecutes verify, no hagas commits y no toques código.",
+		"",
+		"Al acabar, resume en dos líneas los pasos propuestos. Yo los reviso y lanzo `/hanniorq auto`.",
+	].join("\n");
 }
 
 /** Plantilla de ficha nueva cuando `/hanniorq goal` crea el fichero. */
@@ -2715,7 +2747,7 @@ export function createHanniorqExtension(
 							},
 							{
 								cmd: '/hanniorq goal "<objetivo>"',
-								desc: "Pone el objetivo en la ficha (frontmatter: goal, done_when, verify, límites) y la crea si no hay ninguna activa. No ejecuta nada.",
+								desc: "Pone el objetivo en la ficha (frontmatter: goal, done_when, verify, límites) y la crea si no hay ninguna activa. No ejecuta nada. Con --plan, el agente propone los pasos (sin implementarlos).",
 							},
 							{
 								cmd: "/hanniorq autonomy on|off|status",
@@ -2859,7 +2891,7 @@ export function createHanniorqExtension(
 						const goalArgs = parseGoalArgs(args.trim().replace(/^goal\s*/, ""));
 						if (!goalArgs.goal) {
 							ctx.ui.notify(
-								'Uso: /hanniorq goal "<objetivo>" [--done "<condición>"] [--verify "<comando>"] [--max-iterations N] [--max-tokens N] [--max-idle N]',
+								'Uso: /hanniorq goal "<objetivo>" [--plan] [--done "<condición>"] [--verify "<comando>"] [--max-iterations N] [--max-tokens N] [--max-idle N]',
 								"warning",
 							);
 							return;
@@ -2901,16 +2933,28 @@ export function createHanniorqExtension(
 						const sheet = parseGoalSheet(readFileSync(path, "utf-8"));
 						const steps = sheetSteps(readFileSync(path, "utf-8"));
 						const pending = steps.filter((step) => !step.done).length;
+						// `--plan`: el agente escribe los pasos (plan propuesto), pero no implementa nada. Así
+						// `goal --plan` → revisar → `auto` es el flujo completo sin editar el fichero a mano.
+						const willPlan = goalArgs.plan && pending === 0;
 						ctx.ui.notify(
 							[
 								`goal en odd/tasks/${slug}.md${created ? " (ficha nueva)" : ""}: ${goalArgs.goal}`,
 								`autonomía: ${sheet.autonomy === "guarded" ? "guarded" : "off (enciéndela con /hanniorq autonomy on)"}`,
 								pending > 0
 									? `${pending} pasos pendientes: lánzalos con /hanniorq auto`
-									: "sin pasos pendientes todavía: escríbelos en `## Pasos` y vuelve a /hanniorq auto",
+									: willPlan
+										? "pidiendo el plan al agente (no implementa nada); revísalo y luego /hanniorq auto"
+										: "sin pasos pendientes todavía: escríbelos en `## Pasos` (o usa --plan) y vuelve a /hanniorq auto",
 							].join("\n"),
 							"info",
 						);
+						if (willPlan) {
+							const planSheet = parseGoalSheet(readFileSync(path, "utf-8"));
+							// El slug puede venir de la ficha activa o del nombre del fichero (ficha sin `.active`).
+							const planSlug =
+								slug ?? (path.replace(/\\/g, "/").split("/").pop() ?? "ficha").replace(/\.md$/, "");
+							pi.sendUserMessage(goalPlanPrompt({ slug: planSlug, sheet: planSheet, cwd }));
+						}
 						renderRail(ctx.ui, cwd);
 						return;
 					}

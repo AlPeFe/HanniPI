@@ -320,3 +320,42 @@ describe("bucle: encadena pasos y para solo", () => {
 		expect(readFileSync(join(cwd, "odd", ".active"), "utf-8")).toBe("arreglar-el-rail");
 	});
 });
+
+describe("/hanniorq goal --plan: propone pasos, no implementa", () => {
+	it("manda el prompt de planificación y no ejecuta nada", async () => {
+		const cwd = project();
+		const { run, sent, notices } = mount();
+		await run('goal "arreglar el rail" --plan', cwd);
+		expect(sent).toHaveLength(1);
+		expect(sent[0]).toContain("Escribe el plan del goal");
+		expect(sent[0]).toContain("No implementes nada");
+		expect(sent[0]).toContain("No ejecutes verify, no hagas commits");
+		expect(notices.join("\n")).toContain("pidiendo el plan al agente");
+	});
+
+	it("sin --plan no manda nada al agente", async () => {
+		const cwd = project();
+		const { run, sent } = mount();
+		await run('goal "arreglar el rail"', cwd);
+		expect(sent).toEqual([]);
+	});
+
+	it("si la ficha ya tiene pasos pendientes, no vuelve a planificar", async () => {
+		const cwd = project();
+		const { run, sent, notices } = mount();
+		await run('goal "arreglar el rail"', cwd);
+		const path = join(cwd, "odd", "tasks", "arreglar-el-rail.md");
+		writeFileSync(
+			path,
+			readFileSync(path, "utf-8").replace("## Pasos", ["## Pasos", "- [ ] S1 hacer algo"].join("\n")),
+		);
+		await run('goal "arreglar el rail" --plan', cwd);
+		expect(sent).toEqual([]);
+		expect(notices.join("\n")).toContain("1 pasos pendientes");
+	});
+
+	it("parseGoalArgs reconoce --plan", () => {
+		expect(parseGoalArgs('"x" --plan').plan).toBe(true);
+		expect(parseGoalArgs('"x"').plan).toBe(false);
+	});
+});

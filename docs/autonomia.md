@@ -65,11 +65,14 @@ marcado `[x]`. Si el turno no deja ninguna de las dos cosas, cuenta como iteraci
 ### Ruta corta (lo normal)
 
 ```text
-/hanniorq goal "arreglar el rail para que muestre el origen de cada tarea"
+/hanniorq goal "arreglar el rail para que muestre el origen de cada tarea" --plan
 ```
 
-Crea la ficha (o actualiza la activa) con el `goal` en el frontmatter. **No ejecuta nada.** Si la ficha
-es nueva, escribe la plantilla y te deja `## Pasos` vacío.
+Crea la ficha (o actualiza la activa) con el `goal` en el frontmatter y, con **`--plan`**, pide al agente que
+proponga los pasos en `## Pasos` (3-6, atómicos, cada uno con su `verify` cuando aplique). El agente **no
+implementa nada**: solo escribe el plan. Tú lo revisas.
+
+Sin `--plan`, la ficha se crea con `## Pasos` vacío y los escribes tú.
 
 ```text
 /hanniorq goal "…" --done "las tres fuentes se ven" --verify "npm run check" --max-tokens 150000
@@ -78,13 +81,16 @@ es nueva, escribe la plantilla y te deja `## Pasos` vacío.
 `--done` y `--verify` se pueden repetir. `--max-iterations`, `--max-idle` y `--max-tokens` fijan los
 límites. Los acentos y espacios van entre comillas (el parser las respeta).
 
-Escribe los pasos (a mano o pidiéndoselos al agente) y después:
+Revisa los pasos y después:
 
 ```text
 /hanniorq autonomy on      # autonomy: guarded en ESA ficha
 /hanniorq auto             # hasta 3 pasos
 /hanniorq auto 5           # hasta 5 (limitado por max_iterations y por el techo de 10)
 ```
+
+**Nada se ejecuta hasta `auto`.** `goal`, `goal --plan` y `autonomy on` solo escriben la ficha; `auto` es el
+único que manda turnos al agente.
 
 ### Ruta con ficha existente
 
@@ -140,17 +146,14 @@ trabajo hecho. Los commits son la red de seguridad.
 ## 5. Ejemplo completo
 
 ```text
-# 1. el objetivo y sus criterios
-/hanniorq goal "el rail marca si cada tarea viene del turno, de odd/tasks o de HanniGram" \
+# 1. el objetivo y sus criterios (--plan: el agente propone los pasos, sin implementarlos)
+/hanniorq goal "el rail marca si cada tarea viene del turno, de odd/tasks o de HanniGram" --plan \
   --done "≡ ▤ ⛁ visibles por fila" \
   --done "README y CHANGELOG al día" \
   --verify "npm run check" \
   --max-tokens 150000
 
-# 2. los pasos (a mano en odd/tasks/<slug>.md)
-#    - [ ] S1 escribir los iconos y el origen en railTodos()
-#    - [ ] S2 test de parseMemoryBoards()
-#    - [ ] S3 documentar en README + CHANGELOG
+# 2. revisa los pasos que ha propuesto en odd/tasks/<slug>.md (y ajústalos si hace falta)
 
 # 3. ejecución desatendida
 /hanniorq autonomy on

@@ -61,7 +61,7 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 
 ```
 /hanniorq on | off | status        # activa/desactiva el modo orquestador; status incluye goal y autonomía
-/hanniorq goal "<objetivo>"        # fija el goal (y sus criterios/límites) en la ficha; no ejecuta
+/hanniorq goal "<objetivo>"        # fija el goal (y sus criterios/límites) en la ficha; no ejecuta. Con --plan, el agente propone los pasos
 /hanniorq autonomy on | off | status  # ejecución desatendida de ESA ficha (autonomy: guarded | off)
 /hanniorq auto [<n>]               # encadena hasta n pasos YA escritos, con verify y commit por paso
 /hanniorq stop                     # corta la ejecución automática; la ficha queda abierta
@@ -83,12 +83,14 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 HanniPI puede ejecutar **solo los pasos que ya están escritos en la ficha**, uno detrás de otro, con verificación y commit entre cada uno, y parar sola. No planifica, no añade trabajo y no se auto-evalúa.
 
 ```text
-/hanniorq goal "cada tarea del rail muestra de dónde viene" \
+/hanniorq goal "cada tarea del rail muestra de dónde viene" --plan \
   --done "≡ ▤ ⛁ visibles por fila" --verify "npm run check" --max-tokens 150000
-# escribes los pasos en odd/tasks/<slug>.md
+# revisas los pasos que ha propuesto en odd/tasks/<slug>.md
 /hanniorq autonomy on
 /hanniorq auto 3
 ```
+
+**Nada se ejecuta hasta `auto`**: `goal` (con o sin `--plan`) solo escribe la ficha; con `--plan` el agente propone los pasos pero no implementa nada, así que el plan lo apruebas tú.
 
 El estado vive en el **frontmatter de la ficha** (`goal`, `done_when`, `verify`, `autonomy`, `max_iterations`, `max_idle`, `max_tokens`): una sola verdad, diffable y editable a mano. **Progreso = commit nuevo o un paso más marcado `[x]`**, no la opinión del modelo. El bucle para cuando:
 
