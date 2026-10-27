@@ -232,6 +232,8 @@ Los assets viven en `docs/images/` y son todo el branding del proyecto:
 | `hanni-avatar.png` | icono cuadrado (1024×1024) para GitHub y avatares |
 | `hanni-mascot.png` | conejito suelto con fondo transparente, para donde haga falta |
 
+Los tres se regeneran con la misma receta y salen idénticos: `python scripts/generate-brand.py` (PIL + la Rysana Mono del repo). Para GitHub, sube `docs/images/hanni-avatar.png` como avatar del repositorio/cuenta cuando cambie la marca.
+
 Paleta: rosa `#FF9EC8` (principal), rosa claro `#FFD9EC`, lila `#D9B0FF` y denim `#8FB4FF` como
 acento. El nombre va en **Rysana Mono**, la misma tipografía que la TUI, así el logo y el harness
 comparten letra. En la terminal el logo se dibuja con bloques y estos colores (con degradado por
