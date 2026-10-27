@@ -21,7 +21,7 @@ HanniPI está pensado para el desarrollo cotidiano de software:
 
 - **Memoria que sobrevive a los cortes de contexto.** Cada proyecto guarda observaciones (What/Why/Where/Learned) en una base SQLite local, consultable desde la propia TUI.
 - **Tareas atómicas con evidencia.** El protocolo **sODD** (Small ODD) lleva una ficha por feature que sobrevive a compactaciones, con commits atómicos y evidencia por sha.
-- **Extensiones por defecto.** MCP, subagentes y acceso web vienen activos de serie.
+- **Extensiones bajo demanda.** Nada se inyecta en el prompt por defecto: solo las tools base (`read`, `bash`, `edit`, `write`). MCP, web y subagentes se instalan con `/packages` cuando los necesitas.
 - **Gestión de plugins en la TUI.** Instala, actualiza y elimina extensiones sin salir del agente.
 
 ## Características
@@ -49,12 +49,12 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 
 **La diferencia clave con ODD adulto: no todo es investigación, no todo requiere resumen, no todo requiere tests, y la delegación es condicional (no por defecto).**
 
-- Un cambio **pequeño y entendido** (1 paso, sin riesgo) se hace **inline**: sin ficha, sin subagentes, sin resumen.
+- Un cambio **pequeño y entendido** (1 paso, sin riesgo) se hace **inline**: sin ficha y sin resumen.
 - Solo el trabajo **sustancial** (2+ pasos, varios archivos, riesgo) genera ficha y se trabaja por pasos.
 - **No todo se testea.** Solo se verifica lo que tiene un check aplicable y un resultado esperado; si no, se hace verificación funcional proporcionada o se declara "sin check".
 - El **resumen** (con la sección de memoria HanniGram) solo se genera en `/hanniorq close` y solo si hubo ficha.
-- **Delegación CONDICIONAL:** sODD decide: si la ficha activa es grande y **spliteable** (pasos independientes), cada parte se delega con la tool `subagent` (ficha recortada + paso como contexto). Un solo bloque se ejecuta inline. **Opciones de forzado**: escribe "delega" en tu petición para forzar delegación, o "no delegues" para prohibirla.
-- **Widget de flota:** mientras hay subagentes trabajando, el widget `hanniorq-fleet` se muestra en la TUI con un spinner por worker y la tarea que está haciendo (adaptación del fleet widget de pi-subagents a sODD: la ficha `odd/tasks/` es la fuente de verdad).
+- **Delegación CONDICIONAL, nunca por defecto:** solo si la tool `subagent` está activa (viene con el paquete `npm:pi-subagents`, que no se instala de serie) y la ficha activa es grande y **spliteable** (pasos independientes), cada parte se delega con esa tool pasándole la ficha recortada + el paso concreto como contexto. Un subagente no ve la conversación, así que el contexto debe ser autocontenido. Sin la tool, todo se ejecuta inline y el agente no finge delegar. **Opciones de forzado** (con la tool activa): escribe "delega" en tu petición para forzar delegación, o "no delegues" para prohibirla.
+- **Widget de flota** (solo con la tool `subagent` activa): mientras hay subagentes trabajando, el widget `hanniorq-fleet` se muestra en la TUI con un spinner por worker y la tarea que está haciendo (adaptación del fleet widget de pi-subagents a sODD: la ficha `odd/tasks/` es la fuente de verdad).
 - **Rail derecho:** la columna derecha muestra proyecto, memoria HanniGram, **contexto y compactación** (porcentaje usado, umbral al que se dispara sola y aviso cuando está cerca, ya pasó o está desactivada), sODD, **las tareas** (la tool `todo`, o los pasos de la ficha), **MCP** (servidores configurados y su estado, o por qué no hay ninguno) y los cambios del worktree. Las tareas largas se envuelven en varias líneas y el ancho de la columna se ajusta con `ctrl+alt+→` / `ctrl+alt+←` o `/hanniorq rail <n>` (20-100 columnas, se recuerda en `settings.json`); `ctrl+alt+t` pliega/despliega las tareas.
 
 **Comandos:**
@@ -63,8 +63,8 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 /hanniorq on | off | status        # activa/desactiva el modo orquestador
 /hanniorq rail [<n>]               # muestra/oculta el rail derecho, o fija su ancho en columnas
 /hanniorq plan "<petición>"        # clasifica: trivial → inline; sustancial → ficha
-/hanniorq run [Tn]                 # ejecuta la siguiente tarea; si es grande y spliteable, delega partes con subagent
-/hanniorq watch                    # muestra en qué se trabaja: fichas activas + subagentes en vuelo
+/hanniorq run [Tn]                 # ejecuta la siguiente tarea; si es grande y spliteable y hay tool subagent, delega partes
+/hanniorq watch                    # muestra en qué se trabaja: fichas activas + subagentes en vuelo (si los hay)
 /hanniorq close                    # genera el resumen final (plantilla fija + memoria HanniGram)
 /hanniorq resume [<slug>]          # recupera contexto: mem_context → mem_search → ficha
 ```
@@ -84,7 +84,12 @@ La TUI separa chrome, conversación y rail, en vez de mezclarlo todo en una colu
 
 ### 🔌 Gestión de extensiones
 
-- **Paquetes por defecto** (activos siempre): `pi-mcp-adapter`, `pi-subagents`, `pi-web-access`.
+- **Sin paquetes por defecto.** `DEFAULT_PACKAGES` está vacío a propósito: subagentes, web y MCP no son tools fijos del prompt (inflaban ~12k tokens por turno sin usarse). Se re-habilitan con `packages` en `~/.pi/agent/settings.json`:
+
+  ```json
+  { "packages": ["npm:pi-subagents", "npm:pi-web-access", "npm:pi-mcp-adapter"] }
+  ```
+
 - **`/packages`** — lista los paquetes con su estado (ámbito, instalado, updates disponibles), instala/actualiza/elimina y **busca en el catálogo** (`c`): los paquetes nativos de Pi publicados en npm con el keyword `pi-package` (la misma galería que [pi.dev/packages](https://pi.dev/packages)). Elegir un resultado instala `npm:<nombre>`.
 
 ### 🔗 MCP

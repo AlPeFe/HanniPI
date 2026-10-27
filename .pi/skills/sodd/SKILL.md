@@ -20,7 +20,7 @@ Versión reducida de ODD (Organic Driven Development) para un agente único con 
 3. **Un `verify:` por paso.** Es el comando que debe pasar antes de commitear (sustituto barato del review).
 4. **Commit atómico por paso** con Conventional Commit; la evidencia es el sha.
 5. **Promoción:** si la tarea crece, se promueve a ODD adulto (feature document completo).
-6. **Delegación CONDICIONAL (sODD decide, tú puedes forzar):** si la ficha activa es grande (2+ pasos, varios archivos/paquetes) y **spliteable** (pasos independientes que no chocan entre sí), delega cada parte con la tool `subagent`, pasándole la ficha recortada + el paso concreto como contexto. Un subagente no ve esta conversación, así que el contexto debe ser autocontenido (ficha + paso + verify). Los subagentes devuelven su respuesta y sobreviven (puedes cambiar a su conversación). Solo ejecuta inline lo que no sea spliteable. **El usuario puede forzar la delegación** escribiendo "delega" en su petición: entonces delega aunque la tarea parezca pequeña; y puede prohibirla con "no delegues". El widget `hanniorq-fleet` pinta cada subagente en vuelo (spinner + tarea) mientras trabaja; `/hanniorq watch` muestra fichas + flota.
+6. **Delegación CONDICIONAL, nunca por defecto:** solo si hay una tool `subagent` activa (viene con el paquete `npm:pi-subagents`, que no se instala de serie) y la ficha activa es grande (2+ pasos, varios archivos/paquetes) y **spliteable** (pasos independientes que no chocan entre sí), delega cada parte con esa tool, pasándole la ficha recortada + el paso concreto como contexto. Un subagente no ve esta conversación, así que el contexto debe ser autocontenido (ficha + paso + verify). Solo ejecuta inline lo que no sea spliteable. Sin la tool, todo va inline y no se finge delegar. **El usuario puede forzar la delegación** (con la tool activa) escribiendo "delega" en su petición, y puede prohibirla con "no delegues". El widget `hanniorq-fleet` pinta cada subagente en vuelo (spinner + tarea); `/hanniorq watch` muestra fichas + flota.
 
 ## Conducta (orgánico, no burocrático)
 
@@ -36,7 +36,7 @@ Versión reducida de ODD (Organic Driven Development) para un agente único con 
 2. **Clasificar.** Trivial (1 paso, <20 líneas) → commit directo, sin ficha. Sustancial → ficha.
 3. **Crear la ficha** `odd/tasks/<slug>.md` (plantilla abajo), escribir `odd/.active` con el slug, y `mem_save(topic_key, What/Why)`.
 4. **Por cada paso:**
-   - Implementar (o delegar: si la tarea tiene 2+ pasos independientes, lanza `subagent` por paso con la ficha recortada como contexto; vigila con `/hanniorq watch`).
+   - Implementar inline, o delegar si hay tool `subagent` y la tarea tiene 2+ pasos independientes (lanza `subagent` por paso con la ficha recortada como contexto; vigila con `/hanniorq watch`).
    - Ejecutar el `verify` del paso.
    - Commit `type(scope): mensaje`.
    - Marcar `[x] S<n> <acción> — <sha7>`.
