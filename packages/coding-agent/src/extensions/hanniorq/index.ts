@@ -22,7 +22,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { type Dirent, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { type Component, Key, Panel, ScrollView, Spacer, type StackChild, Text, VStack } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -1147,8 +1147,61 @@ function collectTodos(lines: string[], onlyPasos: boolean): Array<{ done: boolea
 	return { label: "igual", color: "muted" };
 }
 
-/** Tareas del rail: la lista del harness (`todo`) si existe; si no, los pasos de la ficha sODD. */
-function railTodos(cwd: string): Array<{ done: boolean; text: string; current: boolean }> {
+/** De dónde sale cada tarea que pinta el panel `tareas` del rail. */
+export type TaskSource = "todo" | "sheet" | "db";
+
+/** Icono por origen: `≡` lista del turno, `▤` ficha del proyecto, `⛁` HanniGram. */
+const TASK_SOURCE_ICON: Record<TaskSource, string> = { todo: "≡", sheet: "▤", db: "⛁" };
+
+/** Una tarea del panel: lo que se pinta más su origen. */
+export interface RailTask {
+	done: boolean;
+	text: string;
+	current: boolean;
+	source: TaskSource;
+}
+
+/** Pasos de las fichas espejadas en HanniGram, por slug (`odd/<slug>/tasks`). */
+const memoryBoards = new Map<string, Array<{ done: boolean; text: string }>>();
+
+/**
+ * `slug → pasos` a partir de las observaciones del espejo (`odd/<slug>/tasks`). Pura: se testea sin
+ * daemon. Las observaciones que no son de una ficha (otro topic, sin contenido, sin pasos) se ignoran.
+ */
+export function parseMemoryBoards(
+	observations: ReadonlyArray<Pick<DumpObservation, "topicKey" | "content">>,
+): Map<string, Array<{ done: boolean; text: string }>> {
+	const boards = new Map<string, Array<{ done: boolean; text: string }>>();
+	for (const obs of observations) {
+		const slug = obs.topicKey?.match(/^odd\/(.+)\/tasks$/)?.[1];
+		if (!slug || typeof obs.content !== "string") continue;
+		const lines = obs.content.split("\n");
+		const pasos = collectTodos(lines, true);
+		const steps = pasos.length > 0 ? pasos : collectTodos(lines, false);
+		if (steps.length > 0) boards.set(slug, steps);
+	}
+	return boards;
+}
+
+/**
+ * Refresca el espejo de las fichas en HanniGram: una lectura de la BD por sesión (el rail se pinta
+ * de forma síncrona, así que no puede consultar la BD en cada frame). Con `/skipmemory` no se toca nada.
+ */
+async function refreshMemoryBoards(cwd: string): Promise<void> {
+	if (memorySkipped()) return;
+	const observations = await hannigram<DumpObservation[]>(
+		`/api/observations?${new URLSearchParams({ cwd, limit: "200" })}`,
+	);
+	memoryBoards.clear();
+	if (!observations) return;
+	for (const [slug, steps] of parseMemoryBoards(observations)) memoryBoards.set(slug, steps);
+}
+
+/**
+ * Tareas del rail, con su origen: la lista del harness (`todo`), los pasos de la ficha `odd/tasks` o,
+ * si no hay ficha local, el espejo que la BD guardó con ese slug (otro worktree, clon limpio).
+ */
+function railTodos(cwd: string): RailTask[] {
 	if (harnessTodos.length > 0) {
 		const hasInProgress = harnessTodos.some((t) => t.status === "in_progress");
 		const firstPending = harnessTodos.findIndex((t) => t.status === "pending");
@@ -1156,11 +1209,19 @@ function railTodos(cwd: string): Array<{ done: boolean; text: string; current: b
 			done: t.status === "completed",
 			text: t.text,
 			current: t.status === "in_progress" || (!hasInProgress && i === firstPending),
+			source: "todo",
 		}));
 	}
 	const steps = todoSteps(cwd);
-	const current = steps.findIndex((t) => !t.done);
-	return steps.map((t, i) => ({ done: t.done, text: t.text, current: i === current }));
+	const localCurrent = steps.findIndex((t) => !t.done);
+	if (steps.length > 0) {
+		return steps.map((t, i) => ({ ...t, current: i === localCurrent, source: "sheet" }));
+	}
+	const slug = getActiveSlug(cwd);
+	const mirrored = slug ? memoryBoards.get(slug) : undefined;
+	if (!mirrored || mirrored.length === 0) return [];
+	const dbCurrent = mirrored.findIndex((t) => !t.done);
+	return mirrored.map((t, i) => ({ ...t, current: i === dbCurrent, source: "db" }));
 }
 
 /** Una sección del rail: el título vive en el borde del panel y estas líneas dentro. */
@@ -1258,8 +1319,10 @@ function railSections(ui: ExtensionUIContext, cwd: string, width: number = RAIL_
 					: t.current
 						? theme.fg("warning", "▸")
 						: theme.fg("muted", "·");
-				wrapLines(t.text, W - 2, MAX_TODO_LINES).forEach((line, index) => {
-					taskLines.push(`${index === 0 ? `${mark} ` : "  "}${line}`);
+				// Origen de la tarea: ≡ lista del turno · ▤ ficha odd/tasks del proyecto · ⛁ HanniGram.
+				const origin = theme.fg("dim", TASK_SOURCE_ICON[t.source]);
+				wrapLines(t.text, W - 4, MAX_TODO_LINES).forEach((line, index) => {
+					taskLines.push(`${index === 0 ? `${origin} ${mark} ` : "    "}${line}`);
 				});
 			});
 			if (todos.length > MAX_RAIL_TODOS) {
@@ -1539,6 +1602,173 @@ export function createTodoToolDefinition(): ToolDefinition<typeof todoSchema, { 
 			};
 		},
 	};
+}
+
+// ---------------------------------------------------------------------------
+// /extract — retrato del proyecto en .md por tipología, para que otro harness
+// (sin esta conversación y sin HanniGram) trabaje sin reexplorar. El comando
+// recoge los hechos baratos del disco y la redacción la hace el agente; si ya
+// existen los documentos NO se toca nada: el usuario decide sobrescribir
+// (--overwrite) o crear una versión nueva (--version).
+// ---------------------------------------------------------------------------
+
+/** Documentos que produce `/extract`, en orden de lectura recomendada. */
+export const EXTRACT_DOCS: readonly string[] = [
+	"README.md",
+	"architecture.md",
+	"stack.md",
+	"design.md",
+	"conventions.md",
+];
+
+/** Qué debe contener cada documento (se le pasa al agente tal cual). */
+const EXTRACT_DOC_DESCRIPTIONS: Record<string, string> = {
+	"README.md": "índice: qué es, cómo se levanta y se verifica, y tabla de qué doc leer para qué.",
+	"architecture.md":
+		"capas y módulos, entry points, flujos, datos, límites y deps internas (diagrama ASCII si aclara).",
+	"stack.md": "tecnologías y versiones, librerías relevantes (para qué están), build/test/lint y plataformas.",
+	"design.md":
+		"UI: pantallas y componentes, sistema visual (color/tipografía/espaciado, dónde viven los tokens), estados vacío/carga/error y atajos. Sin UI: dilo en dos líneas.",
+	"conventions.md":
+		"patrones que se repiten: naming, estructura de ficheros, forma de errores/config/tests y reglas del repo que un agente debe respetar.",
+};
+
+/** Manifiestos que delatan el stack sin abrir media docena de ficheros. */
+const MANIFESTS: readonly string[] = [
+	"package.json",
+	"pnpm-workspace.yaml",
+	"tsconfig.json",
+	"pyproject.toml",
+	"requirements.txt",
+	"Cargo.toml",
+	"go.mod",
+	"composer.json",
+	"pubspec.yaml",
+	"Gemfile",
+	"pom.xml",
+	"build.gradle",
+];
+
+/** Directorios que no aportan al retrato y sí cuestan tiempo. */
+const FACTS_SKIP = new Set([
+	"node_modules",
+	".git",
+	"dist",
+	"build",
+	"out",
+	"coverage",
+	"target",
+	"vendor",
+	".venv",
+	"venv",
+	".next",
+	".turbo",
+	".cache",
+	".idea",
+	".vscode",
+]);
+
+/** Docs de `EXTRACT_DOCS` que ya existen en `dir` (lo que dispara el aviso de conflicto). */
+export function existingDocs(dir: string, docs: readonly string[] = EXTRACT_DOCS): string[] {
+	return docs.filter((doc) => existsSync(join(dir, doc)));
+}
+
+/** Nombres versionados (`architecture-v2.md`, ...) con el primer N libre: nunca pisa lo existente. */
+export function versionedDocs(dir: string, docs: readonly string[] = EXTRACT_DOCS): string[] {
+	const forVersion = (version: number): string[] => docs.map((doc) => `${doc.replace(/\.md$/i, "")}-v${version}.md`);
+	let version = 2;
+	while (forVersion(version).some((name) => existsSync(join(dir, name)))) version++;
+	return forVersion(version);
+}
+
+/** Cuenta ficheros por extensión (los más comunes primero) para dar idea del tamaño del proyecto. */
+function countFilesByExtension(root: string, limit: number, maxDepth = 6): Array<[string, number]> {
+	const counts = new Map<string, number>();
+	let seen = 0;
+	const walk = (dir: string, depth: number): void => {
+		if (seen >= limit || depth > maxDepth) return;
+		let entries: Dirent[];
+		try {
+			entries = readdirSync(dir, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			if (seen >= limit) return;
+			if (entry.isDirectory()) {
+				if (!FACTS_SKIP.has(entry.name)) walk(join(dir, entry.name), depth + 1);
+				continue;
+			}
+			if (!entry.isFile()) continue;
+			seen++;
+			const dot = entry.name.lastIndexOf(".");
+			const ext = dot > 0 ? `.${entry.name.slice(dot + 1).toLowerCase()}` : "(sin extensión)";
+			counts.set(ext, (counts.get(ext) ?? 0) + 1);
+		}
+	};
+	walk(root, 0);
+	return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12);
+}
+
+/**
+ * Hechos que se leen del disco (manifiestos, scripts, deps, estructura, tamaño) para que el agente no
+ * gaste tokens explorando lo que ya está aquí. Determinista: sin red, sin LLM.
+ */
+export function projectFacts(cwd: string): string {
+	const lines: string[] = [];
+	let root: string[] = [];
+	try {
+		root = readdirSync(cwd);
+	} catch {
+		return "(no se pudo leer el directorio)";
+	}
+	const projectFiles = root.filter((name) => /\.(csproj|sln|fsproj|vbproj)$/i.test(name));
+	const manifests = MANIFESTS.filter((name) => existsSync(join(cwd, name)));
+	lines.push(`manifiestos: ${[...manifests, ...projectFiles].join(", ") || "ninguno"}`);
+	lines.push(
+		`raíz: ${
+			root
+				.filter((name) => !name.startsWith("."))
+				.slice(0, 24)
+				.join(", ") || "vacía"
+		}`,
+	);
+	const packagesDir = join(cwd, "packages");
+	if (existsSync(packagesDir)) {
+		try {
+			const packages = readdirSync(packagesDir).filter((name) => !name.startsWith("."));
+			if (packages.length > 0) lines.push(`packages/: ${packages.slice(0, 20).join(", ")}`);
+		} catch {
+			/* packages/ ilegible: no aporta */
+		}
+	}
+	const pkgPath = join(cwd, "package.json");
+	if (existsSync(pkgPath)) {
+		try {
+			const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as {
+				name?: string;
+				scripts?: Record<string, string>;
+				dependencies?: Record<string, string>;
+				devDependencies?: Record<string, string>;
+			};
+			lines.push(`package: ${pkg.name ?? "?"}`);
+			const scripts = Object.keys(pkg.scripts ?? {});
+			if (scripts.length > 0) lines.push(`scripts: ${scripts.join(", ")}`);
+			const deps = Object.entries({ ...pkg.devDependencies, ...pkg.dependencies });
+			if (deps.length > 0) {
+				const shown = deps.slice(0, 30).map(([name, version]) => `${name}@${version}`);
+				const rest = deps.length - shown.length;
+				lines.push(`dependencias (${deps.length}): ${shown.join(", ")}${rest > 0 ? ` … +${rest}` : ""}`);
+			}
+		} catch {
+			lines.push("package.json: JSON inválido, no se pudo leer");
+		}
+	}
+	const counts = countFilesByExtension(cwd, 2000);
+	if (counts.length > 0) {
+		lines.push(`ficheros por extensión: ${counts.map(([ext, total]) => `${ext}:${total}`).join(", ")}`);
+	}
+	return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -1849,6 +2079,7 @@ export function createHanniorqExtension(
 			// Sesion nueva: la actividad de memoria y las tareas del harness son de la sesion.
 			memActivity.length = 0;
 			harnessTodos = [];
+			memoryBoards.clear();
 			skillUses.clear();
 			sessionSkills = [];
 			soddWorking = false;
@@ -1868,6 +2099,7 @@ export function createHanniorqExtension(
 				async (started) => {
 					if (!started) return;
 					await checkMemory();
+					await refreshMemoryBoards(cwd);
 					renderRail(ctx.ui, cwd);
 					// Con el daemon ya arriba: briefing listo y aviso de lo que se retoma.
 					const memory = await loadMemoryBriefing(cwd);
@@ -2047,24 +2279,37 @@ export function createHanniorqExtension(
 						return;
 					}
 					case "watch": {
-						// Lista las fichas activas (no-done) + los subagentes en vuelo, para ver en qué se trabaja.
+						// Lista las fichas del proyecto (▤ odd/tasks), las que solo viven en la BD (⛁) y la flota.
 						const tasksDir = join(getOddDir(cwd), "tasks");
-						let rows = "sin tareas activas";
+						let local: string[] = [];
 						try {
-							const names = (await import("node:fs")).readdirSync(tasksDir).filter((n) => n.endsWith(".md"));
-							const active = names
-								.map((n) => {
-									const p = join(tasksDir, n);
-									const text = readFileSync(p, "utf-8");
-									const status = text.match(/^status: (.+)$/m)?.[1] ?? "?";
-									const seen = text.match(/\[x\]|\[X\]/) ? "progreso ✔" : "sin pasos hechos";
-									return `  ${n} · ${status} · ${seen}`;
-								})
-								.join("\n");
-							if (names.length) rows = `fichas:\n${active}`;
+							local = readdirSync(tasksDir).filter((n) => n.endsWith(".md"));
 						} catch {
 							/* odd/tasks no existe aún */
 						}
+						const fichas = local
+							.map((n) => {
+								const text = readFileSync(join(tasksDir, n), "utf-8");
+								const status = text.match(/^status: (.+)$/m)?.[1] ?? "?";
+								const seen = text.match(/\[x\]|\[X\]/) ? "progreso ✔" : "sin pasos hechos";
+								return `  ▤ ${n} · ${status} · ${seen}`;
+							})
+							.join("\n");
+						await refreshMemoryBoards(cwd);
+						const mirrored = [...memoryBoards.entries()]
+							.filter(([slug]) => !local.includes(`${slug}.md`))
+							.map(([slug, steps]) => {
+								const done = steps.filter((step) => step.done).length;
+								return `  ⛁ odd/${slug}/tasks · ${done}/${steps.length} pasos`;
+							})
+							.join("\n");
+						const rows =
+							[
+								fichas ? `fichas (▤ odd/tasks):\n${fichas}` : "",
+								mirrored ? `solo en HanniGram (⛁):\n${mirrored}` : "",
+							]
+								.filter(Boolean)
+								.join("\n") || "sin tareas activas";
 						const fleetLines = [...fleet.values()].map(
 							(a) =>
 								`  ${a.status === "running" ? "▶" : a.status === "error" ? "✗" : "✓"} ${a.id.slice(0, 8)}: ${a.task.slice(0, 90)}`,
@@ -2190,6 +2435,10 @@ export function createHanniorqExtension(
 						desc: "Vuelca la memoria del proyecto a .md (decisiones, hecho, sesiones, contexto) para leerla sin HanniGram.",
 					},
 					{
+						cmd: "/extract [--dir <ruta>] [--overwrite|--version]",
+						desc: "Retrato del proyecto en .md por tipología (README, architecture, stack, design, conventions) para que otro harness lea sin reexplorar. No pisa documentos existentes.",
+					},
+					{
 						cmd: "/explore",
 						desc: "Explora el proyecto (md, README, estructura) y construye su memoria inicial en HanniGram la primera vez.",
 					},
@@ -2310,6 +2559,66 @@ export function createHanniorqExtension(
 				ctx.ui.notify(
 					`Dump de memoria: ${files.length} ficheros en ${target}/ (${observations.length} observaciones del proyecto).`,
 					"info",
+				);
+			},
+		});
+
+		// =================================================================
+		// /extract — retrato del proyecto en .md por tipología (README,
+		// architecture, stack, design, conventions) para que OTRO harness lo
+		// lea sin reexplorar. Nunca pisa documentos existentes: sin flags solo
+		// avisa; --overwrite regenera encima y --version crea -vN.
+		// =================================================================
+		pi.registerCommand("extract", {
+			description:
+				"Extrae el proyecto a docs/proyecto/*.md (arquitectura, stack, diseño, convenciones) para otros harness",
+			handler: async (args, ctx) => {
+				const cwd = ctx.cwd ?? process.cwd();
+				const tokens = args.trim().split(/\s+/).filter(Boolean);
+				const wantsOverwrite = tokens.includes("--overwrite");
+				const wantsVersion = tokens.includes("--version");
+				const dirFlag = tokens.indexOf("--dir");
+				const target = dirFlag >= 0 ? tokens[dirFlag + 1] : "docs/proyecto";
+				if (!target || target.startsWith("--")) {
+					ctx.ui.notify("Uso: /extract [--dir <ruta>] [--overwrite | --version]", "warning");
+					return;
+				}
+				if (wantsOverwrite && wantsVersion) {
+					ctx.ui.notify(
+						"/extract: elige una opción, no las dos — --overwrite (regenerar encima) o --version (crear -vN).",
+						"warning",
+					);
+					return;
+				}
+				const outDir = resolve(cwd, target);
+				const existing = existingDocs(outDir);
+				// Nada de pisar trabajo previo sin permiso: primero se avisa y se listan las salidas.
+				if (existing.length > 0 && !wantsOverwrite && !wantsVersion) {
+					ctx.ui.notify(
+						`/extract: ya existen ${existing.length} de ${EXTRACT_DOCS.length} docs en ${target}/ (${existing.join(", ")}). No he tocado nada. Elige: /extract --overwrite (regenerarlos), /extract --version (nuevos -vN, sin tocar los actuales) o bórralos a mano para empezar de cero.`,
+						"warning",
+					);
+					return;
+				}
+				const names = wantsVersion ? versionedDocs(outDir) : EXTRACT_DOCS;
+				const docs = names
+					.map((name) => {
+						const base = name.replace(/-v\d+\.md$/, ".md");
+						return `- \`${name}\` — ${EXTRACT_DOC_DESCRIPTIONS[base] ?? "retrato del proyecto"}`;
+					})
+					.join("\n");
+				const facts = projectFacts(cwd);
+				ctx.ui.notify(`/extract: ${names.length} docs en ${target}/ (explora primero, luego escribe).`, "info");
+				pi.sendUserMessage(
+					`Genera el retrato de este proyecto en \`${target}/\` para que OTROS harnesses y agentes (sin esta conversación y sin HanniGram) trabajen sin reexplorar. Directorio de trabajo: ${cwd}.\n\n` +
+						`Fase 1 — explora en solo lectura (read/bash), sin pasarte: README y docs/*.md, AGENTS.md/CONTRIBUTING, manifiestos del stack, estructura de directorios, entry points, configuración, y una muestra de 2-4 ficheros por área grande (UI/estilos, datos/estado, tests, build).\n\n` +
+						`Fase 2 — escribe EXACTAMENTE estos ${names.length} ficheros (tool write, bajo \`${target}/\`); nada más:\n${docs}\n\n` +
+						`Reglas:\n` +
+						`- Rutas reales del proyecto (\`ruta:línea\` cuando ayude). No inventes: si algo no se puede determinar, escribe "no determinado" y por qué.\n` +
+						`- Nada de secretos ni valores de .env/tokens: solo la forma y los nombres.\n` +
+						`- No toques código ni ningún otro fichero.\n` +
+						`- Sin relleno: frases cortas, listas y tablas; cada doc se entiende de un vistazo.\n\n` +
+						`Hechos ya leídos del disco (no hace falta reexplorar esto):\n${facts}`,
 				);
 			},
 		});

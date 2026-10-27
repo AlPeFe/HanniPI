@@ -55,7 +55,7 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 - El **resumen** (con la sección de memoria HanniGram) solo se genera en `/hanniorq close` y solo si hubo ficha.
 - **Delegación CONDICIONAL, nunca por defecto:** solo si la tool `subagent` está activa (viene con el paquete `npm:pi-subagents`, que no se instala de serie) y la ficha activa es grande y **spliteable** (pasos independientes), cada parte se delega con esa tool pasándole la ficha recortada + el paso concreto como contexto. Un subagente no ve la conversación, así que el contexto debe ser autocontenido. Sin la tool, todo se ejecuta inline y el agente no finge delegar. **Opciones de forzado** (con la tool activa): escribe "delega" en tu petición para forzar delegación, o "no delegues" para prohibirla.
 - **Widget de flota** (solo con la tool `subagent` activa): mientras hay subagentes trabajando, el widget `hanniorq-fleet` se muestra en la TUI con un spinner por worker y la tarea que está haciendo (adaptación del fleet widget de pi-subagents a sODD: la ficha `odd/tasks/` es la fuente de verdad).
-- **Rail derecho:** la columna derecha muestra proyecto, memoria HanniGram, **contexto y compactación** (porcentaje usado, umbral al que se dispara sola y aviso cuando está cerca, ya pasó o está desactivada), sODD, **las tareas** (la tool `todo`, o los pasos de la ficha), **MCP** (servidores configurados y su estado, o por qué no hay ninguno) y los cambios del worktree. Las tareas largas se envuelven en varias líneas y el ancho de la columna se ajusta con `ctrl+alt+→` / `ctrl+alt+←` o `/hanniorq rail <n>` (20-100 columnas, se recuerda en `settings.json`); `ctrl+alt+t` pliega/despliega las tareas.
+- **Rail derecho:** la columna derecha muestra proyecto, memoria HanniGram, **contexto y compactación** (porcentaje usado, umbral al que se dispara sola y aviso cuando está cerca, ya pasó o está desactivada), sODD, **las tareas**, **MCP** (servidores configurados y su estado, o por qué no hay ninguno) y los cambios del worktree. Cada tarea lleva delante su **origen**: `≡` lista del turno (tool `todo`, vive en la sesión), `▤` pasos de la ficha `odd/tasks/<slug>.md` del proyecto y `⛁` espejo de esa ficha en HanniGram (cuando no hay ficha local, p. ej. otro worktree). Las tareas largas se envuelven en varias líneas y el ancho de la columna se ajusta con `ctrl+alt+→` / `ctrl+alt+←` o `/hanniorq rail <n>` (20-100 columnas, se recuerda en `settings.json`); `ctrl+alt+t` pliega/despliega las tareas.
 
 **Comandos:**
 
@@ -64,14 +64,36 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 /hanniorq rail [<n>]               # muestra/oculta el rail derecho, o fija su ancho en columnas
 /hanniorq plan "<petición>"        # clasifica: trivial → inline; sustancial → ficha
 /hanniorq run [Tn]                 # ejecuta la siguiente tarea; si es grande y spliteable y hay tool subagent, delega partes
-/hanniorq watch                    # muestra en qué se trabaja: fichas activas + subagentes en vuelo (si los hay)
+/hanniorq watch                    # muestra en qué se trabaja: fichas del proyecto (▤) + solo en HanniGram (⛁) + subagentes en vuelo
 /hanniorq close                    # genera el resumen final (plantilla fija + memoria HanniGram)
 /hanniorq resume [<slug>]          # recupera contexto: mem_context → mem_search → ficha
+/extract [--dir <ruta>] [--overwrite | --version]  # retrato del proyecto en .md por tipología, para otros harness
 ```
 
 - **Línea de memoria al cerrar el turno:** si el turno usó HanniGram, la última línea del output lo resume — `hannigram → memory: +1 nuevo · ~2 update · -1 borrado · ≫3 leído` (solo lo que pasó; `nuevo` vs `update` sale del resultado de `mem_save`). Si el turno no tocó la memoria, no se pinta nada.
 
 **El resumen de `/hanniorq close`** incluye una sección **Memoria (HanniGram)** que refleja cómo se ha trabajado la memoria en la sesión: observaciones leídas, espejo de la ficha (topic `odd/<slug>/tasks`) y resumen de sesión. Si el daemon de HanniGram no está disponible, se marca `PENDIENTE` en vez de inventar el guardado.
+
+### 🧾 `/extract` — retrato del proyecto para otros harness
+
+`/extract` deja el proyecto descrito en Markdown legible por cualquier agente u otro harness, sin depender de esta conversación ni de HanniGram. Primero explora (solo lectura: docs, manifiestos, estructura, entry points, una muestra de UI/datos/tests/build) y después escribe cinco documentos en `docs/proyecto/`:
+
+| fichero | qué contiene |
+|---|---|
+| `README.md` | índice: qué es, cómo se levanta y se verifica, y qué doc leer para qué |
+| `architecture.md` | capas, módulos, entry points, flujos, datos y límites internos |
+| `stack.md` | tecnologías y versiones, librerías, build/test/lint, plataformas |
+| `design.md` | UI: pantallas, sistema visual (tokens), estados vacío/carga/error, atajos |
+| `conventions.md` | patrones que se repiten: naming, estructura, errores/config/tests, reglas del repo |
+
+Antes de gastar tokens, el comando lee del disco los hechos baratos (manifiestos, scripts, dependencias, estructura y conteo de ficheros por extensión) y se los pasa al modelo, así que la exploración se centra en lo que no se deduce de un `ls`.
+
+**Si los documentos ya existen, `/extract` no toca nada**: avisa con qué hay y las salidas explícitas:
+
+- `/extract --overwrite` — regenera encima (modificar).
+- `/extract --version` — crea `README-v2.md`, `architecture-v2.md`, … con el primer número libre (versionado, lo viejo intacto).
+- `/extract --dir <ruta>` — cambia el destino (por defecto `docs/proyecto`).
+- Borrar: a mano; el comando no elimina ficheros del usuario.
 
 ### 🖥️ Interfaz
 
