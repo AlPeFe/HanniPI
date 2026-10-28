@@ -161,6 +161,10 @@
           "path": "providers.md"
         },
         {
+          "title": "Token Budget",
+          "path": "token-budget.md"
+        },
+        {
           "title": "Session File Format",
           "path": "session-format.md"
         },

@@ -145,6 +145,15 @@ import {
 	type NormalizedBuildSystemPromptOptions,
 	normalizeBuildSystemPromptOptions,
 } from "./system-prompt.ts";
+import {
+	FIXED_BUDGET_TOKENS,
+	formatBudgetWarning,
+	measurePrefixParts,
+	measureToolSchemas,
+	prefixPartsFromSystemMessage,
+	TokenLedger,
+	type TokenLedgerEntry,
+} from "./token-ledger.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
@@ -372,6 +381,21 @@ function estimateMessagesTokens(messages: AgentMessage[]): number {
 	return tokens;
 }
 
+/**
+ * Label for the source a tool came from, for the token budget warning: `builtin`, the
+ * extension name of a synthetic path (`<inline:foo>` -> `inline:foo`), or the file name an
+ * extension was loaded from.
+ */
+function toolSourceLabel(path: string): string {
+	if (path.startsWith(BUILTIN_PATH_PREFIX)) return "builtin";
+	if (path.startsWith("<") && path.endsWith(">")) {
+		const [kind, ...rest] = path.slice(1, -1).split(":");
+		const name = rest.join(":");
+		return name.length > 0 ? `${kind}:${name}` : kind;
+	}
+	return basename(path);
+}
+
 // ============================================================================
 // AgentSession Class
 // ============================================================================
@@ -404,6 +428,9 @@ export class AgentSession {
 	private _compactionAbortController: AbortController | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _overflowRecoveryAttempted = false;
+
+	/** Fixed-prefix accounting of every request this session has sent (SPEC-003). */
+	private readonly _tokenLedger = new TokenLedger();
 
 	// Branch summarization state
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
@@ -812,7 +839,15 @@ export class AgentSession {
 			let { previous, context, projection } = await prepare();
 			const model = previous?.model ?? this.agent.state.model;
 			const thinkingLevel = previous?.thinkingLevel ?? this.agent.state.thinkingLevel;
-			if (!isVirtualModel(model)) return { ...previous, context, model, thinkingLevel };
+			// Account for the prefix this request carries before it goes out (SPEC-003).
+			const recordPrefix = (requestModel: Model<any>): TokenLedgerEntry =>
+				this._tokenLedger.recordTranscript(context.messages, {
+					model: `${requestModel.provider}/${requestModel.id}`,
+				});
+			if (!isVirtualModel(model)) {
+				recordPrefix(model);
+				return { ...previous, context, model, thinkingLevel };
+			}
 
 			// The selection stays in agent state; only this request uses the routed model. A routing
 			// failure rejects, which ends the run with an error response. Only messages the user wrote
@@ -840,6 +875,7 @@ export class AgentSession {
 				await this._runAutoCompaction("threshold", false);
 				({ previous, context } = await prepare());
 			}
+			recordPrefix(route.model);
 			return { ...previous, context, model: route.model, thinkingLevel: route.thinkingLevel };
 		};
 	}
@@ -1468,6 +1504,50 @@ export class AgentSession {
 	/** Current effective system prompt, including changes not yet sent to the model. */
 	get systemPrompt(): string {
 		return buildSystemPrompt(this._runSystemPromptOptions ?? this._baseSystemPromptOptions);
+	}
+
+	/** Fixed-prefix ledger: one entry per request, newest last (SPEC-003). */
+	get tokenLedger(): TokenLedger {
+		return this._tokenLedger;
+	}
+
+	/**
+	 * Fixed prefix the next turn would send, measured from the current prompt and tool
+	 * loadout. Equal to the newest ledger entry when nothing changed since the last request.
+	 */
+	getFixedPrefixEntry(): TokenLedgerEntry {
+		const systemMessage = getCurrentSystemMessage(this.agent.state.messages);
+		if (systemMessage) return measurePrefixParts(prefixPartsFromSystemMessage(systemMessage));
+		return measurePrefixParts({
+			content: "",
+			sections: buildSystemPromptSections(this._runSystemPromptOptions ?? this._baseSystemPromptOptions),
+			tools: this.agent.state.tools.map((tool) => ({
+				name: tool.name,
+				description: tool.description,
+				parameters: tool.parameters,
+			})),
+		});
+	}
+
+	/**
+	 * Startup warning when the fixed prefix exceeds {@link FIXED_BUDGET_TOKENS}, naming the
+	 * sources whose tool schemas weigh the most. Undefined when the prefix fits.
+	 */
+	getTokenBudgetWarning(): string | undefined {
+		const entry = this.getFixedPrefixEntry();
+		if (entry.total <= FIXED_BUDGET_TOKENS) return undefined;
+		const active = new Set(this.getActiveToolNames());
+		const schemas = measureToolSchemas(
+			[...this._toolDefinitions.entries()]
+				.filter(([name]) => active.has(name))
+				.map(([name, { definition, sourceInfo }]) => ({
+					name,
+					label: definition.namespace?.name ?? toolSourceLabel(sourceInfo.path),
+					description: definition.description,
+					parameters: definition.parameters,
+				})),
+		);
+		return formatBudgetWarning(entry, schemas);
 	}
 
 	/** Current retry attempt (0 if not retrying) */

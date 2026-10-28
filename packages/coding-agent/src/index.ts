@@ -329,16 +329,38 @@ export {
 	type SkillFrontmatter,
 } from "./core/skills.ts";
 export { createSyntheticSourceInfo } from "./core/source-info.ts";
+export {
+	estimateTokens as estimatePrefixTokens,
+	FIXED_BUDGET_TOKENS,
+	formatBudgetWarning,
+	formatTokenDelta,
+	formatTokenLedger,
+	hashPrefix,
+	MEASURED_FIXED_TOKENS,
+	measureFixedPrefix,
+	measurePrefixParts,
+	measureToolSchemas,
+	PROVIDER_TOKEN_FACTOR,
+	type PrefixParts,
+	TokenLedger,
+	type TokenLedgerComponent,
+	type TokenLedgerComponents,
+	type TokenLedgerEntry,
+	type ToolSchemaMeasurement,
+} from "./core/token-ledger.ts";
 export { type EditDiffResult, generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff.ts";
 // Tools
 export {
+	allToolNames,
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
 	type BashToolDetails,
 	type BashToolInput,
 	type BashToolOptions,
+	createAllToolDefinitions,
 	createBashToolDefinition,
+	createCodingToolDefinitions,
 	createEditToolDefinition,
 	createFindToolDefinition,
 	createGrepToolDefinition,

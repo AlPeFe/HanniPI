@@ -31,6 +31,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "packages", description: "Gestor de paquetes: instalar, actualizar, eliminar y buscar en el catálogo" },
 	{ name: "name", description: "Set session display name" },
 	{ name: "session", description: "Show session info and stats" },
+	{ name: "tokens", description: "Show the per-turn token ledger and prefix hash" },
 	{ name: "changelog", description: "Show changelog entries" },
 	{ name: "hotkeys", description: "Show all keyboard shortcuts" },
 	{ name: "fork", description: "Create a new fork from a previous user message" },

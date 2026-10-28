@@ -121,6 +121,7 @@ import {
 } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
+import { FIXED_BUDGET_TOKENS, formatTokenDelta, PROVIDER_TOKEN_FACTOR } from "../../core/token-ledger.ts";
 import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
@@ -1188,6 +1189,13 @@ export class InteractiveMode {
 
 		if (modelFallbackMessage) {
 			this.showWarning(modelFallbackMessage);
+		}
+
+		// SPEC-003: the fixed prefix is a known number, so crossing the declared budget is
+		// visible at startup instead of on the invoice.
+		const tokenBudgetWarning = this.session.getTokenBudgetWarning();
+		if (tokenBudgetWarning) {
+			this.showWarning(tokenBudgetWarning);
 		}
 
 		const crash = takeUnnotifiedCrash();
@@ -3219,6 +3227,11 @@ export class InteractiveMode {
 			}
 			if (text === "/session") {
 				this.handleSessionCommand();
+				this.editor.setText("");
+				return;
+			}
+			if (text === "/tokens") {
+				this.handleTokensCommand();
 				this.editor.setText("");
 				return;
 			}
@@ -6856,6 +6869,70 @@ export class InteractiveMode {
 
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new ThemedText(renderInfo, 1, 0));
+		this.ui.requestRender();
+	}
+
+	private handleTokensCommand(): void {
+		const entries = this.session.tokenLedger.entries.slice(-10);
+		const lastMessage = this.session.messages.findLast((message) => message.role === "assistant");
+		const usage = lastMessage?.role === "assistant" ? lastMessage.usage : undefined;
+		const budgetState = (total: number): string =>
+			total > FIXED_BUDGET_TOKENS
+				? ` ${theme.fg("warning", `over budget ${FIXED_BUDGET_TOKENS} by ${total - FIXED_BUDGET_TOKENS}`)}`
+				: ` ${theme.fg("dim", `(budget ${FIXED_BUDGET_TOKENS})`)}`;
+		const render = (): string => {
+			let text = `${theme.bold("Token Ledger")}\n`;
+			text += `${theme.fg("dim", `Fixed prefix the provider sees each turn. Estimate calibrated to cl100k; provider tokens ~x${PROVIDER_TOKEN_FACTOR}.`)}\n\n`;
+
+			if (entries.length === 0) {
+				const next = this.session.getFixedPrefixEntry();
+				const { components } = next;
+				text += `${theme.fg("dim", "No request yet. Next turn:")} ${next.total} tokens${budgetState(next.total)}\n`;
+				text += `  ${theme.fg("dim", "system")} ${components.systemPrompt.tokens}  `;
+				text += `${theme.fg("dim", "tools")} ${components.activeTools.tokens}  `;
+				text += `${theme.fg("dim", "schemas")} ${components.toolSchemas.tokens}  `;
+				text += `${theme.fg("dim", "injected")} ${components.injectedContext.tokens}\n`;
+				text += `  ${theme.fg("dim", "prefix")} ${next.prefixHash.slice(7, 23)}  `;
+				text += `${theme.fg("dim", `${next.toolNames.length} tools`)}\n`;
+				return text;
+			}
+
+			text += `${theme.fg("dim", "turn  system  tools  schemas  injected   total  delta  hash      flag")}\n`;
+			entries.forEach((entry, index) => {
+				const previous = index > 0 ? entries[index - 1] : undefined;
+				const { components } = entry;
+				const delta = previous === undefined ? "-" : formatTokenDelta(entry.total - previous.total);
+				const changed = previous !== undefined && previous.prefixHash !== entry.prefixHash;
+				const flag = changed ? theme.fg("warning", "PREFIX-CHANGED") : "";
+				text +=
+					`${String(entry.turn).padStart(4)}  ` +
+					`${String(components.systemPrompt.tokens).padStart(6)}  ` +
+					`${String(components.activeTools.tokens).padStart(5)}  ` +
+					`${String(components.toolSchemas.tokens).padStart(7)}  ` +
+					`${String(components.injectedContext.tokens).padStart(8)}  ` +
+					`${String(entry.total).padStart(6)}  ` +
+					`${delta.padStart(5)}  ` +
+					`${entry.prefixHash.slice(7, 15)}  ${flag}`.trimEnd() +
+					"\n";
+			});
+			const newest = entries[entries.length - 1];
+			text += `\n${theme.fg("dim", "Fixed cost:")} ${newest.total} tokens${budgetState(newest.total)}\n`;
+			const changedEntries = entries.filter(
+				(entry, index) => index > 0 && entries[index - 1].prefixHash !== entry.prefixHash,
+			);
+			if (changedEntries.length > 0) {
+				text += `${theme.fg("warning", "Prefix changed on turn(s)")} ${changedEntries.map((entry) => entry.turn).join(", ")}`;
+				text += `${theme.fg("dim", " - the provider re-reads the whole prefix at input price on those turns")}\n`;
+			}
+			if (usage) {
+				text += `${theme.fg("dim", "Last request (provider):")} input ${usage.input.toLocaleString()}, `;
+				text += `cacheRead ${usage.cacheRead.toLocaleString()}, cacheWrite ${usage.cacheWrite.toLocaleString()}\n`;
+			}
+			return text;
+		};
+
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new ThemedText(render, 1, 0));
 		this.ui.requestRender();
 	}
 

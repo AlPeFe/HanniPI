@@ -24,6 +24,7 @@ Extensions, prompt templates, and skills can add commands. The command menu in P
 | `/resume` | Switch to another saved session |
 | `/name [name]` | Set the session display name, or show the current name when omitted |
 | `/session` | Show current session information and statistics |
+| `/tokens` | Show the per-turn token ledger: fixed prefix components, prefix hash, and `PREFIX-CHANGED` when the cacheable prefix was rewritten (see [Token budget](token-budget.md)) |
 | `/tree` | Navigate the session tree |
 | `/fork` | Create a new session from an earlier user message |
 | `/clone` | Duplicate the current session at its current position |

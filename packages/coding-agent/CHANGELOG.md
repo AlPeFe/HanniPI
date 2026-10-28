@@ -4,6 +4,8 @@
 
 ### Added
 
+- HanniPI: `/tokens` shows the fixed cost of a turn — system prompt, tool list, tool schemas and injected context, with a `sha256` prefix hash and `PREFIX-CHANGED` when the cacheable prefix was rewritten mid-session. The ledger records one entry per request inside `AgentSession`, and startup warns when the fixed prefix crosses `FIXED_BUDGET_TOKENS` (1,950 cl100k-equivalent), naming the extension whose tool schemas weigh the most. `docs/token-budget.md` records the measured figures (2,996 provider tokens, 1,875 cl100k) and which providers cache the prefix implicitly.
+- HanniPI: `packages/evals` gates the token budget offline: `npm run eval:host` fails when `fixed_tokens_per_turn` exceeds the declared budget, printing the four components, the overage and the largest tool schemas.
 - HanniPI: the interface is now built from panels. A fixed top bar shows the wordmark, version, working directory, branch, session, model (with virtual routes), extension statuses, a context meter and token usage; the bottom bar shows the current mode (`lista`, `pensando`, `compactando`, `bash`, `cola`) with the shortcuts that apply to it.
 - HanniPI: every transcript block is a card with its title in the border — `tú`, `hanni` (with `generando…` while streaming) and the tool name with `ejecutando` / `ok` / `error` — and the right rail stacks one panel per concept (project, memory, context, sODD, tasks, MCP, changes).
 - Added `Panel` to `@earendil-works/pi-tui`: a container that draws a border with its title, a right-aligned status, and a caption in the bottom border, padding every line to the requested width.
