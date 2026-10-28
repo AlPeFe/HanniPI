@@ -88,6 +88,9 @@ interface MemActivity {
 	op?: "add" | "del";
 }
 const memActivity: MemActivity[] = [];
+/** Acción de `mem_admin` por `toolCallId`: `tool_execution_end` no trae args y la acción
+ *  decide si la llamada fue lectura o escritura. */
+const memAdminActionByCall = new Map<string, string>();
 /** Lista de tareas del turno actual, definida por el harness vía la tool `todo`.
  *  Cada llamada reemplaza la lista entera (una lista nueva limpia la anterior). */
 interface HarnessTodo {
@@ -128,17 +131,36 @@ const MAX_TODO_LINES = 4;
 const RAIL_TASKS_KEY = Key.ctrlAlt("t");
 
 /** Tools mem_* que son LECTURA de memoria (no modifican la BD). */
-const MEM_READ_TOOLS = new Set([
-	"mem_search",
-	"mem_context",
-	"mem_timeline",
-	"mem_get_observation",
-	"mem_current_project",
-	"mem_suggest_topic_key",
-]);
+const MEM_READ_TOOLS = new Set(["mem_search", "mem_get"]);
 
-/** Tools mem_* que ESCRIBEN en memoria. */
-const MEM_WRITE_TOOLS = new Set(["mem_save", "mem_delete", "mem_session_summary"]);
+/** Tools mem_* que pueden ESCRIBIR: mem_admin sólo en las acciones que mutan filas. */
+const MEM_WRITE_TOOLS = new Set(["mem_save", "mem_admin"]);
+
+/** Acciones de mem_admin que sólo leen (revisión y listado de topic keys). */
+const MEM_ADMIN_READ_ACTIONS = new Set(["review", "suggest_topic_key"]);
+
+/** Acciones de mem_admin que mutan memoria. */
+const MEM_ADMIN_WRITE_ACTIONS = new Set(["state", "pin", "promote", "update", "delete", "session_summary"]);
+
+/** `action` de una llamada a mem_admin ("" si no viene). */
+function memAdminAction(args: unknown): string {
+	const action = isPlainObject(args) ? args.action : undefined;
+	return typeof action === "string" ? action : "";
+}
+
+function isMemRead(toolName: string, args: unknown): boolean {
+	if (MEM_READ_TOOLS.has(toolName)) return true;
+	return toolName === "mem_admin" && MEM_ADMIN_READ_ACTIONS.has(memAdminAction(args));
+}
+
+function isMemWrite(toolName: string, args: unknown): boolean {
+	return isMemWriteAction(toolName, memAdminAction(args));
+}
+
+function isMemWriteAction(toolName: string, action: string): boolean {
+	if (!MEM_WRITE_TOOLS.has(toolName)) return false;
+	return toolName !== "mem_admin" || MEM_ADMIN_WRITE_ACTIONS.has(action);
+}
 
 /** Resumen del uso de memoria en el turno, para la línea de fin de turno. */
 export interface MemTurnSummary {
@@ -196,25 +218,25 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 /** Detalle legible de una llamada mem_* para el log de actividad del rail. */
 function memDetail(toolName: string, args: Record<string, unknown> | undefined): string {
 	const a = args ?? {};
+	if (toolName === "mem_admin") {
+		const action = memAdminAction(a);
+		if (action === "session_summary") return "resumen de sesión";
+		if (action === "suggest_topic_key") return "topic keys";
+		if (action === "review") return "revisión";
+		return a.id !== undefined ? `${action} #${a.id}` : action || "admin";
+	}
 	switch (toolName) {
 		case "mem_save":
 			return typeof a.title === "string" && a.title ? a.title : "observación";
 		case "mem_search":
 			return typeof a.query === "string" && a.query ? a.query : "búsqueda";
-		case "mem_timeline":
-			return typeof a.topicKey === "string" && a.topicKey ? a.topicKey : "timeline";
-		case "mem_get_observation":
+		case "mem_get": {
+			const kind = typeof a.kind === "string" ? a.kind : "id";
+			if (kind === "topic") return typeof a.topicKey === "string" && a.topicKey ? a.topicKey : "timeline";
+			if (kind === "project") return "proyecto actual";
+			if (kind === "context") return "contexto reciente";
 			return a.id !== undefined ? `#${a.id}` : "observación";
-		case "mem_delete":
-			return a.id !== undefined ? `#${a.id}` : "borrado";
-		case "mem_context":
-			return "contexto reciente";
-		case "mem_current_project":
-			return "proyecto actual";
-		case "mem_suggest_topic_key":
-			return "topic keys";
-		case "mem_session_summary":
-			return "resumen de sesión";
+		}
 		default:
 			return toolName;
 	}
@@ -553,7 +575,7 @@ interface MemoryBriefing {
 
 /** Guideline que el prompt se lleva cuando hay briefing (se añade una sola vez). */
 const MEMORY_GUIDELINE =
-	"La memoria del proyecto (HanniGram) va primero: consulta `mem_context`/`mem_search` antes de explorar el repo. El repo manda para el código; la memoria, para lo decidido, lo aprendido y lo que quedó en curso. Al acabar trabajo sustancial guarda el handoff con `mem_session_summary` y las decisiones o patrones con `mem_save`.";
+	"La memoria del proyecto (HanniGram) va primero: consulta `mem_get` con `kind=context` o `mem_search` antes de explorar el repo. El repo manda para el código; la memoria, para lo decidido, lo aprendido y lo que quedó en curso. Al acabar trabajo sustancial guarda el handoff con `mem_admin` (`action=session_summary`) y las decisiones o patrones con `mem_save`.";
 
 let briefing: { cwd: string; value: MemoryBriefing } | undefined;
 
@@ -562,7 +584,7 @@ let briefing: { cwd: string; value: MemoryBriefing } | undefined;
  * reinyectarlo cuando cambia la memoria (cada `mem_save` mueve el contador del briefing) reescribe
  * el system prompt y tira la caché de prefijo del proveedor, así que el siguiente turno paga el
  * contexto entero a precio de entrada. El modelo conserva el briefing en el contexto y
- * `mem_search`/`mem_context` siguen ahí para lo que cambie después.
+ * `mem_search`/`mem_get` siguen ahí para lo que cambie después.
  */
 let briefingInjectedFor: string | undefined;
 
@@ -629,7 +651,7 @@ async function fetchMemoryBriefing(cwd: string): Promise<MemoryBriefing | undefi
 
 	if (lines.length === 0) {
 		lines.push(
-			"sin memoria todavía para este proyecto: al acabar trabajo sustancial guarda el handoff con `mem_session_summary` y las decisiones con `mem_save` (o construye la primera con /explore).",
+			"sin memoria todavía para este proyecto: al acabar trabajo sustancial guarda el handoff con `mem_admin` (`action=session_summary`) y las decisiones con `mem_save` (o construye la primera con /explore).",
 		);
 	} else {
 		lines.push(
@@ -675,7 +697,7 @@ interface SessionWork {
 }
 
 const sessionWork: SessionWork = {};
-/** El agente ya guardó un mem_session_summary: el handoff rodante sobra. */
+/** El agente ya guardó un resumen de sesión (`mem_admin action=session_summary`): el handoff rodante sobra. */
 let handoffSuperseded = false;
 
 async function saveRollingHandoff(cwd: string): Promise<void> {
@@ -2742,10 +2764,12 @@ export function createHanniorqExtension(
 		pi.on("tool_execution_start", (event, ctx) => {
 			trackContext(ctx);
 			turnTools.add(event.toolName);
+			// La acción de mem_admin se recuerda para el evento de fin (que no trae args).
+			if (event.toolName === "mem_admin") memAdminActionByCall.set(event.toolCallId, memAdminAction(event.args));
 			if (event.toolName === "task" || event.toolName === "hanniorq" || event.toolName === "hannigram") {
 				turnSoddTouched = true;
 			}
-			if (MEM_READ_TOOLS.has(event.toolName)) memTurn.reads++;
+			if (isMemRead(event.toolName, event.args)) memTurn.reads++;
 			// Skill en uso: el modelo lo activa leyendo su fichero (SKILL.md o uno del catálogo).
 			if (event.toolName === "read") {
 				const path = (event.args as { path?: unknown } | undefined)?.path;
@@ -2753,15 +2777,16 @@ export function createHanniorqExtension(
 				if (skill && markSkillUsed(skill)) renderRail(ctx.ui, ctx.cwd ?? process.cwd());
 			}
 			// Actividad de memoria: registra lecturas y escrituras para el rail.
-			if (MEM_READ_TOOLS.has(event.toolName) || MEM_WRITE_TOOLS.has(event.toolName)) {
+			if (isMemRead(event.toolName, event.args) || isMemWrite(event.toolName, event.args)) {
+				const action = event.toolName === "mem_admin" ? memAdminAction(event.args) : "";
 				const op: MemActivity["op"] =
-					event.toolName === "mem_delete"
+					action === "delete"
 						? "del"
-						: event.toolName === "mem_save" || event.toolName === "mem_session_summary"
+						: event.toolName === "mem_save" || action === "session_summary"
 							? "add"
 							: undefined;
 				memActivity.push({
-					kind: MEM_WRITE_TOOLS.has(event.toolName) ? "write" : "read",
+					kind: isMemWrite(event.toolName, event.args) ? "write" : "read",
 					detail: memDetail(event.toolName, event.args as Record<string, unknown> | undefined),
 					op,
 				});
@@ -2776,23 +2801,29 @@ export function createHanniorqExtension(
 		});
 
 		pi.on("tool_execution_end", (event, ctx) => {
+			// La acción viaja aparte: este evento no trae `args`, así que se recupera la que
+			// guardó `tool_execution_start` para esta llamada.
+			const action = event.toolName === "mem_admin" ? (memAdminActionByCall.get(event.toolCallId) ?? "") : "";
+			if (event.toolName === "mem_admin") memAdminActionByCall.delete(event.toolCallId);
 			// Contadores del turno: nuevo vs update se distinguen por el resultado de `mem_save`
-			// ("Saved observation …" / "Updated observation …").
-			if (MEM_WRITE_TOOLS.has(event.toolName) && !event.isError) {
-				if (event.toolName === "mem_delete") memTurn.deleted++;
-				else if (event.toolName === "mem_session_summary") memTurn.summaries++;
-				else if (/\bUpdated observation\b/i.test(toolResultText(event.result))) memTurn.updated++;
-				else memTurn.created++;
-				// Un resumen de sesión de verdad deja el handoff rodante sin papel.
-				if (event.toolName === "mem_session_summary") handoffSuperseded = true;
+			// ("Saved observation …" / "Updated observation …"); en `mem_admin` manda la acción.
+			if (isMemWriteAction(event.toolName, action) && !event.isError) {
+				if (event.toolName === "mem_save") {
+					if (/\bUpdated observation\b/i.test(toolResultText(event.result))) memTurn.updated++;
+					else memTurn.created++;
+				} else if (action === "delete") memTurn.deleted++;
+				else if (action === "update") memTurn.updated++;
+				else if (action === "session_summary") {
+					memTurn.summaries++;
+					// Un resumen de sesión de verdad deja el handoff rodante sin papel.
+					handoffSuperseded = true;
+				}
 				// El briefing ya inyectado NO se refresca aquí a propósito: cambiar el system prompt
 				// a mitad de sesión invalida la caché de prefijo del proveedor (ver briefingInjectedFor).
 			}
 			// Refresca el rail derecho cuando cambia estado relevante (memoria/sODD/tareas).
 			if (
-				event.toolName === "mem_save" ||
-				event.toolName === "mem_session_summary" ||
-				event.toolName === "mem_delete" ||
+				isMemWriteAction(event.toolName, action) ||
 				event.toolName === "task" ||
 				event.toolName === "hanniorq" ||
 				event.toolName === "hannigram"
@@ -3418,7 +3449,7 @@ export function createHanniorqExtension(
 						}
 						const obs = await recentObservations(cwd);
 						ctx.ui.notify(
-							`Retomando ${slug}. Lee la ficha odd/tasks/${slug}.md, consulta mem_context/mem_search para recuperar contexto, y reconcilia antes de continuar. Observaciones recientes: ${obs.length}.`,
+							`Retomando ${slug}. Lee la ficha odd/tasks/${slug}.md, consulta mem_get (kind=context) / mem_search para recuperar contexto, y reconcilia antes de continuar. Observaciones recientes: ${obs.length}.`,
 							"info",
 						);
 						return;

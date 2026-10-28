@@ -33,7 +33,7 @@ function createMockPi() {
 	/** Ajuste `skipMemory` (/skipmemory); el harness lo persiste y la extensión lo lee de getSettings(). */
 	let skipMemory = false;
 	/** Conjunto activo de tools que ve el modelo (mem_* se quitan al omitir la memoria). */
-	let activeTools = ["read", "bash", "mem_save", "mem_search", "mem_context", "mem_session_summary"];
+	let activeTools = ["read", "bash", "mem_save", "mem_search", "mem_get", "mem_admin"];
 	/** Patrones del ajuste `extensions` que ve la extensión (tests de MCP desactivado). */
 	const extensionOverrides: string[] = [];
 
@@ -257,15 +257,27 @@ describe("extensión hanniorq", () => {
 		const ctx = { cwd: "C:/x", ui: (pi as any).ui };
 		await emit(pi, "turn_start", {}, ctx);
 
-		// Una lectura, un mem_save que crea, otro que actualiza y un borrado.
-		for (const [toolName, result, isError] of [
-			["mem_search", { content: [{ type: "text", text: "2 resultados" }] }, false],
-			["mem_save", { content: [{ type: "text", text: "Saved observation #12: rail" }] }, false],
-			["mem_save", { content: [{ type: "text", text: "Updated observation #9: memoria" }] }, false],
-			["mem_delete", { content: [{ type: "text", text: "Deleted observation #3" }] }, false],
+		// Una lectura, un mem_save que crea, otro que actualiza y un borrado (mem_admin action=delete).
+		let call = 0;
+		for (const [toolName, args, result, isError] of [
+			["mem_search", { query: "rail" }, { content: [{ type: "text", text: "2 resultados" }] }, false],
+			["mem_save", { title: "rail" }, { content: [{ type: "text", text: "Saved observation #12: rail" }] }, false],
+			[
+				"mem_save",
+				{ title: "memoria" },
+				{ content: [{ type: "text", text: "Updated observation #9: memoria" }] },
+				false,
+			],
+			[
+				"mem_admin",
+				{ action: "delete", id: 3 },
+				{ content: [{ type: "text", text: "Deleted observation #3" }] },
+				false,
+			],
 		] as const) {
-			await emit(pi, "tool_execution_start", { toolName, toolCallId: `${toolName}-1`, args: {} }, ctx);
-			await emit(pi, "tool_execution_end", { toolName, toolCallId: `${toolName}-1`, result, isError }, ctx);
+			const toolCallId = `${toolName}-${++call}`;
+			await emit(pi, "tool_execution_start", { toolName, toolCallId, args }, ctx);
+			await emit(pi, "tool_execution_end", { toolName, toolCallId, result, isError }, ctx);
 		}
 		await emit(pi, "turn_end", {}, ctx);
 
@@ -673,8 +685,8 @@ describe("extensión hanniorq", () => {
 			expect(briefing).toContain("hecho: swap por renombrado de la carpeta de instalacion");
 			expect(briefing).toContain("revisar hanniorq");
 			expect(briefing).toContain("hanni update se mataba a si mismo");
-			expect(promptGuidelines.join(" ")).toContain("mem_context");
-			expect(promptGuidelines.join(" ")).toContain("mem_session_summary");
+			expect(promptGuidelines.join(" ")).toContain("mem_get");
+			expect(promptGuidelines.join(" ")).toContain("action=session_summary");
 
 			// Sin daemon no se inventa memoria: ni sección ni guideline.
 			vi.stubGlobal(
@@ -922,7 +934,12 @@ describe("extensión hanniorq", () => {
 			);
 			expect(railText(widgets)).toContain("nuevo");
 
-			await emit(pi, "tool_execution_start", { toolName: "mem_delete", toolCallId: "t2", args: { id: 3 } }, ctx);
+			await emit(
+				pi,
+				"tool_execution_start",
+				{ toolName: "mem_admin", toolCallId: "t2", args: { action: "delete", id: 3 } },
+				ctx,
+			);
 			expect(railText(widgets)).toContain("nuevo + borrado");
 		} finally {
 			vi.unstubAllGlobals();
@@ -1033,7 +1050,7 @@ describe("extensión hanniorq", () => {
 				ctx,
 			);
 			expect(sections.memoria).toBeUndefined();
-			expect(promptGuidelines.join(" ")).not.toContain("mem_context");
+			expect(promptGuidelines.join(" ")).not.toContain("mem_get");
 			expect(fetchStub).not.toHaveBeenCalled();
 
 			// Cinturón y tirantes: ninguna llamada mem_* pasa, pero las demás tools no se tocan.

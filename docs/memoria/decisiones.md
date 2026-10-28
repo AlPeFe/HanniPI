@@ -32,7 +32,7 @@ adr · `hannipi/memoria/cache-prefijo` · 2026-10-20 · #72
 
 Regla para HanniPI (bugfix 55dad3a92): **nunca reescribir el system prompt a mitad de sesión**. Cualquier sección dinámica (hoy el briefing `memoria` de hanniorq) mete un nuevo mensaje system al principio de la conversación y el proveedor tira la caché de prefijo: el turno siguiente paga TODO el contexto a precio de entrada (deepseek v4.1 flash: $0.15/M vs $0.003/M de cache read, 50×).
 Medición real (sesiones en ~/.pi/agent/sessions): en una sesión de 99 turnos con 19 cambios del system prompt (el contador "N observaciones recientes" del briefing cambiaba en cada `mem_save`), el 89% del coste ($0.77 de $0.87) fueron misses de caché; cada reinyección a 200k de contexto cuesta ~$0.03 y suele provocar 2+ requests a precio completo. En sesiones sin cambios de prompt, los misses bajan al 30-45% (pausas largas, expiración de caché).
-Diseño correcto: inyectar lo dinámico UNA vez por sesión (a la primera, al arrancar) y congelarlo; el rail y la BD se actualizan aparte, y el modelo tiene `mem_search`/`mem_context` para lo que cambie. `/skipmemory` y `session_start` sí resetean el flag (`briefingInjectedFor`) porque son cambios de sesión deliberados.
+Diseño correcto: inyectar lo dinámico UNA vez por sesión (a la primera, al arrancar) y congelarlo; el rail y la BD se actualizan aparte, y el modelo tiene `mem_search`/`mem_get` para lo que cambie. `/skipmemory` y `session_start` sí resetean el flag (`briefingInjectedFor`) porque son cambios de sesión deliberados.
 
 **Qué:** Congelado el briefing de memoria por sesión tras medir que las reinyecciones se comían el 89% del coste en sesiones con muchas escrituras
 

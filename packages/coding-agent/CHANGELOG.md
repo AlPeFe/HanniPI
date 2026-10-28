@@ -27,6 +27,7 @@
 
 ### Changed
 
+- HanniPI: la memoria se lee y se mantiene con las cuatro tools nuevas de HanniGram (SPEC-002). `mem_get` (`kind=context|topic|id|project`) y `mem_search` sustituyen a `mem_context`, `mem_timeline`, `mem_get_observation` y `mem_current_project`; `mem_admin` (`action=state|pin|promote|update|delete|review|session_summary|suggest_topic_key`) sustituye a las ocho de mantenimiento. La guideline del prompt, el aviso del briefing, `/hanniorq resume` y la clasificación del rail (lecturas, escrituras, `op` de alta/borrado y la línea `hannigram → memory`) pasan a decidir por nombre **y** acción: `mem_admin` lee en `review`/`suggest_topic_key` y escribe en el resto, así que la acción se recuerda por `toolCallId` entre `tool_execution_start` y `tool_execution_end` (que no trae `args`).
 - HanniPI: the startup header no longer lists the compact key hints (the status bar shows them) and the right rail's context section no longer repeats its own heading.
 - The Xiaomi MiMo default model now points at `mimo-v2.6-pro` (v2.5 was removed from the live catalog) and the NVIDIA default at `nemotron-3.5-super-vl-120b-a12b`.
 - HanniPI: Hanni's identity in the system prompt is now female (feminine grammatical forms in gendered languages) and the assistant uses light kaomoji in replies. The startup help refers to her in feminine terms.

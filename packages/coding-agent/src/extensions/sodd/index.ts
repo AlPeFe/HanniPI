@@ -91,7 +91,7 @@ function fmtObs(r: { title: string; topic_key: string | null; learned: string | 
 /** Lee la memoria del proyecto actual (scope HanniGram) en DOS bloques:
  *  - decisiones/convenciones a RESPETAR (type='adr'): se inyectan siempre.
  *  - contexto/ideas en curso (el resto): índice ligero reciente (título + topic + learned).
- *  Nunca se devuelve contenido completo; el detalle se pide con mem_get_observation. */
+ *  Nunca se devuelve contenido completo; el detalle se pide con mem_get (kind=id). */
 function readProjectMemory(cwd: string): { adr: string[]; context: string[] } {
 	const dbPath = join(homedir(), ".hannigram", "hannigram.db");
 	if (!existsSync(dbPath)) return { adr: [], context: [] };

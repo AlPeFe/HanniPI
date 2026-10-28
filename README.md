@@ -68,7 +68,7 @@ Un protocolo minimalista de desarrollo (versión reducida de ODD) para agente ú
 /hanniorq run [Tn]                 # ejecuta la siguiente tarea; si es grande y spliteable y hay tool subagent, delega partes
 /hanniorq watch                    # muestra en qué se trabaja: fichas del proyecto (▤) + solo en HanniGram (⛁) + subagentes en vuelo
 /hanniorq close                    # genera el resumen final (plantilla fija + memoria HanniGram)
-/hanniorq resume [<slug>]          # recupera contexto: mem_context → mem_search → ficha
+/hanniorq resume [<slug>]          # recupera contexto: mem_get (kind=context) → mem_search → ficha
 /extract [--dir <ruta>] [--overwrite | --version]  # retrato del proyecto en .md por tipología, para otros harness
 ```
 
