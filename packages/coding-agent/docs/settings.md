@@ -57,6 +57,26 @@ This replaces `bash` with `powershell` and enables `grep`: `["-bash", "+powershe
 
 CLI tool options override this setting for one invocation. `--tools` with only `+name` and `-name` entries changes the resolved `defaultTools` selection instead, for example `pi --tools +codemode`. On `/reload`, these entries apply to the reloaded setting too, so a tool removed with `-name` stays removed. See [Command Line](cli.md#tools).
 
+## Pipeline
+
+The `pipeline` extension runs a prompt as a **strictly sequential queue of roles** over the existing `subagent` tool: one role in flight, the rest `Queued · Waiting its turn`. It registers no tools, so it costs no prompt tokens. `/pipeline start <task>` queues the roles, `/pipeline status` shows the cards, `/pipeline cancel <n|role|all>` (or `ctrl+alt+x`) cancels one, and `/pipeline resume` rebuilds the queue from the active sODD sheet (`odd/tasks/<slug>.md`) after a restart.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `pipeline.roles` | `{ id, label?, icon?, prompt? }[]` | `explorer`, `builder`, `reviewer` | Roles of the queue, in order. `id` is what the role is called in the sheet and the `agent` name passed to `subagent`. An invalid entry is ignored; no valid entries fall back to the default three. |
+
+```json
+{
+  "pipeline": {
+    "roles": [
+      { "id": "explorer", "prompt": "Map the files involved. Do not edit." },
+      { "id": "builder", "prompt": "Implement the smallest change that works." },
+      { "id": "qa", "label": "QA", "icon": "⌕", "prompt": "Review the diff and report." }
+    ]
+  }
+}
+```
+
 ## Sessions and context
 
 | Setting | Type | Default | Description |

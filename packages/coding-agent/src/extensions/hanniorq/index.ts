@@ -37,6 +37,7 @@ import type { Settings } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import { loadMcpConfig } from "../mcp/config.ts";
 import { getMcpConnectionStatuses, subscribeMcpConnectionStatuses } from "../mcp/status.ts";
+import { type PipelineRow, readPipelineFromSheet, renderPipeline, resolveRoles, roleFor } from "../pipeline/index.ts";
 import { ensureHanniGramDaemon } from "./hannigram-daemon.ts";
 
 function getOddDir(cwd: string): string {
@@ -780,39 +781,60 @@ function buildSummary(opts: {
 }
 
 // ---------------------------------------------------------------------------
-// Widget de flota: representa los subagentes en paralelo (adaptación del
-// fleet widget de pi-subagents a sODD — la ficha es la fuente de verdad y
-// cada worker muestra la tarea que le toca).
+// Widget de flota + cola: los subagentes en vuelo (adaptación del fleet widget
+// de pi-subagents a sODD — la ficha es la fuente de verdad) MÁS las tarjetas de
+// la cola `pipeline` que todavía no han arrancado. Antes este widget sólo pintaba
+// lo que ya había empezado, así que una cola esperando turno era invisible; el
+// render vive en `extensions/pipeline/renderPipeline` y aquí sólo se le dan filas.
 // ---------------------------------------------------------------------------
 
 const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-function renderFleet(ui: ExtensionUIContext): void {
-	const running = [...fleet.values()].filter((a) => a.status === "running");
-	if (fleet.size === 0) {
+/** Filas del widget: flota en vuelo + tarjetas en cola leídas de la ficha activa. */
+function fleetRows(cwd: string): PipelineRow[] {
+	const roles = resolveRoles(readSettings());
+	const now = Date.now();
+	const rows: PipelineRow[] = [...fleet.values()].map((agent) => ({
+		id: agent.id.slice(0, 8),
+		role: "subagent",
+		label: "Subagent",
+		icon: agent.status === "running" ? SPIN[((now / 80) % SPIN.length) | 0] : agent.status === "error" ? "✗" : "✓",
+		status: agent.status,
+		task: agent.task,
+		startsAt: agent.startedAt,
+	}));
+	const saved = readPipelineFromSheet(cwd);
+	for (const card of saved?.state.cards ?? []) {
+		if (card.status !== "queued") continue;
+		const role = roleFor(roles, card.role);
+		rows.push({
+			id: card.id,
+			role: card.role,
+			label: role.label,
+			icon: role.icon,
+			status: "queued",
+			...(card.note ? { note: card.note } : {}),
+		});
+	}
+	return rows;
+}
+
+function renderFleet(ui: ExtensionUIContext, cwd: string): void {
+	const rows = fleetRows(cwd);
+	if (rows.length === 0) {
 		ui.setWidget("hanniorq-fleet", undefined);
 		return;
 	}
-	const now = Date.now();
-	const lines = [...fleet.values()].map((a) => {
-		const icon =
-			a.status === "running" ? `${SPIN[((now / 80) % SPIN.length) | 0]}` : a.status === "error" ? "✗" : "✓";
-		const age = Math.round((now - a.startedAt) / 1000);
-		const task = a.task.length > 80 ? `${a.task.slice(0, 79)}…` : a.task;
-		return `${icon} ${a.id.slice(0, 8)} ${a.status === "running" ? `▶ ${task}` : `${task} (${age}s)`}`;
-	});
-	ui.setWidget("hanniorq-fleet", ["─ hanniorq flota de subagentes ─", ...lines]);
-	if (running.length === 0) {
-		if (fleetWidgetTimer !== undefined) {
-			clearInterval(fleetWidgetTimer);
-			fleetWidgetTimer = undefined;
-		}
+	renderPipeline(ui, "hanniorq-fleet", rows, { now: Date.now(), title: "hanniorq flota y cola", footer: false });
+	if (!rows.some((row) => row.status === "running") && fleetWidgetTimer !== undefined) {
+		clearInterval(fleetWidgetTimer);
+		fleetWidgetTimer = undefined;
 	}
 }
 
-function startFleetTimer(ui: ExtensionUIContext): void {
+function startFleetTimer(ui: ExtensionUIContext, cwd: string): void {
 	if (fleetWidgetTimer !== undefined) clearInterval(fleetWidgetTimer);
-	fleetWidgetTimer = setInterval(() => renderFleet(ui), 100);
+	fleetWidgetTimer = setInterval(() => renderFleet(ui, cwd), 100);
 }
 
 // ---------------------------------------------------------------------------
@@ -2796,8 +2818,8 @@ export function createHanniorqExtension(
 			const task =
 				typeof (event.args as { task?: unknown })?.task === "string" ? (event.args as { task: string }).task : "?";
 			fleet.set(event.toolCallId, { id: event.toolCallId, task, status: "running", startedAt: Date.now() });
-			startFleetTimer(ctx.ui);
-			renderFleet(ctx.ui);
+			startFleetTimer(ctx.ui, ctx.cwd ?? process.cwd());
+			renderFleet(ctx.ui, ctx.cwd ?? process.cwd());
 		});
 
 		pi.on("tool_execution_end", (event, ctx) => {
@@ -2834,7 +2856,7 @@ export function createHanniorqExtension(
 			const agent = fleet.get(event.toolCallId);
 			if (agent) {
 				agent.status = event.isError ? "error" : "done";
-				renderFleet(ctx.ui);
+				renderFleet(ctx.ui, ctx.cwd ?? process.cwd());
 			}
 		});
 

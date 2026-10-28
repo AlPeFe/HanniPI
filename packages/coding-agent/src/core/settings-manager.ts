@@ -121,6 +121,15 @@ export type DefaultProjectTrust = "ask" | "always" | "never";
 /** true hides all startup output, "header" keeps only the startup header. */
 export type QuietStartup = boolean | "header";
 
+/**
+ * Roles de la cola `pipeline` (SPEC-006). Los roles son configuración, no superficie de
+ * esquema: cada entrada sólo cambia el nombre visible, el icono y el prompt del rol.
+ * Omitir `pipeline.roles` deja la terna por defecto explorer → builder → reviewer.
+ */
+export interface PipelineSettings {
+	roles?: Array<{ id: string; label?: string; icon?: string; prompt?: string }>;
+}
+
 export type TransportSetting = Transport;
 
 /**
@@ -198,6 +207,7 @@ export interface Settings {
 	railHidden?: boolean; // hide the right rail in the fullscreen TUI (default false)
 	railTasksCollapsed?: boolean; // collapse the right rail task list (default false)
 	skipMemory?: boolean; // do not use HanniGram at all: no briefing, no mem_* tools, no daemon (default false)
+	pipeline?: PipelineSettings; // role queue of the `pipeline` extension (SPEC-006)
 	fullscreenCopyOnSelect?: boolean; // default: true; no effect in regular TUI mode
 	fullscreenWheelScrollLines?: WheelScrollLines; // default: "auto"; lines per wheel event, 1-100
 }
