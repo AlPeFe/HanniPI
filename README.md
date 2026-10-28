@@ -1,16 +1,6 @@
-```
-     ▐▌  ▐▌
-     ██  ██
-  ▄████████▄
-  ▐██████████▌
-  █ ◕      ◕ █
-  █    ♥     █
-  ▀██████████▀
-    ▐██████▌
-    ▐█ ♥ █▌
-    ▀██████▀
-    h a n n i
-```
+<p align="center">
+  <img alt="HanniPI — Hanni, conejito de línea fina sobre un patrón rosa" src="docs/images/hannibanner.png" width="640">
+</p>
 <p align="center">
   <strong>HanniPI</strong> — tu harness de desarrollo de software, con memoria persistente y flujo de trabajo sODD.
 </p>
@@ -231,21 +221,22 @@ npm run check                 # lint, formato y type check
 
 ## Marca
 
-Hanni es un **sticker kawaii de línea gruesa**: cabeza redonda, orejas largas, nariz y barriga en
-forma de corazón, relleno plano en crema y rosa. El mismo personaje se dibuja de dos formas:
+Hanni es un **conejito de línea fina** (estética coreana/Y2K): cabeza redonda, orejas largas, ojos
+redondos, mejillas y nariz de corazón, sobre un **patrón rosa** de corazones, flores y destellos.
+Simple, plano, sin degradados ni texto coreano.
 
-- **Terminal (y este README):** el bloque ASCII de arriba, con bloques, rosas por filas y el nombre
-  en **Rysana Mono**, la tipografía del harness. No depende de fuentes ni de imágenes.
-- **GitHub:** los assets de `docs/images/`, dibujados desde la misma idea.
+Los assets viven en `docs/images/` y se regeneran todos con `python scripts/generate-brand.py`
+(PIL + la Rysana Mono del repo); el resultado es idéntico cada vez:
 
 | fichero | uso |
 |---|---|
+| `hannibanner.png` | banner del README y social preview (1600×520) |
 | `hanni-avatar.png` | icono cuadrado (1024×1024): avatar del repo y de la cuenta |
-| `hannibanner.png` | banner 1600×520 con el personaje y `hanni`, para la social preview |
-| `hanni-mascot.png` | la mascota suelta con fondo transparente |
+| `hanni-mascot.png` | la mascota suelta, fondo transparente |
+| `hanni-pattern.png` | el patrón rosa como asset (tile) |
 
-Se regeneran con `python scripts/generate-brand.py` (PIL + Rysana Mono) y salen idénticos. Paleta:
-crema `#FFF9F4`, rosa `#FFC2DE`, rosa saturado `#FF7AB0` y línea `#4A3A44`.
+Paleta: fondo `#FFF8FC`, patrón `#FFC9E0`, rosa `#FF7AB0` y línea `#4A3A44`. En la TUI el logo es el
+wordmark de una línea, `hanni♥`, porque el dibujo no cabe en texto.
 
 ## Licencia
 

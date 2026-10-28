@@ -153,7 +153,7 @@ import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { formatTokens } from "./components/footer.ts";
-import { hanniLogoLines, hanniWordmark, supportsHanniLogo } from "./components/hanni-logo.ts";
+import { hanniWordmark } from "./components/hanni-logo.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { openMemoryExplorer } from "./components/memory-explorer.ts";
@@ -993,15 +993,10 @@ export class InteractiveMode {
 		// Add header with keybindings from config (unless silenced)
 		if (this.shouldShowStartupHeader()) {
 			const showDetails = this.shouldShowStartupDetails();
-			// Built on demand so the header follows theme changes. The compact header is only the logo
-			// (or a "Hanni vX" line where the banner cannot render) plus how to see the rest: the key
-			// hints live in the status bar at the bottom, so they are not repeated here.
-			const showLogo = supportsHanniLogo();
-			const wordmark = () => {
-				const version = theme.fg("dim", `v${this.version}`);
-				if (!showLogo) return `${hanniWordmark()} ${version}`;
-				return `${hanniLogoLines().join("\n")}\n${version}`;
-			};
+			// Built on demand so the header follows theme changes. The compact header is just the
+			// wordmark plus how to see the rest: the key hints live in the status bar at the bottom,
+			// so they are not repeated here.
+			const wordmark = () => `${hanniWordmark()} ${theme.fg("dim", `v${this.version}`)}`;
 
 			// Build startup instructions using keybinding hint helpers
 			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
