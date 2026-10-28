@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="HanniPI — Hanni, conejito de línea fina sobre un patrón rosa" src="docs/images/hannibanner.png" width="640">
+  <img alt="Hanni — conejito de una línea" src="docs/images/hanni-logo.svg" width="132">
 </p>
 <p align="center">
   <strong>HanniPI</strong> — tu harness de desarrollo de software, con memoria persistente y flujo de trabajo sODD.
@@ -221,22 +221,17 @@ npm run check                 # lint, formato y type check
 
 ## Marca
 
-Hanni es un **conejito de línea fina** (estética coreana/Y2K): cabeza redonda, orejas largas, ojos
-redondos, mejillas y nariz de corazón, sobre un **patrón rosa** de corazones, flores y destellos.
-Simple, plano, sin degradados ni texto coreano.
+El logo es **un dibujo de una sola línea**: la silueta de Hanni (orejas y cara) en un único trazo
+cerrado, más la línea interior de cada oreja, dos ojos y una nariz de corazón. Transparente, sin
+fondo, sin rellenos ni degradados.
 
-Los assets viven en `docs/images/` y se regeneran todos con `python scripts/generate-brand.py`
-(PIL + la Rysana Mono del repo); el resultado es idéntico cada vez:
+- `docs/images/hanni-logo.svg` — el mark, vectorial (cabe en cualquier sitio: README, avatares, docs).
+- `docs/images/hanni-logo.png` — el mismo mark rasterizado a 1024 (para donde no se acepte SVG, como
+  el avatar de GitHub).
 
-| fichero | uso |
-|---|---|
-| `hannibanner.png` | banner del README y social preview (1600×520) |
-| `hanni-avatar.png` | icono cuadrado (1024×1024): avatar del repo y de la cuenta |
-| `hanni-mascot.png` | la mascota suelta, fondo transparente |
-| `hanni-pattern.png` | el patrón rosa como asset (tile) |
-
-Paleta: fondo `#FFF8FC`, patrón `#FFC9E0`, rosa `#FF7AB0` y línea `#4A3A44`. En la TUI el logo es el
-wordmark de una línea, `hanni♥`, porque el dibujo no cabe en texto.
+Ambos salen de `python scripts/generate-brand.py`, que define la geometría una vez y escribe SVG y
+PNG. Paleta: rosa `#FF7AB0` sobre transparente. En la TUI el logo es el wordmark `hanni♥`: el dibujo
+vive donde cabe.
 
 ## Licencia
 
