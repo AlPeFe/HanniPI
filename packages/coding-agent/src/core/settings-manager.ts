@@ -59,6 +59,7 @@ export type DisplayDensity = "compact" | "normal";
 export interface DisplaySettings {
 	density?: DisplayDensity; // default: "compact"
 	railSpacing?: RailSpacing; // default: "cozy" (SPEC-008, independent of density)
+	startupArt?: boolean; // default: true (SPEC-008): ASCII startup scene in the interactive TUI
 }
 
 export interface CompactionSettings {
@@ -1526,6 +1527,21 @@ export class SettingsManager {
 		}
 		this.globalSettings.display.railSpacing = normalizeRailSpacing(spacing);
 		this.markModified("display", "railSpacing");
+		this.save();
+	}
+
+	/** Escena ASCII de arranque de la TUI (SPEC-008). Activada por defecto. */
+	getStartupArt(): boolean {
+		return this.settings.display?.startupArt !== false;
+	}
+
+	/** Enciende o apaga el arte de arranque y lo persiste. */
+	setStartupArt(enabled: boolean): void {
+		if (!this.globalSettings.display) {
+			this.globalSettings.display = {};
+		}
+		this.globalSettings.display.startupArt = enabled === true;
+		this.markModified("display", "startupArt");
 		this.save();
 	}
 

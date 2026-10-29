@@ -156,6 +156,7 @@ import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { formatTokens } from "./components/footer.ts";
+import { HanniHeartComponent } from "./components/hanni-heart.ts";
 import { hanniWordmark } from "./components/hanni-logo.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
@@ -573,6 +574,9 @@ export class InteractiveMode {
 
 	// Header container that holds the built-in or custom header
 	private headerContainer: Container;
+
+	/** SPEC-008 B: escena ASCII de arranque; se retira al primer mensaje (undefined = retirada). */
+	private startupArt: HanniHeartComponent | undefined = undefined;
 
 	// Built-in header (logo + keybinding hints + changelog)
 	private builtInHeader: Component | undefined = undefined;
@@ -1000,6 +1004,13 @@ export class InteractiveMode {
 		// The header and startup notices bake theme colors into their text, so build them once the terminal
 		// reported its colors. This ends at the terminal's DA1 reply, or after 100 ms if it answers nothing.
 		await this.themeController.waitForTerminalColors();
+
+		// SPEC-008 B: la escena de arranque se pinta una sola vez, encima de la cabecera. No ocupa
+		// sitio durante la sesión: `addMessageToChat` la retira al primer mensaje del usuario.
+		if (this.settingsManager.getStartupArt()) {
+			this.startupArt = new HanniHeartComponent();
+			this.headerContainer.addChild(this.startupArt);
+		}
 
 		// Add header with keybindings from config (unless silenced)
 		if (this.shouldShowStartupHeader()) {
@@ -3846,6 +3857,17 @@ export class InteractiveMode {
 		for (const spacer of this.headerSpacers) spacer.setLines(lines);
 	}
 
+	/**
+	 * SPEC-008 B: retira la escena ASCII de arranque. Se llama al primer mensaje del usuario, para
+	 * que el dibujo no ocupe sitio durante la sesión; es idempotente.
+	 */
+	private dismissStartupArt(): void {
+		if (!this.startupArt) return;
+		this.headerContainer.removeChild(this.startupArt);
+		this.startupArt = undefined;
+		this.ui.requestRender();
+	}
+
 	/** Show a managed-tool status update in the chat. */
 	private showManagedToolStatus(status: ToolStatus): void {
 		if (!this.managedToolStatusStarted) {
@@ -3970,6 +3992,8 @@ export class InteractiveMode {
 			case "system":
 				break;
 			case "user": {
+				// SPEC-008 B: el arte de arranque desaparece en cuanto entra el primer mensaje.
+				this.dismissStartupArt();
 				const textContent = this.getUserMessageText(message);
 				if (textContent) {
 					if (this.chatContainer.children.length > 0) {
