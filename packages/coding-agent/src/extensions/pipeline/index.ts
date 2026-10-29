@@ -13,7 +13,10 @@
  *    cola no libera el siguiente rol hasta que esa llamada termina. Además, mientras hay
  *    un rol en vuelo, cualquier otra llamada a `subagent` se bloquea (`tool_call`), así
  *    que la invariante "nunca dos roles a la vez" no depende de la buena voluntad del modelo.
- *  - Estado por tarjeta: `queued → running → done | error | cancelled`.
+ *  - Estado por tarjeta queued → running → done | error | cancelled.
+ *  - Degradación limpia: la tool `subagent` no es built-in. Si el runtime no la expone, la
+ *    cola se queda entera en `queued` con un aviso visible ("subagent no instalado") en el
+ *    widget: no se pide ningún turno, no se lanza nada y no se espera el timeout.
  *  - `renderPipeline` generaliza el `renderFleet` de hanniorq: pinta TAMBIÉN las tarjetas
  *    en cola (antes sólo se pintaban las que ya habían arrancado), con rol y estado.
  *  - Cancelar una tarjeta la saca de la cola; si está corriendo, aborta ese subagente y
@@ -230,6 +233,31 @@ export class PipelineQueue {
 	}
 
 	/**
+	 * Devuelve una tarjeta a `queued` con una nota. Se usa cuando el rol no llegó a
+	 * lanzarse (falta la tool `subagent`): `queued` es el estado honesto, no `error`.
+	 * Una tarjeta cancelada no resucita.
+	 */
+	requeue(id: string, note?: string): void {
+		const card = this.expect(id);
+		if (card.status === "cancelled") return;
+		card.status = "queued";
+		if (note) card.note = note;
+		else delete card.note;
+		this.record(card);
+	}
+
+	/**
+	 * Deja toda la cola pendiente en `queued` con el mismo aviso, sin mover estados: es la
+	 * degradación por falta de `subagent`, donde nadie debe quedar en `error` ni en vuelo.
+	 */
+	holdAll(note: string): void {
+		for (const card of this.cards) {
+			if (card.status !== "queued") continue;
+			card.note = note;
+		}
+	}
+
+	/**
 	 * Cancela una tarjeta. Si estaba en cola, sólo sale ella. Si estaba corriendo, aborta el
 	 * pipeline: ella y todo lo que quedaba en cola pasan a `cancelled` y se anota por dónde se
 	 * quedó (para la ficha). `aborted` es la señal para abortar el subagente en vuelo.
@@ -302,6 +330,36 @@ export interface PipelineDispatchInput {
 export interface PipelineDispatchResult {
 	ok: boolean;
 	note?: string;
+	/**
+	 * El rol no se pudo ni intentar (falta la tool `subagent`). La tarjeta vuelve a `queued`
+	 * y la cola se para: no es un error del trabajo, es un prerrequisito ausente.
+	 */
+	blocked?: boolean;
+}
+
+/**
+ * Aviso único de degradación. Va en la nota de cada tarjeta y en el widget, así que el
+ * usuario ve por qué la cola no avanza sin leer logs.
+ */
+export const SUBAGENT_MISSING = "subagent no instalado";
+
+/** Lo mínimo que hace falta del runtime para saber si la tool está instalada. */
+export interface ToolSource {
+	getAllTools?: () => ReadonlyArray<{ name: string } | undefined> | undefined;
+}
+
+/**
+ * ¿Está `subagent` entre las tools del runtime? La pipeline la reusa; en HanniPI no es
+ * built-in (es `examples/extensions/subagent`), así que puede faltar. Si el runtime no
+ * expone `getAllTools`, se asume disponible: no se rompe nada por no poder comprobarlo.
+ */
+export function subagentAvailable(source: ToolSource | undefined): boolean {
+	if (typeof source?.getAllTools !== "function") return true;
+	try {
+		return (source.getAllTools() ?? []).some((tool) => tool?.name === "subagent");
+	} catch {
+		return true;
+	}
 }
 
 /** Lanza un rol. La implementación real pide la llamada a `subagent` y espera a que acabe. */
@@ -362,10 +420,19 @@ export class PipelineRunner {
 				// Si la cancelación llegó mientras estaba en vuelo, la tarjeta ya es `cancelled`
 				// y no se toca: el estado que puso el usuario manda.
 				if (card.status === "running") {
-					if (result.ok) this.queue.markDone(card.id);
+					if (result.blocked) {
+						// Prerrequisito ausente: la tarjeta vuelve a la cola con el aviso, no a error.
+						this.queue.requeue(card.id, result.note ?? SUBAGENT_MISSING);
+					} else if (result.ok) this.queue.markDone(card.id);
 					else this.queue.markError(card.id, result.note);
 				}
 				this.onChange?.();
+				if (result.blocked) {
+					// Nadie más arranca: los pendientes se quedan en `queued` con el mismo aviso.
+					this.queue.holdAll(result.note ?? SUBAGENT_MISSING);
+					this.onChange?.();
+					break;
+				}
 				if (this.queue.stoppedAt) break;
 			}
 		} finally {
@@ -583,13 +650,22 @@ function substateOf(row: PipelineRow, now: number): string {
  */
 export function pipelineLines(
 	rows: readonly PipelineRow[],
-	options: { now?: number; title?: string; task?: string; width?: number; footer?: boolean } = {},
+	options: {
+		now?: number;
+		title?: string;
+		task?: string;
+		width?: number;
+		footer?: boolean;
+		/** Aviso de degradación (p.ej. "subagent no instalado"): se pinta bajo el título. */
+		notice?: string;
+	} = {},
 ): string[] {
 	const now = options.now ?? Date.now();
 	const width = options.width ?? 0;
 	const trimToWidth = (line: string) => (width > 0 ? clip(line, width) : line);
 	const header = ["─", options.title ?? "pipeline", "─"].join(" ");
 	const lines = [trimToWidth(header)];
+	if (options.notice) lines.push(trimToWidth(`⚠ ${options.notice}: los roles siguen en cola`));
 	if (options.task) lines.push(trimToWidth(`◆ ${clip(oneLine(options.task), width > 0 ? width - 2 : 90)}`));
 	for (const row of rows) {
 		const state = STATUS_LABEL[row.status];
@@ -614,7 +690,14 @@ export function renderPipeline(
 	ui: ExtensionUIContext,
 	key: string,
 	rows: readonly PipelineRow[],
-	options: { now?: number; title?: string; task?: string; width?: number; footer?: boolean } = {},
+	options: {
+		now?: number;
+		title?: string;
+		task?: string;
+		width?: number;
+		footer?: boolean;
+		notice?: string;
+	} = {},
 ): void {
 	if (rows.length === 0) {
 		ui.setWidget(key, undefined);
@@ -661,6 +744,8 @@ export function createPipelineExtension(options: PipelineExtensionOptions = {}):
 		let runner: PipelineRunner | undefined;
 		let cwd = process.cwd();
 		let lastUi: ExtensionUIContext | undefined;
+		/** Motivo de degradación vivo (tool `subagent` ausente); se pinta en el widget. */
+		let blockedReason: string | undefined;
 		/** La llamada a `subagent` que la cola está esperando (una como máximo). */
 		let pending:
 			| { toolCallId?: string; claimed: boolean; finish: (result: PipelineDispatchResult) => void }
@@ -690,6 +775,7 @@ export function createPipelineExtension(options: PipelineExtensionOptions = {}):
 				now: now(),
 				title: `pipeline · ${roles.map((role) => role.label).join(" → ")}`,
 				task: queue.task,
+				...(blockedReason ? { notice: blockedReason } : {}),
 			});
 		}
 
@@ -710,8 +796,13 @@ export function createPipelineExtension(options: PipelineExtensionOptions = {}):
 		}
 
 		/** Lanzador real: pide la llamada a `subagent` y espera su `tool_execution_end`. */
-		const defaultDispatch: PipelineDispatch = (input) =>
-			new Promise<PipelineDispatchResult>((resolve) => {
+		const defaultDispatch: PipelineDispatch = (input) => {
+			// Prerrequisito ausente: se resuelve AL INSTANTE, sin pedir turno ni armar el
+			// temporizador (antes: 15 min de espera y una tarjeta en `error` por rol).
+			if (!subagentAvailable(pi)) {
+				return Promise.resolve<PipelineDispatchResult>({ ok: false, blocked: true, note: SUBAGENT_MISSING });
+			}
+			return new Promise<PipelineDispatchResult>((resolve) => {
 				let timer: ReturnType<typeof setTimeout> | undefined;
 				const finish = (result: PipelineDispatchResult): void => {
 					if (timer !== undefined) clearTimeout(timer);
@@ -733,6 +824,7 @@ export function createPipelineExtension(options: PipelineExtensionOptions = {}):
 				startedAt.set(input.card.id, now());
 				pi.sendUserMessage(dispatchMessage(input), { deliverAs: "followUp" });
 			});
+		};
 
 		const dispatch = options.dispatch ?? defaultDispatch;
 
@@ -742,10 +834,25 @@ export function createPipelineExtension(options: PipelineExtensionOptions = {}):
 		 */
 		let generation = 0;
 
-		function startRun(ui: ExtensionUIContext | undefined, targetCwd: string): void {
-			if (!queue) return;
+		/**
+		 * Arranca la cola. Si la tool `subagent` no está instalada NO se lanza nada: la cola
+		 * entera se queda en `queued` con el aviso, que es lo que la captura debe mostrar
+		 * (una tarjeta "esperando su turno" honesta, no tres errores por timeout).
+		 * Devuelve la promesa del bucle (o `undefined` si la cola no arrancó): los modos sin
+		 * TUI la esperan, porque allí el proceso muere en cuanto el comando retorna.
+		 */
+		function startRun(ui: ExtensionUIContext | undefined, targetCwd: string): Promise<void> | undefined {
+			if (!queue) return undefined;
 			cwd = targetCwd;
 			lastUi = ui;
+			if (!subagentAvailable(pi)) {
+				blockedReason = SUBAGENT_MISSING;
+				queue.holdAll(SUBAGENT_MISSING);
+				// `changed()` persiste en la ficha y repinta con el aviso.
+				changed();
+				return undefined;
+			}
+			blockedReason = undefined;
 			const mine = ++generation;
 			runner = new PipelineRunner({
 				queue,
@@ -756,7 +863,20 @@ export function createPipelineExtension(options: PipelineExtensionOptions = {}):
 					changed();
 				},
 			});
-			void runner.run();
+			const done = runner.run();
+			// Los errores ya quedan en la tarjeta; aquí sólo se evita un rechazo sin dueño.
+			void done.catch(() => {});
+			return done;
+		}
+
+		/**
+		 * Espera a que la cola termine cuando NO hay TUI. `pi -p` / `--mode json` ejecutan el
+		 * comando y cierran el proceso acto seguido: sin esto, el turno del rol 1 se queda a
+		 * medias y no hay quien libere el 2. La TUI no espera (el usuario manda turnos).
+		 */
+		async function settleIfHeadless(run: Promise<void> | undefined, mode: string | undefined): Promise<void> {
+			if (!run || (mode !== "print" && mode !== "json")) return;
+			await run;
 		}
 
 		/** Para el pipeline anterior antes de arrancar otro: cancela su tarjeta y lo silencia. */
@@ -787,6 +907,10 @@ export function createPipelineExtension(options: PipelineExtensionOptions = {}):
 				return;
 			}
 			queue = restoreQueue(saved.state, { now });
+			// Tras reiniciar, si quedan roles pendientes y la tool no está, el aviso debe seguir viéndose.
+			if (!subagentAvailable(pi) && queue.all.some((card) => card.status === "queued")) {
+				blockedReason = SUBAGENT_MISSING;
+			}
 			const pendingCount = queue.all.filter((card) => card.status === "queued").length;
 			repaint(ctx.ui);
 			if (pendingCount > 0) {
@@ -837,14 +961,22 @@ export function createPipelineExtension(options: PipelineExtensionOptions = {}):
 						stopPreviousRun();
 						queue = new PipelineQueue({ task, cards: roles.map((role) => ({ role: role.id })) }, { now });
 						startedAt.clear();
-						startRun(ctx.ui, cwd);
+						const run = startRun(ctx.ui, cwd);
 						if (!slug) {
 							ctx.ui.notify(
 								"Sin ficha sODD activa: la cola no se guardará (crea una con /task new <slug>)",
 								"warning",
 							);
 						}
+						if (!run) {
+							ctx.ui.notify(
+								`pipeline: ${SUBAGENT_MISSING} · la cola queda en Queued (instala la extensión en ~/.pi/agent/extensions/subagent)`,
+								"warning",
+							);
+							return;
+						}
 						ctx.ui.notify(`pipeline: ${roles.map((role) => role.label).join(" → ")} en cola`);
+						await settleIfHeadless(run, ctx.mode);
 						return;
 					}
 					case "resume": {
@@ -856,8 +988,13 @@ export function createPipelineExtension(options: PipelineExtensionOptions = {}):
 						stopPreviousRun();
 						queue = restoreQueue(saved.state, { now });
 						startedAt.clear();
-						startRun(ctx.ui, cwd);
+						const run = startRun(ctx.ui, cwd);
+						if (!run) {
+							ctx.ui.notify(`pipeline: ${SUBAGENT_MISSING} · la cola queda en Queued`, "warning");
+							return;
+						}
 						ctx.ui.notify(`pipeline reanudado desde odd/tasks/${saved.slug}.md`);
+						await settleIfHeadless(run, ctx.mode);
 						return;
 					}
 					case "cancel": {

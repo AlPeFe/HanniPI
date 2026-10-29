@@ -329,6 +329,117 @@ describe("pipeline: render", () => {
 	});
 });
 
+describe("pipeline: degradación limpia sin la tool subagent", () => {
+	it("sin `subagent` la cola queda entera en Queued, con aviso en el widget y sin lanzar nada", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pipeline-degraded-"));
+		roots.push(root);
+		const sheet = writeSheet(root, "demo", SHEET);
+		const gated = gatedDispatch();
+		const mock = createMockPi(root, { dispatch: gated.dispatch, toolset: [] });
+
+		await mock.command("pipeline", "start algo");
+		await tick();
+
+		// Ni una llamada al lanzador, ni un turno pedido al agente.
+		expect(gated.calls).toHaveLength(0);
+		expect(mock.sentMessages).toHaveLength(0);
+
+		const lines = mock.widgetLines("pipeline");
+		const text = lines.join("\n");
+		expect(text).toContain("subagent no instalado");
+		expect(lines.filter((line) => line.includes("Queued"))).toHaveLength(3);
+		expect(text).not.toContain("Running");
+		expect(text).not.toContain("Error");
+
+		// El aviso también queda en la ficha: nada de tarjetas en error.
+		const saved = readFileSync(sheet, "utf-8");
+		expect(saved).toContain("- [queued] 1 · explorer · subagent no instalado");
+		expect(saved).toContain("- [queued] 3 · reviewer · subagent no instalado");
+		expect(saved).not.toContain("[error]");
+		// Y el usuario recibe el aviso, no un "en cola" alegre.
+		expect(mock.notifications.some((note) => note.includes("subagent no instalado"))).toBe(true);
+	});
+
+	it("si la tool desaparece en mitad del pipeline, el rol vuelve a Queued (sin timeout)", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pipeline-vanished-"));
+		roots.push(root);
+		const mock = createMockPi(root, {});
+
+		await mock.command("pipeline", "start algo");
+		await tick();
+		expect(mock.sentMessages).toHaveLength(1);
+
+		// El explorer corre; mientras tanto la extensión de subagent se descarga.
+		expect(mock.toolCall("subagent", "call-a")).toBeUndefined();
+		mock.setToolset([]);
+		mock.end("call-a");
+		await tick();
+
+		// El rol 1 terminó; el 2 no se pide: se resuelve al instante como blocked.
+		expect(mock.sentMessages).toHaveLength(1);
+		const lines = mock.widgetLines("pipeline");
+		const text = lines.join("\n");
+		expect(text).toContain("subagent no instalado");
+		expect(text).toContain("2 Builder · Queued");
+		expect(text).toContain("3 Reviewer · Queued");
+		expect(text).not.toContain("Error");
+	});
+
+	it("con la tool instalada el pipeline arranca normal (control)", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pipeline-control-"));
+		roots.push(root);
+		const mock = createMockPi(root, {});
+		await mock.command("pipeline", "start algo");
+		await tick();
+		expect(mock.sentMessages).toHaveLength(1);
+		const text = mock.widgetLines("pipeline").join("\n");
+		expect(text).toContain("Running");
+		expect(text).not.toContain("subagent no instalado");
+	});
+});
+
+describe("pipeline: modos sin TUI (-p / --mode json)", () => {
+	it("el comando no retorna hasta que la cola termina (si no, print mode mata el turno)", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pipeline-headless-"));
+		roots.push(root);
+		const gated = gatedDispatch();
+		const mock = createMockPi(root, { dispatch: gated.dispatch, mode: "json" });
+
+		let returned = false;
+		const handled = mock.command("pipeline", "start algo").then(() => {
+			returned = true;
+		});
+		await tick();
+		await tick();
+		// Rol 1 en vuelo: el handler sigue esperando.
+		expect(returned).toBe(false);
+		expect(gated.calls.map((call) => call.card.role)).toEqual(["explorer"]);
+
+		gated.release();
+		await tick();
+		await tick();
+		expect(returned).toBe(false);
+		gated.release();
+		await tick();
+		await tick();
+		expect(returned).toBe(false);
+
+		gated.release();
+		await handled;
+		expect(returned).toBe(true);
+		expect(gated.calls.map((call) => call.card.role)).toEqual(["explorer", "builder", "reviewer"]);
+	});
+
+	it("en la TUI el comando retorna al instante (el usuario manda turnos)", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pipeline-tui-"));
+		roots.push(root);
+		const gated = gatedDispatch();
+		const mock = createMockPi(root, { dispatch: gated.dispatch, mode: "tui" });
+		await mock.command("pipeline", "start algo");
+		expect(gated.calls.map((call) => call.card.role)).toEqual(["explorer"]);
+	});
+});
+
 describe("pipeline: coste de tokens", () => {
 	it("no registra ninguna tool ni añade comandos de esquema", () => {
 		const root = mkdtempSync(join(tmpdir(), "pipeline-tokens-"));
@@ -421,10 +532,17 @@ function writeSheet(root: string, slug: string, content: string): string {
 /** pi falso: captura comandos, atajos, listeners, widgets y tools registradas. */
 function createMockPi(
 	root: string,
-	options: { dispatch?: PipelineDispatch; settings?: Record<string, unknown> } = {},
+	options: {
+		dispatch?: PipelineDispatch;
+		settings?: Record<string, unknown>;
+		toolset?: string[];
+		mode?: string;
+	} = {},
 ): {
 	tools: string[];
 	sentMessages: string[];
+	notifications: string[];
+	setToolset: (names: string[]) => void;
 	command: (name: string, args: string) => Promise<void>;
 	shortcut: () => void;
 	emit: (event: string, payload: unknown) => unknown[];
@@ -439,6 +557,8 @@ function createMockPi(
 	const notifications: string[] = [];
 	const tools: string[] = [];
 	const sentMessages: string[] = [];
+	// Tools del runtime: por defecto `subagent` está instalada (el caso real de la fase 1b).
+	const toolset: string[] = [...(options.toolset ?? ["subagent"])];
 
 	const ui = {
 		notify: (message: string) => notifications.push(message),
@@ -464,8 +584,8 @@ function createMockPi(
 		},
 		registerTool: (tool: { name: string }) => tools.push(tool.name),
 		getSettings: () => options.settings ?? {},
-		getActiveTools: () => [],
-		getAllTools: () => [],
+		getActiveTools: () => [...toolset],
+		getAllTools: () => toolset.map((name) => ({ name })),
 		sendUserMessage: (text: string) => {
 			sentMessages.push(text);
 		},
@@ -474,13 +594,17 @@ function createMockPi(
 
 	createPipelineExtension({ ...(options.dispatch ? { dispatch: options.dispatch } : {}) })(pi);
 
-	const ctx = { cwd: root, ui, mode: "tui", hasUI: true } as unknown;
+	const ctx = { cwd: root, ui, mode: options.mode ?? "tui", hasUI: true } as unknown;
 	const emit = (event: string, payload: unknown): unknown[] =>
 		(listeners.get(event) ?? []).map((handler) => handler(payload, ctx));
 
 	return {
 		tools,
 		sentMessages,
+		notifications,
+		setToolset: (names: string[]) => {
+			toolset.splice(0, toolset.length, ...names);
+		},
 		command: async (name: string, args: string) => {
 			const command = commands.get(name);
 			if (!command) throw new Error(`comando no registrado: ${name}`);
