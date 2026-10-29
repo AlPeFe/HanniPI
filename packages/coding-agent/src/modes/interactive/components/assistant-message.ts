@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { Container, Markdown, type MarkdownTheme, MouseRegion, Panel, Spacer, Text } from "@earendil-works/pi-tui";
+import { isCompactDensity } from "../../../core/display-density.ts";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
@@ -95,6 +96,10 @@ export class AssistantMessageComponent extends Container {
 		if (this.contentContainer.children.length === 0) {
 			return [];
 		}
+		// Compact density names the message in a dim one-line rule instead of a full box.
+		const compact = isCompactDensity();
+		this.panel.setBorderMode(compact ? "rule" : "box");
+		this.panel.setTitle(theme.fg(compact ? "muted" : "accent", "hanni"));
 		this.panel.setStatus(this.isStreaming ? theme.fg("warning", "generando…") : "");
 		const lines = super.render(width);
 		if (this.hasToolCalls || lines.length === 0) {
@@ -118,7 +123,8 @@ export class AssistantMessageComponent extends Container {
 		);
 
 		if (hasVisibleContent) {
-			this.contentContainer.addChild(new Spacer(1));
+			// Compact drops the blank line the body used to start with; the rule above already separates it.
+			if (!isCompactDensity()) this.contentContainer.addChild(new Spacer(1));
 		}
 
 		// Render content in order

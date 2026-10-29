@@ -2,6 +2,7 @@ import { type Component, TuiMainScreen } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
+import { setDisplayDensity } from "../src/core/display-density.ts";
 import type { ToolDefinition } from "../src/core/extensions/types.ts";
 import { createEditToolDefinition } from "../src/core/tools/edit.ts";
 import { BashExecutionComponent } from "../src/modes/interactive/components/bash-execution.ts";
@@ -84,6 +85,9 @@ const components: Array<{ name: string; create: (outputPad: number) => OutputPad
 describe("outputPad", () => {
 	beforeAll(() => {
 		initTheme("dark");
+		// The padding contract here is measured on the classic frame: compact drops the card's
+		// vertical padding on purpose (SPEC-007), so it is asserted in display-density.test.ts.
+		setDisplayDensity("normal");
 	});
 
 	afterAll(() => {

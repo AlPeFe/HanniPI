@@ -8,6 +8,7 @@ const imageConvertMocks = vi.hoisted(() => ({ convertToPng: vi.fn() }));
 vi.mock("../src/utils/image-convert.ts", () => imageConvertMocks);
 
 import { getReadmePath } from "../src/config.ts";
+import { setDisplayDensity } from "../src/core/display-density.ts";
 import type { ToolDefinition } from "../src/core/extensions/types.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
@@ -51,6 +52,8 @@ function createFakeTui(): TUI {
 describe("ToolExecutionComponent parity", () => {
 	beforeAll(() => {
 		initTheme("dark");
+		// The framed cards these assertions describe are the classic layout (SPEC-007).
+		setDisplayDensity("normal");
 	});
 	afterEach(() => {
 		resetCapabilitiesCache();

@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 import { type Component, Container, type Focusable, type TUI } from "../../tui/src/tui.ts";
 import { TuiMainScreen } from "../../tui/src/tui-main-screen.ts";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
+import { setDisplayDensity } from "../src/core/display-density.ts";
 import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
 import type { QuietStartup } from "../src/core/settings-manager.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
@@ -120,7 +121,11 @@ describe("InteractiveMode.showStatus", () => {
 });
 
 describe("InteractiveMode.showManagedToolStatus", () => {
-	beforeAll(() => initTheme("dark"));
+	beforeAll(() => {
+		initTheme("dark");
+		// This group asserts the classic spacing before the first managed-tool line (SPEC-007).
+		setDisplayDensity("normal");
+	});
 
 	test("renders tool updates as one contiguous group", () => {
 		const fakeThis: any = {
@@ -129,6 +134,8 @@ describe("InteractiveMode.showManagedToolStatus", () => {
 			managedToolStatusStarted: false,
 			lastStatusSpacer: undefined,
 			lastStatusText: undefined,
+			// The prototype method reads the density singleton, so it is bound to the fake context.
+			addChatGap: (InteractiveMode as any).prototype.addChatGap,
 		};
 		const showManagedToolStatus = (InteractiveMode as any).prototype.showManagedToolStatus;
 

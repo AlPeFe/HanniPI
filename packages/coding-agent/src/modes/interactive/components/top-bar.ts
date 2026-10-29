@@ -1,11 +1,12 @@
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AgentSession } from "../../../core/agent-session.ts";
+import { isCompactDensity } from "../../../core/display-density.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ContextUsage } from "../../../core/extensions/types.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
 import { addUsageToTotals, createUsageTotals, type UsageTotals } from "../../../core/usage-totals.ts";
 import { theme } from "../theme/theme.ts";
-import { formatCwdForFooter, formatTokens } from "./footer.ts";
+import { formatCwdForFooter, formatTokens, truncateCwdForDensity } from "./footer.ts";
 import { hanniWordmark } from "./hanni-logo.ts";
 
 /** Sanitize text for display in a single-line status. */
@@ -18,6 +19,29 @@ function sanitizeStatusText(text: string): string {
 
 /** Cells of the context meter drawn in the top bar. */
 const CONTEXT_METER_CELLS = 10;
+
+/**
+ * Compact header fallbacks, widest first. The render picks the first one that fits the terminal, so a
+ * wide terminal keeps the version and the cache columns and a 120-column one keeps the rest of the
+ * identity. The last entry never drops the directory, the branch, the session name or the spend.
+ */
+const COMPACT_VARIANTS: ReadonlyArray<UsageLabelVariant> = [
+	{ version: true, cache: true, meterCells: CONTEXT_METER_CELLS, window: true },
+	{ version: false, cache: false, meterCells: 5, window: false },
+	{ version: false, cache: false, meterCells: 0, window: false },
+];
+
+/** Which secondary columns the compact header keeps; the classic bar always draws all of them. */
+interface UsageLabelVariant {
+	/** Wordmark version suffix (compact only). */
+	version?: boolean;
+	/** Cache read/write columns and the cache hit rate. */
+	cache?: boolean;
+	/** Context meter cells; `0` hides the meter. */
+	meterCells?: number;
+	/** Context window size next to the percentage (`12%/200k`). */
+	window?: boolean;
+}
 
 interface SessionStats {
 	session: AgentSession;
@@ -119,7 +143,57 @@ export class TopBarComponent implements Component {
 
 	render(width: number): string[] {
 		if (width <= 0) return [];
+		if (isCompactDensity()) return [this.renderCompactLine(width)];
 		return [this.renderIdentityLine(width), this.renderResourceLine(width)];
+	}
+
+	/**
+	 * Compact header: identity, extension statuses, spend and context on a single dim line, with the
+	 * model on the right.
+	 *
+	 * The two classic lines do not fit in one at 120 columns, so the line degrades in a fixed order
+	 * instead of letting `composeLine` eat the left side: first the version, then the cache columns
+	 * and the context window size, and last the context meter. The directory, the branch, the session
+	 * name, the spend and the context percentage are never dropped — they are what the bar is for.
+	 */
+	private renderCompactLine(width: number): string {
+		const { usageTotals, latestCacheHitRate, contextUsage } = this.getSessionStats();
+		let last = { left: "", right: "" };
+		for (const variant of COMPACT_VARIANTS) {
+			last = {
+				left: this.compactIdentityLabel(variant.version === true),
+				right: [
+					this.usageLabel(usageTotals, latestCacheHitRate, contextUsage, variant),
+					this.modelLabel(this.session.state),
+				]
+					.filter(Boolean)
+					.join(theme.fg("dim", " · ")),
+			};
+			if (visibleWidth(last.left) + visibleWidth(last.right) + 2 <= width) break;
+		}
+		return this.composeLine(last.left, last.right, width);
+	}
+
+	/** Wordmark, directory, branch, session name and extension statuses: the left half of the bar. */
+	private compactIdentityLabel(showVersion: boolean): string {
+		const cwd = truncateCwdForDensity(
+			formatCwdForFooter(this.session.sessionManager.getCwd(), process.env.HOME || process.env.USERPROFILE),
+		);
+		const branch = this.footerData.getGitBranch();
+		const sessionName = this.session.sessionManager.getSessionName();
+		const identity = [
+			showVersion ? `${hanniWordmark()} ${theme.fg("dim", `v${this.version}`)}` : hanniWordmark(),
+			theme.fg("text", cwd),
+			branch ? theme.fg("dim", `(${branch})`) : "",
+			sessionName ? theme.fg("muted", `• ${sessionName}`) : "",
+		]
+			.filter(Boolean)
+			.join(" ");
+		const statuses = Array.from(this.footerData.getExtensionStatuses().values())
+			.map((text) => theme.fg("muted", sanitizeStatusText(text)))
+			.join(theme.fg("dim", " · "));
+		const separator = theme.fg("dim", " · ");
+		return [identity, statuses].filter(Boolean).join(separator);
 	}
 
 	private renderIdentityLine(width: number): string {
@@ -167,17 +241,21 @@ export class TopBarComponent implements Component {
 		usageTotals: UsageTotals,
 		latestCacheHitRate: number | undefined,
 		contextUsage: ContextUsage | undefined,
+		variant: UsageLabelVariant = {},
 	): string {
 		const state = this.session.state;
 		const contextWindow = contextUsage?.contextWindow ?? state.model?.contextWindow ?? 0;
 		const percent = contextUsage?.percent ?? 0;
+		const showCache = variant.cache ?? true;
+		const showWindow = variant.window ?? true;
+		const meterCells = variant.meterCells ?? CONTEXT_METER_CELLS;
 
 		const parts: string[] = [];
 		if (usageTotals.input) parts.push(theme.fg("muted", `↑${formatTokens(usageTotals.input)}`));
 		if (usageTotals.output) parts.push(theme.fg("muted", `↓${formatTokens(usageTotals.output)}`));
-		if (usageTotals.cacheRead) parts.push(theme.fg("dim", `R${formatTokens(usageTotals.cacheRead)}`));
-		if (usageTotals.cacheWrite) parts.push(theme.fg("dim", `W${formatTokens(usageTotals.cacheWrite)}`));
-		if ((usageTotals.cacheRead > 0 || usageTotals.cacheWrite > 0) && latestCacheHitRate !== undefined) {
+		if (showCache && usageTotals.cacheRead) parts.push(theme.fg("dim", `R${formatTokens(usageTotals.cacheRead)}`));
+		if (showCache && usageTotals.cacheWrite) parts.push(theme.fg("dim", `W${formatTokens(usageTotals.cacheWrite)}`));
+		if (showCache && (usageTotals.cacheRead > 0 || usageTotals.cacheWrite > 0) && latestCacheHitRate !== undefined) {
 			parts.push(theme.fg("dim", `CH${latestCacheHitRate.toFixed(1)}%`));
 		}
 		// Kimi Coding is subscription-backed despite using API-key authentication.
@@ -189,13 +267,16 @@ export class TopBarComponent implements Component {
 		}
 
 		const percentColor = percent > 90 ? "error" : percent > 70 ? "warning" : "accent";
-		const meter =
-			theme.fg(percentColor, "▰".repeat(Math.round((percent / 100) * CONTEXT_METER_CELLS))) +
-			theme.fg("dim", "▱".repeat(CONTEXT_METER_CELLS - Math.round((percent / 100) * CONTEXT_METER_CELLS)));
 		const auto = this.autoCompactSuffix();
 		const percentText = contextUsage?.percent !== null && contextUsage !== undefined ? `${percent.toFixed(0)}%` : "?";
-		const context = `${theme.fg("dim", "ctx")} ${meter} ${theme.fg("muted", percentText)}${theme.fg("dim", `/${formatTokens(contextWindow)}${auto}`)}`;
-		parts.push(context);
+		const windowSuffix = showWindow ? theme.fg("dim", `/${formatTokens(contextWindow)}${auto}`) : "";
+		if (meterCells > 0) {
+			const filled = Math.round((percent / 100) * meterCells);
+			const meter = theme.fg(percentColor, "▰".repeat(filled)) + theme.fg("dim", "▱".repeat(meterCells - filled));
+			parts.push(`${theme.fg("dim", "ctx")} ${meter} ${theme.fg("muted", percentText)}${windowSuffix}`);
+		} else {
+			parts.push(`${theme.fg("dim", "ctx")} ${theme.fg("muted", percentText)}${windowSuffix}`);
+		}
 		if (areExperimentalFeaturesEnabled()) parts.push(theme.fg("warning", "xp"));
 		return parts.join(" ");
 	}

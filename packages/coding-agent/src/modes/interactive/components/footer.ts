@@ -29,3 +29,19 @@ export function formatCwdForFooter(cwd: string, home: string | undefined): strin
 	// Always `/`: the top bar is one line, and a Windows path would read as `~\proyecto`.
 	return relativeToHome === "" ? "~" : `~/${relativeToHome.split(sep).join("/")}`;
 }
+
+/**
+ * Compact density: a long working directory keeps its last segments behind a leading ellipsis, so
+ * the project name stays readable instead of being cut off on the right.
+ */
+export function truncateCwdForDensity(cwd: string, maxLength = 42): string {
+	if (cwd.length <= maxLength) return cwd;
+	const segments = cwd.split("/");
+	let tail = "";
+	for (let i = segments.length - 1; i >= 0; i -= 1) {
+		const candidate = `/${segments[i]}${tail}`;
+		if (candidate.length + 1 > maxLength) break;
+		tail = candidate;
+	}
+	return tail ? `…${tail}` : cwd.slice(-maxLength);
+}

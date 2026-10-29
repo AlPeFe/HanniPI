@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
+import { setDisplayDensity } from "../src/core/display-density.ts";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
@@ -34,6 +35,11 @@ function createAssistantMessage(
 }
 
 describe("AssistantMessageComponent", () => {
+	// These assertions describe the classic boxed layout; density is a module singleton (SPEC-007).
+	beforeAll(() => {
+		setDisplayDensity("normal");
+	});
+
 	test("adds OSC 133 zone markers to assistant messages without tool calls", () => {
 		initTheme("dark");
 
@@ -102,29 +108,43 @@ describe("AssistantMessageComponent", () => {
 			]),
 		);
 		const width = 80;
-		const lines = component.render(width);
-		const firstThinkingRow = lines.findIndex((line) => stripAnsi(line).includes("first reasoning"));
-		expect(firstThinkingRow).toBeGreaterThanOrEqual(0);
-		const event: TuiMouseEvent = {
-			type: "click",
-			button: "left",
-			x: 1,
-			y: firstThinkingRow,
-			screenX: 1,
-			screenY: firstThinkingRow,
-			width,
-			height: lines.length,
-			shift: false,
-			alt: false,
-			ctrl: false,
-			clickCount: 1,
+		/** Clicks the row that contains `anchor` and returns the rendered text afterwards. */
+		const clickRowContaining = (anchor: string) => {
+			const lines = component.render(width);
+			const row = lines.findIndex((line) => stripAnsi(line).includes(anchor));
+			expect(row).toBeGreaterThanOrEqual(0);
+			const event: TuiMouseEvent = {
+				type: "click",
+				button: "left",
+				x: 1,
+				y: row,
+				screenX: 1,
+				screenY: row,
+				width,
+				height: lines.length,
+				shift: false,
+				alt: false,
+				ctrl: false,
+				clickCount: 1,
+			};
+			expect(component.handleMouse(event)?.handled).toBe(true);
+			return stripAnsi(component.render(width).join("\n"));
 		};
-		expect(component.handleMouse(event)?.handled).toBe(true);
 
-		const collapsed = stripAnsi(component.render(width).join("\n"));
+		// A thinking run cycles resumen → completo → oculto → resumen on click (69ec4e45a). The first
+		// click expands it to the full text, the second one hides it behind the label, and the third
+		// one brings the summary back, so only the run under the cursor changes state at a time.
+		const expanded = clickRowContaining("first reasoning");
+		expect(expanded).toContain("first reasoning");
+		expect(expanded).toContain("second reasoning");
+
+		const collapsed = clickRowContaining("first reasoning");
 		expect(collapsed).not.toContain("first reasoning");
 		expect(collapsed).toContain("Thinking...");
 		expect(collapsed).toContain("second reasoning");
+
+		const summarized = clickRowContaining("Thinking...");
+		expect(summarized).toContain("first reasoning");
 	});
 
 	test("uses configured output padding for text and thinking", () => {

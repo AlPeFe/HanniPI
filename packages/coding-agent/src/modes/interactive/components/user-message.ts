@@ -1,4 +1,5 @@
 import { Container, Markdown, type MarkdownTheme, Panel } from "@earendil-works/pi-tui";
+import { isCompactDensity } from "../../../core/display-density.ts";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
@@ -35,8 +36,15 @@ export class UserMessageComponent extends Container {
 		this.rebuild();
 	}
 
+	override invalidate(): void {
+		super.invalidate();
+		this.rebuild();
+	}
+
 	private rebuild(): void {
 		this.clear();
+		// Compact density: the name lives in a dim one-line rule, without side or bottom borders.
+		const compact = isCompactDensity();
 		// The Markdown pads and colors its own background: a Box around it would keep a second full-width copy of every
 		// line, with identical output. The panel adds the frame: its title names who is talking, and its background
 		// keeps the user block tinted from edge to edge.
@@ -58,8 +66,9 @@ export class UserMessageComponent extends Container {
 					},
 				),
 				{
-					title: theme.fg("accent", "tú"),
+					title: theme.fg(compact ? "muted" : "accent", "tú"),
 					borderColor: (text: string) => theme.fg("borderMuted", text),
+					borderMode: compact ? "rule" : "box",
 					paddingX: 0,
 					background: (text: string) => theme.bg("userMessageBg", text),
 				},

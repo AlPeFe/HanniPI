@@ -11,6 +11,7 @@ import {
 	type TUI,
 	type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
+import { isCompactDensity } from "../../../core/display-density.ts";
 import type { ToolDefinition, ToolRenderContext, ToolRenderers } from "../../../core/extensions/types.ts";
 
 /** What this component needs from a tool: how to draw it, without executing it. */
@@ -32,6 +33,7 @@ export interface ToolExecutionOptions {
 export class ToolExecutionComponent extends Container {
 	private shell: Container;
 	private panel: Panel;
+	private topSpacer: Spacer;
 	private contentBox: Box;
 	private contentText: Text;
 	private contentTextRegion: MouseRegion;
@@ -86,7 +88,8 @@ export class ToolExecutionComponent extends Container {
 		this.ui = ui;
 		this.cwd = cwd;
 
-		this.addChild(new Spacer(1));
+		this.topSpacer = new Spacer(1);
+		this.addChild(this.topSpacer);
 
 		// Always create all shell variants. contentBox is used for default renderer-based composition.
 		// selfRenderContainer is used when the tool renders its own framing.
@@ -270,6 +273,10 @@ export class ToolExecutionComponent extends Container {
 			return [];
 		}
 
+		// Compact density drops the blank line that used to separate the card from the message above.
+		const compact = isCompactDensity();
+		this.topSpacer.setLines(compact ? 0 : 1);
+
 		if (this.hasRendererDefinition() && this.getRenderShell() === "self") {
 			const contentLines = this.selfRenderContainer.render(width);
 			this.selfRenderHeight = contentLines.length;
@@ -279,7 +286,7 @@ export class ToolExecutionComponent extends Container {
 
 			const lines: string[] = [];
 			if (contentLines.length > 0) {
-				lines.push("");
+				if (!compact) lines.push("");
 				lines.push(...contentLines);
 			}
 			for (let i = 0; i < this.imageComponents.length; i++) {
@@ -314,7 +321,13 @@ export class ToolExecutionComponent extends Container {
 			: this.result?.isError
 				? (text: string) => theme.bg("toolErrorBg", text)
 				: (text: string) => theme.bg("toolSuccessBg", text);
-		this.panel.setTitle(theme.fg("toolTitle", theme.bold(this.toolName)));
+		// Compact keeps the tool name and its state in the same rule above the body, dimmed: the
+		// transcript reads as a list of lines instead of a stack of boxes.
+		const compact = isCompactDensity();
+		this.panel.setBorderMode(compact ? "rule" : "box");
+		this.panel.setTitle(
+			theme.fg(compact ? "muted" : "toolTitle", compact ? this.toolName : theme.bold(this.toolName)),
+		);
 		this.panel.setStatus(
 			this.isPartial
 				? theme.fg("warning", "ejecutando")
@@ -330,6 +343,7 @@ export class ToolExecutionComponent extends Container {
 			if (renderContainer instanceof Box) {
 				renderContainer.setBgFn(bgFn);
 				renderContainer.setPaddingX(this.outputPad);
+				renderContainer.setPaddingY(compact ? 0 : 1);
 			}
 			renderContainer.clear();
 
@@ -382,7 +396,8 @@ export class ToolExecutionComponent extends Container {
 		} else {
 			this.contentText.setCustomBgFn(bgFn);
 			this.contentText.setPaddingX(this.outputPad);
-			this.contentText.setText(this.formatToolExecution());
+			this.contentText.setPaddingY(compact ? 0 : 1);
+			this.contentText.setText(this.formatToolExecution(compact));
 			hasContent = true;
 		}
 
@@ -432,11 +447,12 @@ export class ToolExecutionComponent extends Container {
 		return getRenderedTextOutput(this.result, this.showImages);
 	}
 
-	private formatToolExecution(): string {
+	private formatToolExecution(compact = false): string {
 		let text = theme.fg("toolTitle", theme.bold(this.toolName));
 		const content = JSON.stringify(this.args, null, 2);
 		if (content) {
-			text += `\n\n${content}`;
+			// Compact keeps the args one row closer to the title.
+			text += compact ? `\n${content}` : `\n\n${content}`;
 		}
 		const output = this.getTextOutput();
 		if (output) {

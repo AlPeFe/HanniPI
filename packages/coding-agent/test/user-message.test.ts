@@ -1,4 +1,5 @@
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
+import { setDisplayDensity } from "../src/core/display-density.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -9,6 +10,11 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 const BG_RESET = "\x1b[49m";
 
 describe("UserMessageComponent", () => {
+	// The five-row frame asserted here is the classic boxed layout (SPEC-007).
+	beforeAll(() => {
+		setDisplayDensity("normal");
+	});
+
 	test("keeps user message height stable while moving closing OSC markers off line end", () => {
 		initTheme("dark");
 

@@ -55,6 +55,12 @@ export class Box implements Component {
 		this.invalidateCache();
 	}
 
+	/** Vertical padding: compact layouts drop the blank row above and below the content. */
+	setPaddingY(paddingY: number): void {
+		this.paddingY = paddingY;
+		this.invalidateCache();
+	}
+
 	private invalidateCache(): void {
 		this.cache = undefined;
 	}

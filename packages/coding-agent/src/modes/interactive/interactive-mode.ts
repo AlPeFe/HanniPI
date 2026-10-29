@@ -77,6 +77,7 @@ import {
 import { formatCacheWarmingStatus, formatCacheWarmingUsage } from "../../core/cache-warmer.ts";
 import { findExtensionStackMatches, recordCrash, takeUnnotifiedCrash } from "../../core/crash-log.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "../../core/defaults.ts";
+import { getDisplayDensity, isCompactDensity, setDisplayDensity } from "../../core/display-density.ts";
 import type {
 	AutocompleteProviderFactory,
 	EditorFactory,
@@ -574,6 +575,8 @@ export class InteractiveMode {
 
 	// Built-in header (logo + keybinding hints + changelog)
 	private builtInHeader: Component | undefined = undefined;
+	/** Blank rows around the built-in wordmark: one line each in classic density, zero in compact. */
+	private headerSpacers: Spacer[] = [];
 
 	// Custom header from extension (undefined = use built-in header)
 	private customHeader: (Component & { dispose?(): void }) | undefined = undefined;
@@ -961,7 +964,10 @@ export class InteractiveMode {
 		// The chrome stays outside the transcript: the top bar holds identity and resources, the
 		// viewport keeps the scrolling conversation plus the input dock and the status bar.
 		this.fullscreenLayoutRoot = new VStack([
-			{ component: this.topBar, basis: "auto", grow: 0, shrink: 0, minSize: 2 },
+			// `basis: auto` already gives the bar its intrinsic height (two lines classic, one line
+			// compact), and `shrink: 0` keeps it there: the floor is 1 so compact is not padded back
+			// to two rows by the layout (SPEC-007).
+			{ component: this.topBar, basis: "auto", grow: 0, shrink: 0, minSize: 1 },
 			{ component: viewport.root, basis: 0, grow: 1, shrink: 1, minSize: 1 },
 		]);
 		this.resizeRailWidth = viewport.setRightRailWidth;
@@ -1037,18 +1043,29 @@ export class InteractiveMode {
 					"dim",
 					`Hanni can explain her own features and look up her docs. Ask her how to use or extend Hanni.`,
 				);
+			// Compact density joins the wordmark and the hint on one line and drops the filler blanks:
+			// the same content in two lines instead of five.
+			const compactHeaderText = () => `${wordmark()}  ${compactOnboarding()}\n${onboarding()}`;
+			const compactExpandedText = () => `${wordmark()}  ${expandedInstructions()}\n${onboarding()}`;
+			const classicHeaderText = () => `${wordmark()}\n\n${compactOnboarding()}\n\n${onboarding()}`;
+			const classicExpandedText = () => `${wordmark()}\n\n${expandedInstructions()}\n\n${onboarding()}`;
 			this.builtInHeader = new ExpandableText(
-				() => `${wordmark()}\n\n${compactOnboarding()}\n\n${onboarding()}`,
-				() => `${wordmark()}\n\n${expandedInstructions()}\n\n${onboarding()}`,
+				() => (isCompactDensity() ? compactHeaderText() : classicHeaderText()),
+				() => (isCompactDensity() ? compactExpandedText() : classicExpandedText()),
 				this.getStartupExpansionState(),
 				1,
 				0,
 			);
 
-			// Setup UI layout
-			this.headerContainer.addChild(new Spacer(1));
+			// Setup UI layout: the blank rows around the wordmark are the classic spacing; compact
+			// sets them to zero lines at render time so a runtime density switch still applies.
+			const topSpacer = new Spacer(1);
+			const bottomSpacer = new Spacer(1);
+			this.headerSpacers = [topSpacer, bottomSpacer];
+			this.headerContainer.addChild(topSpacer);
 			this.headerContainer.addChild(this.builtInHeader);
-			this.headerContainer.addChild(new Spacer(1));
+			this.headerContainer.addChild(bottomSpacer);
+			this.applyHeaderDensity();
 		} else {
 			// Minimal header when silenced
 			this.builtInHeader = new Text("", 0, 0);
@@ -1989,6 +2006,13 @@ export class InteractiveMode {
 	private applyRuntimeSettings(): void {
 		setCapabilityOverrides(this.settingsManager.getTerminalCapabilityOverrides());
 		configureHttpDispatcher(this.settingsManager.getHttpIdleTimeoutMs());
+		// Density is read by every component at render time, so a change here needs only an invalidate.
+		const density = this.settingsManager.getDensity();
+		if (density !== getDisplayDensity()) {
+			setDisplayDensity(density);
+			this.applyHeaderDensity();
+			this.ui.invalidate();
+		}
 		this.applyFullscreenScrollbarSetting();
 		if (this.renderer instanceof TuiAltScreen) {
 			this.renderer.setCopyOnSelect(this.settingsManager.getFullscreenCopyOnSelect());
@@ -3796,10 +3820,25 @@ export class InteractiveMode {
 		return textBlocks.map((c) => (c as { text: string }).text).join("");
 	}
 
+	/**
+	 * Blank line between two transcript blocks. Compact density drops it: every block already draws
+	 * its own one-line rule, so the gap only costs a row.
+	 */
+	private addChatGap(): void {
+		if (isCompactDensity()) return;
+		this.chatContainer.addChild(new Spacer(1));
+	}
+
+	/** The startup wordmark keeps its blank rows only in classic density. */
+	private applyHeaderDensity(): void {
+		const lines = isCompactDensity() ? 0 : 1;
+		for (const spacer of this.headerSpacers) spacer.setLines(lines);
+	}
+
 	/** Show a managed-tool status update in the chat. */
 	private showManagedToolStatus(status: ToolStatus): void {
 		if (!this.managedToolStatusStarted) {
-			this.chatContainer.addChild(new Spacer(1));
+			this.addChatGap();
 			this.managedToolStatusStarted = true;
 		}
 		const message = status.type === "warning" ? `Warning: ${status.message}` : status.message;
@@ -3896,7 +3935,7 @@ export class InteractiveMode {
 				break;
 			}
 			case "compactionSummary": {
-				this.chatContainer.addChild(new Spacer(1));
+				this.addChatGap();
 				const component = new CompactionSummaryMessageComponent(
 					message,
 					this.getMarkdownThemeWithSettings(),
@@ -3907,7 +3946,7 @@ export class InteractiveMode {
 				break;
 			}
 			case "branchSummary": {
-				this.chatContainer.addChild(new Spacer(1));
+				this.addChatGap();
 				const component = new BranchSummaryMessageComponent(
 					message,
 					this.getMarkdownThemeWithSettings(),
@@ -3923,7 +3962,7 @@ export class InteractiveMode {
 				const textContent = this.getUserMessageText(message);
 				if (textContent) {
 					if (this.chatContainer.children.length > 0) {
-						this.chatContainer.addChild(new Spacer(1));
+						this.addChatGap();
 					}
 					const skillBlock = parseSkillBlock(textContent);
 					if (skillBlock) {
@@ -3937,7 +3976,7 @@ export class InteractiveMode {
 						this.chatContainer.addChild(component);
 						// Render user message separately if present
 						if (skillBlock.userMessage) {
-							this.chatContainer.addChild(new Spacer(1));
+							this.addChatGap();
 							const userComponent = new UserMessageComponent(
 								skillBlock.userMessage,
 								this.getMarkdownThemeWithSettings(),
@@ -4104,7 +4143,7 @@ export class InteractiveMode {
 
 	private addCacheWarmingUsage(entry: UsageEntry): void {
 		if (!this.settingsManager.getShowCacheMissNotices()) return;
-		this.chatContainer.addChild(new Spacer(1));
+		this.addChatGap();
 		const usage = formatCacheWarmingUsage(entry);
 		this.chatContainer.addChild(new ThemedText(() => theme.fg("dim", usage), 1, 0));
 	}
@@ -4196,7 +4235,7 @@ export class InteractiveMode {
 		} else if (miss.idleMs >= CACHE_TTL_MS) {
 			label = `Cache miss after ${Math.round(miss.idleMs / 60_000)}m idle`;
 		}
-		this.chatContainer.addChild(new Spacer(1));
+		this.addChatGap();
 		this.chatContainer.addChild(new ThemedText(() => theme.fg("warning", `${label}: ${reBilled}`), 1, 0));
 	}
 
@@ -4223,7 +4262,7 @@ export class InteractiveMode {
 		}
 
 		if (this.chatContainer.children.length > 0) {
-			this.chatContainer.addChild(new Spacer(1));
+			this.addChatGap();
 		}
 		this.chatContainer.addChild(
 			new ThemedText(

@@ -27,6 +27,7 @@ import { join, resolve } from "node:path";
 import { type Component, Key, Panel, ScrollView, Spacer, type StackChild, Text, VStack } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { getAgentDir } from "../../config.ts";
+import { isCompactDensity } from "../../core/display-density.ts";
 import type {
 	ExtensionContext,
 	ExtensionFactory,
@@ -1497,12 +1498,17 @@ function railSections(ui: ExtensionUIContext, cwd: string, width: number = RAIL_
 
 /** Ancho que los bordes y el padding de cada panel le quitan al rail (2 bordes + 1 de padding por lado). */
 const RAIL_PANEL_CHROME = 4;
+/** En compacto el panel es una regla de una línea: no hay bordes laterales que descontar. */
+const RAIL_PANEL_CHROME_COMPACT = 2;
 
 /**
  * Componente del rail: apila un panel por sección. Rehace el árbol cuando cambia el ancho (las tareas
  * se envuelven al ancho real) o cuando el harness lo invalida por contenido nuevo.
+ *
+ * Exportado para los tests de densidad: es la ruta real de render del rail (paneles, separadores y
+ * ancho de contenido), sin depender de la BD de memoria ni de git.
  */
-class RailContent implements Component {
+export class RailContent implements Component {
 	private readonly build: (contentWidth: number) => RailSection[];
 	private readonly getTheme: () => ExtensionUIContext["theme"];
 	private readonly minWidth: number;
@@ -1525,7 +1531,8 @@ class RailContent implements Component {
 	}
 
 	render(width: number): string[] {
-		const contentWidth = Math.max(this.minWidth, width - RAIL_PANEL_CHROME);
+		const chrome = isCompactDensity() ? RAIL_PANEL_CHROME_COMPACT : RAIL_PANEL_CHROME;
+		const contentWidth = Math.max(this.minWidth, width - chrome);
 		if (this.dirty || contentWidth !== this.builtWidth) {
 			this.builtWidth = contentWidth;
 			this.dirty = false;
@@ -1536,13 +1543,16 @@ class RailContent implements Component {
 
 	private buildStack(contentWidth: number): VStack {
 		const theme = this.getTheme();
+		const compact = isCompactDensity();
 		const children: StackChild[] = [];
 		for (const section of this.build(contentWidth)) {
-			if (children.length > 0) children.push({ component: new Spacer(1) });
+			// Compact stacks the sections rule-to-rule: no blank line between panels.
+			if (children.length > 0 && !compact) children.push({ component: new Spacer(1) });
 			children.push({
 				component: new Panel(new Text(section.lines.join("\n"), 0, 0), {
-					title: theme.fg("accent", section.title),
+					title: theme.fg(compact ? "muted" : "accent", section.title),
 					borderColor: (text) => theme.fg("borderMuted", text),
+					borderMode: compact ? "rule" : "box",
 				}),
 			});
 		}

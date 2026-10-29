@@ -28,11 +28,24 @@ const DEFAULT_COMPACTION_TOKEN_SETTINGS: Required<CompactionModelOverride> = {
 
 /** Right rail column width in the fullscreen TUI (columns), clamped so chat keeps usable room. */
 export const DEFAULT_RAIL_WIDTH = 34;
+/** Compact density trades a little rail width for a narrower chrome and more transcript room. */
+export const DEFAULT_COMPACT_RAIL_WIDTH = 28;
 export const RAIL_MIN_WIDTH = 20;
 export const RAIL_MAX_WIDTH = 100;
 
 export function clampRailWidth(width: number): number {
 	return Math.max(RAIL_MIN_WIDTH, Math.min(RAIL_MAX_WIDTH, Math.round(width)));
+}
+
+/**
+ * Visual density of the interactive TUI. `compact` reduces the vertical footprint of every block
+ * (one-line headers, rules instead of boxes, no filler blank lines); `normal` keeps the classic
+ * layout byte for byte.
+ */
+export type DisplayDensity = "compact" | "normal";
+
+export interface DisplaySettings {
+	density?: DisplayDensity; // default: "compact"
 }
 
 export interface CompactionSettings {
@@ -159,6 +172,7 @@ export interface Settings {
 	steeringMode?: "all" | "one-at-a-time";
 	followUpMode?: "all" | "one-at-a-time";
 	theme?: string;
+	display?: DisplaySettings; // default: { density: "compact" }
 	compaction?: CompactionSettings;
 	branchSummary?: BranchSummarySettings;
 	retry?: RetrySettings;
@@ -1440,7 +1454,9 @@ export class SettingsManager {
 	/** Right rail column width in the fullscreen TUI; ignores out-of-range values from settings.json. */
 	getRailWidth(): number {
 		const width = this.settings.railWidth;
-		if (typeof width !== "number" || !Number.isFinite(width)) return DEFAULT_RAIL_WIDTH;
+		if (typeof width !== "number" || !Number.isFinite(width)) {
+			return this.getDensity() === "compact" ? DEFAULT_COMPACT_RAIL_WIDTH : DEFAULT_RAIL_WIDTH;
+		}
 		return clampRailWidth(width);
 	}
 
@@ -1462,6 +1478,21 @@ export class SettingsManager {
 	setRailHidden(hidden: boolean): void {
 		this.globalSettings.railHidden = hidden;
 		this.markModified("railHidden");
+		this.save();
+	}
+
+	/** Visual density of the interactive TUI. Defaults to `compact` (SPEC-007). */
+	getDensity(): DisplayDensity {
+		return this.settings.display?.density === "normal" ? "normal" : "compact";
+	}
+
+	/** Switch between the compact and the classic (`normal`) layout. */
+	setDensity(density: DisplayDensity): void {
+		if (!this.globalSettings.display) {
+			this.globalSettings.display = {};
+		}
+		this.globalSettings.display.density = density === "normal" ? "normal" : "compact";
+		this.markModified("display", "density");
 		this.save();
 	}
 

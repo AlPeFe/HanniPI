@@ -11,6 +11,13 @@ const BORDER_STYLES = {
 
 export type PanelBorderStyle = keyof typeof BORDER_STYLES;
 
+/**
+ * `box` frames the child on all four sides (classic). `rule` draws a single top rule that carries
+ * the title and the status, with no side or bottom borders: two lines cheaper and two columns wider,
+ * which is what the compact density mode uses.
+ */
+export type PanelBorderMode = "box" | "rule";
+
 type ColorFn = (text: string) => string;
 
 export interface PanelOptions {
@@ -22,6 +29,8 @@ export interface PanelOptions {
 	caption?: string;
 	/** Border glyphs. Defaults to `rounded`. */
 	borderStyle?: PanelBorderStyle;
+	/** Frame style. Defaults to `box`. */
+	borderMode?: PanelBorderMode;
 	/** Paints the border glyphs. Defaults to no styling. */
 	borderColor?: ColorFn;
 	/** Paints `title`. Defaults to `borderColor`. */
@@ -49,6 +58,7 @@ export class Panel implements Component {
 	private status: string;
 	private caption: string;
 	private style: PanelBorderStyle;
+	private borderMode: PanelBorderMode;
 	private borderColor: ColorFn;
 	private titleColor: ColorFn | undefined;
 	private statusColor: ColorFn | undefined;
@@ -63,6 +73,7 @@ export class Panel implements Component {
 		this.status = options.status ?? "";
 		this.caption = options.caption ?? "";
 		this.style = options.borderStyle ?? "rounded";
+		this.borderMode = options.borderMode ?? "box";
 		this.borderColor = options.borderColor ?? ((text) => text);
 		this.titleColor = options.titleColor;
 		this.statusColor = options.statusColor;
@@ -84,6 +95,11 @@ export class Panel implements Component {
 		this.status = status ?? "";
 	}
 
+	/** Switch between the boxed frame and the single-rule frame at render time. */
+	setBorderMode(mode: PanelBorderMode): void {
+		this.borderMode = mode;
+	}
+
 	setCaption(caption: string | undefined): void {
 		this.caption = caption ?? "";
 	}
@@ -101,9 +117,10 @@ export class Panel implements Component {
 	}
 
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-		const contentX = event.x - 1 - this.paddingX;
-		const contentY = event.y - 1 - this.paddingY;
-		const contentWidth = Math.max(1, event.width - 2 - this.paddingX * 2);
+		const framed = this.borderMode === "rule" ? 0 : 1;
+		const contentX = event.x - framed - this.paddingX;
+		const contentY = event.y - framed - this.paddingY;
+		const contentWidth = Math.max(1, event.width - framed * 2 - this.paddingX * 2);
 		if (contentX < 0 || contentY < 0 || contentX >= contentWidth) return undefined;
 		const lines = this.child.render(contentWidth);
 		if (contentY >= lines.length) return undefined;
@@ -121,6 +138,8 @@ export class Panel implements Component {
 		if (width < 4) return [];
 
 		const glyphs = BORDER_STYLES[this.style];
+		if (this.borderMode === "rule") return this.renderRule(width, glyphs.horizontal);
+
 		const innerWidth = width - 2;
 		const contentWidth = Math.max(1, innerWidth - this.paddingX * 2);
 		const childLines = this.child.render(contentWidth);
@@ -148,6 +167,61 @@ export class Panel implements Component {
 
 	private frame(content: string, vertical: string): string {
 		return this.paint(this.borderColor(vertical) + content + this.borderColor(vertical));
+	}
+
+	/**
+	 * Compact frame: one rule on top carrying the title and the status, then the child with no side
+	 * borders. Saves the bottom border and both vertical borders (two lines and two columns) without
+	 * dropping the title or the status.
+	 */
+	private renderRule(width: number, horizontal: string): string[] {
+		const contentWidth = Math.max(1, width - this.paddingX * 2);
+		const childLines = this.child.render(contentWidth);
+		const leftPad = " ".repeat(this.paddingX);
+		const lines: string[] = [this.buildRuleLine(width, horizontal)];
+		for (const line of childLines) {
+			lines.push(this.padLeft(leftPad + this.clip(line, contentWidth) + leftPad, width));
+		}
+		flattenLines(lines);
+		return lines;
+	}
+
+	private buildRuleLine(width: number, horizontal: string): string {
+		const dash = (count: number) => this.borderColor(horizontal.repeat(Math.max(0, count)));
+		const title = this.buildLabel(this.title, this.titleColor);
+		const status = this.buildLabel(this.status, this.statusColor);
+
+		if (title && status) {
+			const statusWidth = visibleWidth(status);
+			const clippedTitle = truncateToWidth(title, Math.max(0, width - statusWidth - 6), "…");
+			const titleWidth = visibleWidth(clippedTitle);
+			const fill = width - titleWidth - statusWidth - 6;
+			if (titleWidth > 0 && fill >= 1) {
+				return this.paint(`${dash(1)} ${clippedTitle} ${dash(fill)} ${status} ${dash(1)}`);
+			}
+		}
+		if (title) {
+			const clipped = truncateToWidth(title, Math.max(0, width - 3), "…");
+			const clippedWidth = visibleWidth(clipped);
+			const fill = width - clippedWidth - 3;
+			if (clippedWidth > 0 && fill >= 0) {
+				return this.paint(`${dash(1)} ${clipped} ${dash(fill)}`);
+			}
+		}
+		if (status) {
+			const clippedStatus = truncateToWidth(status, Math.max(0, width - 3), "…");
+			const clippedWidth = visibleWidth(clippedStatus);
+			const fill = width - clippedWidth - 3;
+			if (clippedWidth > 0 && fill >= 0) {
+				return this.paint(`${dash(fill)} ${clippedStatus} ${dash(1)}`);
+			}
+		}
+		return this.paint(dash(width));
+	}
+
+	private padLeft(content: string, width: number): string {
+		const visible = visibleWidth(content);
+		return visible >= width ? content : content + " ".repeat(width - visible);
 	}
 
 	private buildTopBorder(innerWidth: number, horizontal: string): string {

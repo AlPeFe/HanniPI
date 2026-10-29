@@ -41,6 +41,12 @@ export class Text implements Component {
 		this.invalidate();
 	}
 
+	/** Vertical padding: compact layouts drop the blank row above and below the text. */
+	setPaddingY(paddingY: number): void {
+		this.paddingY = paddingY;
+		this.invalidate();
+	}
+
 	invalidate(): void {
 		this.cachedText = undefined;
 		this.cachedWidth = undefined;

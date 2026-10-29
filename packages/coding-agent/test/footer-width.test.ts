@@ -1,6 +1,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
+import { setDisplayDensity } from "../src/core/display-density.ts";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.ts";
 import { formatCwdForFooter } from "../src/modes/interactive/components/footer.ts";
 import { TopBarComponent } from "../src/modes/interactive/components/top-bar.ts";
@@ -121,6 +122,8 @@ describe("formatCwdForFooter", () => {
 describe("TopBarComponent width handling", () => {
 	beforeAll(() => {
 		initTheme(undefined, false);
+		// The two-line bar the assertions below describe is the classic layout (SPEC-007).
+		setDisplayDensity("normal");
 	});
 
 	it("keeps all lines within width for wide session names", () => {
