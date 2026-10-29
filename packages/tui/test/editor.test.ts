@@ -3073,6 +3073,146 @@ describe("Editor component", () => {
 			assert.strictEqual(editor.getText(), "/help ");
 			assert.strictEqual(editor.isShowingAutocomplete(), false);
 		});
+
+		describe("Enter accepts completion instead of submitting (SPEC-007)", () => {
+			const fakeProvider: AutocompleteProvider = {
+				triggerCharacters: ["@"],
+				getSuggestions: async (lines, cursorLine, cursorCol) => {
+					const before = (lines[cursorLine] || "").slice(0, cursorCol);
+					if (before === "src") {
+						return {
+							prefix: "src",
+							items: [
+								{ value: "src/", label: "src/" },
+								{ value: "src/index.ts", label: "src/index.ts" },
+							],
+						};
+					}
+					if (before.startsWith("@pack")) {
+						return { prefix: before, items: [{ value: "@package.json", label: "package.json" }] };
+					}
+					return null;
+				},
+				applyCompletion,
+			};
+
+			function createEditorWithFakeProvider(): { editor: Editor; submitted: string[] } {
+				const editor = new Editor(createTestTUI(), defaultEditorTheme);
+				const submitted: string[] = [];
+				editor.onSubmit = (text) => submitted.push(text);
+				editor.setAutocompleteProvider(fakeProvider);
+				return { editor, submitted };
+			}
+
+			function createSlashEditor(): { editor: Editor; submitted: string[] } {
+				const editor = new Editor(createTestTUI(), defaultEditorTheme);
+				const submitted: string[] = [];
+				editor.onSubmit = (text) => submitted.push(text);
+				editor.setAutocompleteProvider(
+					new CombinedAutocompleteProvider([{ name: "skills", description: "List skills" }], process.cwd()),
+				);
+				return { editor, submitted };
+			}
+
+			it("accepts the highlighted suggestion on Enter and does not submit", async () => {
+				const { editor, submitted } = createEditorWithFakeProvider();
+
+				for (const char of "src") editor.handleInput(char);
+				editor.handleInput("\t");
+				await flushAutocomplete();
+				assert.strictEqual(editor.isShowingAutocomplete(), true);
+
+				editor.handleInput("\r");
+
+				assert.deepStrictEqual(submitted, []);
+				assert.strictEqual(editor.getText(), "src/");
+				assert.strictEqual(editor.isShowingAutocomplete(), false);
+				assert.deepStrictEqual(editor.getCursor(), { line: 0, col: 4 });
+			});
+
+			it("accepts @-file completion on Enter and does not submit", async () => {
+				const { editor, submitted } = createEditorWithFakeProvider();
+
+				for (const char of "@pack") editor.handleInput(char);
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				await flushAutocomplete();
+				assert.strictEqual(editor.isShowingAutocomplete(), true);
+
+				editor.handleInput("\r");
+
+				assert.deepStrictEqual(submitted, []);
+				assert.strictEqual(editor.getText(), "@package.json");
+				assert.strictEqual(editor.isShowingAutocomplete(), false);
+			});
+
+			it("completes a slash command on Enter instead of sending the prompt", async () => {
+				const { editor, submitted } = createSlashEditor();
+
+				for (const char of "/sk") editor.handleInput(char);
+				await flushAutocomplete();
+				assert.strictEqual(editor.isShowingAutocomplete(), true);
+
+				editor.handleInput("\r");
+
+				assert.deepStrictEqual(submitted, []);
+				assert.strictEqual(editor.getText(), "/skills ");
+				assert.strictEqual(editor.isShowingAutocomplete(), false);
+			});
+
+			it("completes instead of submitting when the text already matches the suggestion", async () => {
+				const { editor, submitted } = createSlashEditor();
+
+				for (const char of "/skills") editor.handleInput(char);
+				await flushAutocomplete();
+				assert.strictEqual(editor.isShowingAutocomplete(), true);
+
+				editor.handleInput("\r");
+
+				assert.deepStrictEqual(submitted, []);
+				assert.strictEqual(editor.getText(), "/skills ");
+				assert.strictEqual(editor.isShowingAutocomplete(), false);
+			});
+
+			it("closes the dropdown on Escape without submitting or changing the text", async () => {
+				const { editor, submitted } = createSlashEditor();
+
+				for (const char of "/sk") editor.handleInput(char);
+				await flushAutocomplete();
+				assert.strictEqual(editor.isShowingAutocomplete(), true);
+
+				editor.handleInput("\x1b");
+
+				assert.strictEqual(editor.isShowingAutocomplete(), false);
+				assert.strictEqual(editor.getText(), "/sk");
+				assert.deepStrictEqual(submitted, []);
+			});
+
+			it("submits on Enter when no completion is active", async () => {
+				const { editor, submitted } = createEditorWithFakeProvider();
+
+				for (const char of "hello") editor.handleInput(char);
+				await flushAutocomplete();
+				assert.strictEqual(editor.isShowingAutocomplete(), false);
+
+				editor.handleInput("\r");
+
+				assert.deepStrictEqual(submitted, ["hello"]);
+				assert.strictEqual(editor.getText(), "");
+			});
+
+			it("keeps Shift+Enter inserting a newline while the dropdown is open", async () => {
+				const { editor, submitted } = createSlashEditor();
+
+				for (const char of "/sk") editor.handleInput(char);
+				await flushAutocomplete();
+				assert.strictEqual(editor.isShowingAutocomplete(), true);
+
+				editor.handleInput("\x1b[13;2~");
+
+				assert.deepStrictEqual(submitted, []);
+				assert.strictEqual(editor.getText(), "/sk\n");
+			});
+		});
 	});
 
 	describe("Character jump (Ctrl+])", () => {
