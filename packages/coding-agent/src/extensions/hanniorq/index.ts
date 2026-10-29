@@ -27,13 +27,20 @@ import { join, resolve } from "node:path";
 import { type Component, Key, Panel, ScrollView, Spacer, type StackChild, Text, VStack } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { getAgentDir } from "../../config.ts";
-import { isCompactDensity } from "../../core/display-density.ts";
 import type {
 	ExtensionContext,
 	ExtensionFactory,
 	ExtensionUIContext,
 	ToolDefinition,
 } from "../../core/extensions/types.ts";
+import {
+	getRailSpacing,
+	type RailSpacing,
+	railIsAttenuated,
+	railSectionGap,
+	railSpacingWidth,
+	railUsesRule,
+} from "../../core/rail-spacing.ts";
 import type { Settings } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import { loadMcpConfig } from "../mcp/config.ts";
@@ -123,7 +130,11 @@ let sessionSkills: Array<{ name: string; filePath: string }> = [];
 let skillSeq = 0;
 /** Máximo de skills listados en el rail; el resto se resume con "+N". */
 const MAX_RAIL_SKILLS = 4;
-/** Ancho por defecto de la columna del rail; el usuario lo cambia con ctrl+alt+←/→ o /hanniorq rail <n>. */
+/**
+ * Ancho de referencia del rail (34, el del layout clásico). El ancho real de arranque lo fija
+ * `display.railSpacing` (SPEC-008: tight 28, cozy 32, roomy 34) vía `railSpacingWidth()`, y el
+ * usuario lo cambia con ctrl+alt+←/→ o /hanniorq rail <n>.
+ */
 export const RAIL_WIDTH = 34;
 /** Líneas máximas por tarea: se envuelve el texto en varias líneas en vez de recortarlo. Con los
  *  paneles del rail el ancho de contenido baja ~4 columnas, así que una tarea larga necesita una
@@ -1338,8 +1349,10 @@ function skillRailLines(theme: ExtensionUIContext["theme"], width: number): stri
  * Secciones del rail derecho (coloreadas con el tema vivo vía ui.theme) al ancho de contenido dado.
  * Cada sección es un panel propio: el rail deja de ser una lista corrida de bloques y cada concepto
  * (proyecto, memoria, contexto, sODD, tareas, MCP, cambios) se lee como una tarjeta.
+ *
+ * El ancho de partida lo marca `display.railSpacing` (SPEC-008), no la densidad visual.
  */
-function railSections(ui: ExtensionUIContext, cwd: string, width: number = RAIL_WIDTH): RailSection[] {
+function railSections(ui: ExtensionUIContext, cwd: string, width: number = railSpacingWidth()): RailSection[] {
 	const theme = ui.theme;
 	const W = Math.max(16, width);
 	const sections: RailSection[] = [];
@@ -1498,21 +1511,27 @@ function railSections(ui: ExtensionUIContext, cwd: string, width: number = RAIL_
 
 /** Ancho que los bordes y el padding de cada panel le quitan al rail (2 bordes + 1 de padding por lado). */
 const RAIL_PANEL_CHROME = 4;
-/** En compacto el panel es una regla de una línea: no hay bordes laterales que descontar. */
-const RAIL_PANEL_CHROME_COMPACT = 2;
+/** Con regla de una línea no hay bordes laterales que descontar. */
+const RAIL_PANEL_CHROME_RULE = 2;
 
 /**
  * Componente del rail: apila un panel por sección. Rehace el árbol cuando cambia el ancho (las tareas
  * se envuelven al ancho real) o cuando el harness lo invalida por contenido nuevo.
  *
- * Exportado para los tests de densidad: es la ruta real de render del rail (paneles, separadores y
- * ancho de contenido), sin depender de la BD de memoria ni de git.
+ * El espaciado sale de `display.railSpacing` (SPEC-008), independiente de `display.density`:
+ * `tight` pega las secciones con regla, `cozy` (defecto) deja una línea entre secciones con regla
+ * atenuada y `roomy` vuelve a las cajas del layout clásico.
+ *
+ * Exportado para los tests de densidad/espaciado: es la ruta real de render del rail (paneles,
+ * separadores y ancho de contenido), sin depender de la BD de memoria ni de git.
  */
 export class RailContent implements Component {
 	private readonly build: (contentWidth: number) => RailSection[];
 	private readonly getTheme: () => ExtensionUIContext["theme"];
+	private readonly getSpacing: () => RailSpacing;
 	private readonly minWidth: number;
 	private builtWidth = -1;
+	private builtSpacing: RailSpacing | undefined;
 	private dirty = true;
 	private stack: VStack = new VStack([]);
 
@@ -1520,10 +1539,12 @@ export class RailContent implements Component {
 		build: (contentWidth: number) => RailSection[],
 		getTheme: () => ExtensionUIContext["theme"],
 		minWidth = 16,
+		getSpacing: () => RailSpacing = getRailSpacing,
 	) {
 		this.build = build;
 		this.getTheme = getTheme;
 		this.minWidth = minWidth;
+		this.getSpacing = getSpacing;
 	}
 
 	invalidate(): void {
@@ -1531,28 +1552,37 @@ export class RailContent implements Component {
 	}
 
 	render(width: number): string[] {
-		const chrome = isCompactDensity() ? RAIL_PANEL_CHROME_COMPACT : RAIL_PANEL_CHROME;
+		const spacing = this.getSpacing();
+		const chrome = railUsesRule(spacing) ? RAIL_PANEL_CHROME_RULE : RAIL_PANEL_CHROME;
 		const contentWidth = Math.max(this.minWidth, width - chrome);
-		if (this.dirty || contentWidth !== this.builtWidth) {
+		if (this.dirty || contentWidth !== this.builtWidth || spacing !== this.builtSpacing) {
 			this.builtWidth = contentWidth;
+			this.builtSpacing = spacing;
 			this.dirty = false;
-			this.stack = this.buildStack(contentWidth);
+			this.stack = this.buildStack(contentWidth, spacing);
 		}
 		return this.stack.render(Math.max(1, width));
 	}
 
-	private buildStack(contentWidth: number): VStack {
+	private buildStack(contentWidth: number, spacing: RailSpacing): VStack {
 		const theme = this.getTheme();
-		const compact = isCompactDensity();
+		const rule = railUsesRule(spacing);
+		const gap = railSectionGap(spacing);
+		// `cozy` atendúa la regla con el atributo dim (el color solo no basta: en 256 colores `dim` y
+		// `borderMuted` caen en el mismo tono); `tight` conserva el borde del compacto clásico.
+		const borderColor = (text: string) =>
+			railIsAttenuated(spacing)
+				? theme.style(text, { fg: "borderMuted", dim: true })
+				: theme.fg("borderMuted", text);
 		const children: StackChild[] = [];
 		for (const section of this.build(contentWidth)) {
-			// Compact stacks the sections rule-to-rule: no blank line between panels.
-			if (children.length > 0 && !compact) children.push({ component: new Spacer(1) });
+			// `tight` apila regla contra regla; `cozy`/`roomy` dejan aire entre secciones (no entre items).
+			if (children.length > 0 && gap > 0) children.push({ component: new Spacer(gap) });
 			children.push({
 				component: new Panel(new Text(section.lines.join("\n"), 0, 0), {
-					title: theme.fg(compact ? "muted" : "accent", section.title),
-					borderColor: (text) => theme.fg("borderMuted", text),
-					borderMode: compact ? "rule" : "box",
+					title: theme.fg(spacing === "roomy" ? "accent" : "muted", section.title),
+					borderColor,
+					borderMode: rule ? "rule" : "box",
 				}),
 			});
 		}

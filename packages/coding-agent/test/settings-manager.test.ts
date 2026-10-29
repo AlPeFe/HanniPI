@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS } from "../src/core/http-dispatcher.ts";
 import {
 	DEFAULT_COMPACT_RAIL_WIDTH,
+	DEFAULT_COZY_RAIL_WIDTH,
 	DEFAULT_RAIL_WIDTH,
 	RAIL_MAX_WIDTH,
 	RAIL_MIN_WIDTH,
@@ -543,12 +544,19 @@ describe("SettingsManager", () => {
 	// El ancho del rail derecho se clampa y persiste: fuera de rango cae al valor válido más cercano.
 	it("clamps and persists the right rail width", async () => {
 		const manager = SettingsManager.create(projectDir, agentDir);
-		// Compact density is the default (SPEC-007), so an unset width starts from its narrower rail.
+		// El rail tiene su propio espaciado (SPEC-008): cozy por defecto, 32 columnas. La densidad
+		// visual ya no mueve el ancho.
 		expect(manager.getDensity()).toBe("compact");
-		expect(manager.getRailWidth()).toBe(DEFAULT_COMPACT_RAIL_WIDTH);
+		expect(manager.getRailSpacing()).toBe("cozy");
+		expect(manager.getRailWidth()).toBe(DEFAULT_COZY_RAIL_WIDTH);
 		manager.setDensity("normal");
+		expect(manager.getRailWidth()).toBe(DEFAULT_COZY_RAIL_WIDTH);
+		manager.setRailSpacing("tight");
+		expect(manager.getRailWidth()).toBe(DEFAULT_COMPACT_RAIL_WIDTH);
+		manager.setRailSpacing("roomy");
 		expect(manager.getRailWidth()).toBe(DEFAULT_RAIL_WIDTH);
 		manager.setDensity("compact");
+		manager.setRailSpacing("cozy");
 
 		expect(manager.setRailWidth(48)).toBe(48);
 		await manager.flush();
@@ -558,7 +566,7 @@ describe("SettingsManager", () => {
 		expect(manager.setRailWidth(500)).toBe(RAIL_MAX_WIDTH);
 
 		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ railWidth: "ancho" }));
-		expect(SettingsManager.create(projectDir, agentDir).getRailWidth()).toBe(DEFAULT_COMPACT_RAIL_WIDTH);
+		expect(SettingsManager.create(projectDir, agentDir).getRailWidth()).toBe(DEFAULT_COZY_RAIL_WIDTH);
 	});
 
 	// Rail oculto y tareas plegadas del rail derecho persisten; booleanos invalidos caen al defecto.

@@ -7,9 +7,16 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { TuiMainScreen } from "../../tui/src/tui-main-screen.ts";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import type { AgentSession } from "../src/core/agent-session.ts";
-import { type DisplayDensity, getDisplayDensity, setDisplayDensity } from "../src/core/display-density.ts";
+import type { DisplayDensity } from "../src/core/display-density.ts";
+import { getDisplayDensity, setDisplayDensity } from "../src/core/display-density.ts";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.ts";
-import { DEFAULT_COMPACT_RAIL_WIDTH, DEFAULT_RAIL_WIDTH, SettingsManager } from "../src/core/settings-manager.ts";
+import { setRailSpacing } from "../src/core/rail-spacing.ts";
+import {
+	DEFAULT_COMPACT_RAIL_WIDTH,
+	DEFAULT_COZY_RAIL_WIDTH,
+	DEFAULT_RAIL_WIDTH,
+	SettingsManager,
+} from "../src/core/settings-manager.ts";
 import { RailContent } from "../src/extensions/hanniorq/index.ts";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
@@ -106,6 +113,9 @@ function createAssistantMessage(): AssistantMessage {
 
 function renderReferenceSession(density: DisplayDensity): ReferenceBlocks {
 	setDisplayDensity(density);
+	// SPEC-008: el rail ya no sigue a la densidad; para comparar con el fixture de SPEC-007 se pide
+	// el espaciado equivalente (compacto ⇔ tight, normal ⇔ roomy).
+	setRailSpacing(density === "compact" ? "tight" : "roomy");
 
 	const topBar = new TopBarComponent(createSession(), createFooterData(), "0.2.26-test");
 	const assistant = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1);
@@ -150,6 +160,7 @@ describe("display.density (SPEC-007)", () => {
 
 	afterAll(() => {
 		setDisplayDensity("compact");
+		setRailSpacing("cozy");
 	});
 
 	test("normal reproduce byte a byte el render anterior", () => {
@@ -217,15 +228,23 @@ describe("display.density (SPEC-007)", () => {
 		}
 	});
 
-	test("por defecto la densidad es compact y el rail arranca mas estrecho", () => {
+	test("por defecto la densidad es compact y el rail arranca en el punto medio cozy", () => {
 		tempDir = mkdtempSync(join(tmpdir(), "pi-density-"));
 		const manager = SettingsManager.create(tempDir, join(tempDir, "agent"));
 
 		expect(manager.getDensity()).toBe("compact");
-		expect(manager.getRailWidth()).toBe(DEFAULT_COMPACT_RAIL_WIDTH);
+		// SPEC-008: el rail tiene su propio espaciado (cozy por defecto, 32 columnas) y la densidad
+		// ya no lo mueve.
+		expect(manager.getRailSpacing()).toBe("cozy");
+		expect(manager.getRailWidth()).toBe(DEFAULT_COZY_RAIL_WIDTH);
 
 		manager.setDensity("normal");
 		expect(manager.getDensity()).toBe("normal");
+		expect(manager.getRailWidth()).toBe(DEFAULT_COZY_RAIL_WIDTH);
+
+		manager.setRailSpacing("tight");
+		expect(manager.getRailWidth()).toBe(DEFAULT_COMPACT_RAIL_WIDTH);
+		manager.setRailSpacing("roomy");
 		expect(manager.getRailWidth()).toBe(DEFAULT_RAIL_WIDTH);
 
 		rmSync(tempDir, { recursive: true, force: true });

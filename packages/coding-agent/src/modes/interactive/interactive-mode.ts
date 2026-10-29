@@ -106,6 +106,7 @@ import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
 import { searchPiPackages } from "../../core/package-catalog.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import { RADIUS_MCP_URL, RADIUS_PROVIDER_ID } from "../../core/radius.ts";
+import { getRailSpacing, setRailSpacing } from "../../core/rail-spacing.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import {
@@ -935,6 +936,9 @@ export class InteractiveMode {
 
 		// Keep one component tree and remount it when changing renderers.
 		this.renderWidgets(); // Initialize with default spacer
+		// SPEC-008: el espaciado del rail manda en el rail desde el primer frame, antes de montar la
+		// TUI (el ancho de la columna y el marco de las secciones salen de aquí).
+		setRailSpacing(this.settingsManager.getRailSpacing());
 		const viewport = createChatViewport({
 			document: this.documentContainer,
 			pendingMessages: this.pendingMessagesContainer,
@@ -2011,6 +2015,13 @@ export class InteractiveMode {
 		if (density !== getDisplayDensity()) {
 			setDisplayDensity(density);
 			this.applyHeaderDensity();
+			this.ui.invalidate();
+		}
+		// SPEC-008: el rail tiene su propio espaciado, independiente de la densidad.
+		const railSpacing = this.settingsManager.getRailSpacing();
+		if (railSpacing !== getRailSpacing()) {
+			setRailSpacing(railSpacing);
+			this.resizeRailWidth?.(this.settingsManager.getRailWidth());
 			this.ui.invalidate();
 		}
 		this.applyFullscreenScrollbarSetting();

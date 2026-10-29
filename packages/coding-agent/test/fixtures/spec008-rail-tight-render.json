@@ -1,0 +1,21 @@
+{
+  "width": 28,
+  "lines": [
+    "\u001b[38;5;102m─\u001b[39m \u001b[38;5;145mproyecto\u001b[39m \u001b[38;5;102m─────────────────\u001b[39m",
+    " HanniPI                    ",
+    " rama main                  ",
+    "\u001b[38;5;102m─\u001b[39m \u001b[38;5;145mtareas (1/3)\u001b[39m \u001b[38;5;102m─────────────\u001b[39m",
+    " ▸ preparar la charla       ",
+    " · revisar el rail          ",
+    " etc                        ",
+    "\u001b[38;5;102m─\u001b[39m \u001b[38;5;145mmemoria\u001b[39m \u001b[38;5;102m──────────────────\u001b[39m",
+    " ✓ ON · 2.1k                ",
+    " ≫ ultima sesion            ",
+    "\u001b[38;5;102m─\u001b[39m \u001b[38;5;145mcontexto\u001b[39m \u001b[38;5;102m─────────────────\u001b[39m",
+    " 12% de 200k · compacta en  ",
+    " 160k                       ",
+    "\u001b[38;5;102m─\u001b[39m \u001b[38;5;145mcambios (2)\u001b[39m \u001b[38;5;102m──────────────\u001b[39m",
+    " · src/a.ts                 ",
+    " · src/b.ts                 "
+  ]
+}

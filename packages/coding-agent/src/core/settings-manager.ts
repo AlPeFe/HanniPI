@@ -15,6 +15,13 @@ import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
 import { DEFAULT_PACKAGES } from "./defaults.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
+import {
+	COZY_RAIL_WIDTH,
+	DEFAULT_RAIL_SPACING,
+	normalizeRailSpacing,
+	type RailSpacing,
+	railSpacingWidth,
+} from "./rail-spacing.ts";
 
 export interface CompactionModelOverride {
 	reserveTokens?: number;
@@ -30,6 +37,11 @@ const DEFAULT_COMPACTION_TOKEN_SETTINGS: Required<CompactionModelOverride> = {
 export const DEFAULT_RAIL_WIDTH = 34;
 /** Compact density trades a little rail width for a narrower chrome and more transcript room. */
 export const DEFAULT_COMPACT_RAIL_WIDTH = 28;
+/**
+ * SPEC-008: `display.railSpacing` es su propio eje, así que el rail por defecto es el punto medio
+ * cozy (una línea entre secciones, regla de una línea, 32 columnas), sea cual sea la densidad.
+ */
+export const DEFAULT_COZY_RAIL_WIDTH = COZY_RAIL_WIDTH;
 export const RAIL_MIN_WIDTH = 20;
 export const RAIL_MAX_WIDTH = 100;
 
@@ -46,6 +58,7 @@ export type DisplayDensity = "compact" | "normal";
 
 export interface DisplaySettings {
 	density?: DisplayDensity; // default: "compact"
+	railSpacing?: RailSpacing; // default: "cozy" (SPEC-008, independent of density)
 }
 
 export interface CompactionSettings {
@@ -1455,7 +1468,9 @@ export class SettingsManager {
 	getRailWidth(): number {
 		const width = this.settings.railWidth;
 		if (typeof width !== "number" || !Number.isFinite(width)) {
-			return this.getDensity() === "compact" ? DEFAULT_COMPACT_RAIL_WIDTH : DEFAULT_RAIL_WIDTH;
+			// SPEC-008: the rail has its own spacing axis, so its default width follows it instead
+			// of the visual density.
+			return railSpacingWidth(this.getRailSpacing());
 		}
 		return clampRailWidth(width);
 	}
@@ -1493,6 +1508,24 @@ export class SettingsManager {
 		}
 		this.globalSettings.display.density = density === "normal" ? "normal" : "compact";
 		this.markModified("display", "density");
+		this.save();
+	}
+
+	/**
+	 * Espaciado del rail derecho (SPEC-008), independiente de `display.density`.
+	 * Por defecto `cozy`; un valor desconocido en settings.json cae al defecto.
+	 */
+	getRailSpacing(): RailSpacing {
+		return normalizeRailSpacing(this.settings.display?.railSpacing ?? DEFAULT_RAIL_SPACING);
+	}
+
+	/** Cambia el espaciado del rail (`tight` | `cozy` | `roomy`) y lo persiste. */
+	setRailSpacing(spacing: RailSpacing): void {
+		if (!this.globalSettings.display) {
+			this.globalSettings.display = {};
+		}
+		this.globalSettings.display.railSpacing = normalizeRailSpacing(spacing);
+		this.markModified("display", "railSpacing");
 		this.save();
 	}
 
