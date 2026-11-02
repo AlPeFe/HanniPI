@@ -1009,6 +1009,7 @@ export class InteractiveMode {
 		// sitio durante la sesión: `addMessageToChat` la retira al primer mensaje del usuario.
 		if (this.settingsManager.getStartupArt()) {
 			this.startupArt = new HanniMascotComponent({
+				theme: this.settingsManager.getStartupArtTheme(),
 				getInfo: () => ({
 					version: this.version,
 					model: isUnknownModel(this.session.model) ? undefined : this.session.model?.id,

@@ -56,10 +56,14 @@ export function clampRailWidth(width: number): number {
  */
 export type DisplayDensity = "compact" | "normal";
 
+/** Startup scene look: the brand pink, or the denim blue with the block lettering. */
+export type StartupArtTheme = "pink" | "denim";
+
 export interface DisplaySettings {
 	density?: DisplayDensity; // default: "compact"
 	railSpacing?: RailSpacing; // default: "cozy" (SPEC-008, independent of density)
 	startupArt?: boolean; // default: true (SPEC-008): ASCII startup scene in the interactive TUI
+	startupArtTheme?: StartupArtTheme; // default: "pink"
 }
 
 export interface CompactionSettings {
@@ -1542,6 +1546,21 @@ export class SettingsManager {
 		}
 		this.globalSettings.display.startupArt = enabled === true;
 		this.markModified("display", "startupArt");
+		this.save();
+	}
+
+	/** Tema de la escena de arranque; cualquier valor desconocido cae al rosa de marca. */
+	getStartupArtTheme(): StartupArtTheme {
+		return this.settings.display?.startupArtTheme === "denim" ? "denim" : "pink";
+	}
+
+	/** Cambia el tema de la escena de arranque y lo persiste. */
+	setStartupArtTheme(theme: StartupArtTheme): void {
+		if (!this.globalSettings.display) {
+			this.globalSettings.display = {};
+		}
+		this.globalSettings.display.startupArtTheme = theme;
+		this.markModified("display", "startupArtTheme");
 		this.save();
 	}
 
