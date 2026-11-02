@@ -144,9 +144,41 @@ def svg() -> str:
     )
 
 
+# La mascota en pixel art: los mismos píxeles que pinta la TUI (`HANNI_PIXELS` en hanni-mascot.ts).
+MASCOT_PIXELS = [
+    "...PP.....PP...",
+    "..PSSP...PSSP..",
+    "..PSSP...PSSP..",
+    "..PSSP...PSSP..",
+    "..PSSPPPPPSSP..",
+    ".PPPPPPPPPPPPP.",
+    "PPPPPPPPPPPPPPP",
+    "PPPWEPPPPPWEPPP",
+    "PPPEEPSPSPEEPPP",
+    "PBBPPPPSPPPPBBP",
+    ".PPPPPPPPPPPPP.",
+    "...PPPPPPPPP...",
+]
+MASCOT_PALETTE = {
+    ".": (0, 0, 0, 0),
+    "P": (255, 122, 176, 255),
+    "S": (255, 201, 224, 255),
+    "B": (255, 160, 200, 255),
+    "E": (59, 23, 48, 255),
+    "W": (255, 255, 255, 255),
+}
+
+
+def render_mascot(scale: int = 16) -> Image.Image:
+    img = Image.new("RGBA", (len(MASCOT_PIXELS[0]), len(MASCOT_PIXELS)))
+    img.putdata([MASCOT_PALETTE[pixel] for row in MASCOT_PIXELS for pixel in row])
+    return img.resize((img.width * scale, img.height * scale), Image.NEAREST)
+
+
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "hanni-logo.svg").write_text(svg() + "\n", encoding="utf-8")
     render(1024).save(OUT / "hanni-logo.png", optimize=True)
-    for path in sorted(OUT.glob("hanni-logo.*")):
+    render_mascot().save(OUT / "hanni-mascot.png", optimize=True)
+    for path in sorted([*OUT.glob("hanni-logo.*"), *OUT.glob("hanni-mascot.*")]):
         print(path.name, path.stat().st_size, "bytes")
