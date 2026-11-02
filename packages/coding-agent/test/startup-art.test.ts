@@ -197,6 +197,64 @@ describe("display.startupArt (SPEC-008 B)", () => {
 		}
 	});
 
+	it("el tema denim pinta en azul vaquero, con el rótulo en lugar del nombre", () => {
+		const mono = hanniMascotLines(120, { color: false, info: INFO, theme: "denim" });
+		expect(mono).toHaveLength(6);
+		expect(mono[0]).toContain("╦ ╦╔═╗╔╗╔╔╗╔╦");
+		expect(mono[1]).toContain("╠═╣╠═╣║║║║║║║");
+		expect(mono[2]).toContain("╩ ╩╩ ╩╝╚╝╝╚╝╩ ♥");
+		expect(mono[3]).toContain("v1.2.3-hannipi");
+		expect(mono[4]).toContain("stub-1");
+		expect(mono[5]).toContain("~/proyecto");
+
+		// El dibujo es el mismo; sólo cambian los colores.
+		for (const [index, row] of HANNI_MASCOT_ART.entries()) expect(mono[index]).toContain(row);
+		const mode = theme.getColorMode();
+		const colored = hanniMascotLines(120, { color: true, info: INFO, theme: "denim" });
+		const denim = foregroundAnsi(rgbColor(74, 122, 176), mode);
+		const pink = foregroundAnsi(rgbColor(255, 122, 176), mode);
+		expect(colored[0]).toContain(denim);
+		expect(colored[0]).not.toContain(pink);
+		// El único rosa que queda es el corazón del rótulo.
+		expect(colored[2]).toContain(`${pink}♥`);
+
+		// La variante estrecha también es vaquera, con el mismo texto que la rosa.
+		const narrow = hanniMascotLines(30, { color: true, theme: "denim" });
+		expect(narrow.map(stripAnsi)).toEqual(["(\\_/) hanni♥"]);
+		expect(narrow[0]).toContain(`${pink}♥`);
+		expect(narrow[0]).not.toContain(`${pink}hanni`);
+
+		// Sin modelo no deja hueco, y en el ancho mínimo nada se sale.
+		const noModel = hanniMascotLines(120, {
+			color: false,
+			info: { version: "1.2.3", cwd: "~/proyecto" },
+			theme: "denim",
+		});
+		expect(noModel[3]).toContain("v1.2.3");
+		expect(noModel[4]).toContain("~/proyecto");
+		for (const color of [true, false]) {
+			for (const line of hanniMascotLines(40, { color, info: INFO, theme: "denim" })) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(40);
+			}
+		}
+	});
+
+	it("display.startupArtTheme es rosa por defecto, se persiste e ignora valores desconocidos", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-startup-art-theme-"));
+		tempDirs.push(dir);
+		const agentDir = join(dir, "agent");
+		const manager = SettingsManager.create(dir, agentDir);
+		expect(manager.getStartupArtTheme()).toBe("pink");
+
+		manager.setStartupArtTheme("denim");
+		await manager.flush();
+		expect(SettingsManager.create(dir, agentDir).getStartupArtTheme()).toBe("denim");
+
+		mkdirSync(join(dir, ".pi"), { recursive: true });
+		writeFileSync(join(dir, ".pi", "settings.json"), JSON.stringify({ display: { startupArtTheme: "neon" } }));
+		expect(SettingsManager.create(dir, agentDir).getStartupArtTheme()).toBe("pink");
+	});
+
 	it("se degrada a mono cuando el terminal no soporta color", () => {
 		expect(startupArtSupportsColor({ TERM: "xterm-256color" })).toBe(true);
 		expect(startupArtSupportsColor({ TERM: "xterm-256color", NO_COLOR: "1" })).toBe(false);
