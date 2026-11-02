@@ -155,9 +155,9 @@ import { EarendilAnnouncementComponent } from "./components/earendil-announcemen
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
-import { formatTokens } from "./components/footer.ts";
-import { HanniHeartComponent } from "./components/hanni-heart.ts";
+import { formatCwdForFooter, formatTokens } from "./components/footer.ts";
 import { hanniWordmark } from "./components/hanni-logo.ts";
+import { HanniMascotComponent } from "./components/hanni-mascot.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { openMemoryExplorer } from "./components/memory-explorer.ts";
@@ -576,7 +576,7 @@ export class InteractiveMode {
 	private headerContainer: Container;
 
 	/** SPEC-008 B: escena ASCII de arranque; se retira al primer mensaje (undefined = retirada). */
-	private startupArt: HanniHeartComponent | undefined = undefined;
+	private startupArt: HanniMascotComponent | undefined = undefined;
 
 	// Built-in header (logo + keybinding hints + changelog)
 	private builtInHeader: Component | undefined = undefined;
@@ -1008,7 +1008,16 @@ export class InteractiveMode {
 		// SPEC-008 B: la escena de arranque se pinta una sola vez, encima de la cabecera. No ocupa
 		// sitio durante la sesión: `addMessageToChat` la retira al primer mensaje del usuario.
 		if (this.settingsManager.getStartupArt()) {
-			this.startupArt = new HanniHeartComponent();
+			this.startupArt = new HanniMascotComponent({
+				getInfo: () => ({
+					version: this.version,
+					model: isUnknownModel(this.session.model) ? undefined : this.session.model?.id,
+					cwd: formatCwdForFooter(
+						this.session.sessionManager.getCwd(),
+						process.env.HOME || process.env.USERPROFILE,
+					),
+				}),
+			});
 			this.headerContainer.addChild(this.startupArt);
 		}
 
@@ -1018,7 +1027,10 @@ export class InteractiveMode {
 			// Built on demand so the header follows theme changes. The compact header is just the
 			// wordmark plus how to see the rest: the key hints live in the status bar at the bottom,
 			// so they are not repeated here.
-			const wordmark = () => `${hanniWordmark()} ${theme.fg("dim", `v${this.version}`)}`;
+			// While the startup scene is up it already shows the wordmark and the version, so the header
+			// leaves them out until the scene is dismissed.
+			const wordmark = (separator: string) =>
+				this.startupArt ? "" : `${hanniWordmark()} ${theme.fg("dim", `v${this.version}`)}${separator}`;
 
 			// Build startup instructions using keybinding hint helpers
 			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
@@ -1060,10 +1072,10 @@ export class InteractiveMode {
 				);
 			// Compact density joins the wordmark and the hint on one line and drops the filler blanks:
 			// the same content in two lines instead of five.
-			const compactHeaderText = () => `${wordmark()}  ${compactOnboarding()}\n${onboarding()}`;
-			const compactExpandedText = () => `${wordmark()}  ${expandedInstructions()}\n${onboarding()}`;
-			const classicHeaderText = () => `${wordmark()}\n\n${compactOnboarding()}\n\n${onboarding()}`;
-			const classicExpandedText = () => `${wordmark()}\n\n${expandedInstructions()}\n\n${onboarding()}`;
+			const compactHeaderText = () => `${wordmark("  ")}${compactOnboarding()}\n${onboarding()}`;
+			const compactExpandedText = () => `${wordmark("  ")}${expandedInstructions()}\n${onboarding()}`;
+			const classicHeaderText = () => `${wordmark("\n\n")}${compactOnboarding()}\n\n${onboarding()}`;
+			const classicExpandedText = () => `${wordmark("\n\n")}${expandedInstructions()}\n\n${onboarding()}`;
 			this.builtInHeader = new ExpandableText(
 				() => (isCompactDensity() ? compactHeaderText() : classicHeaderText()),
 				() => (isCompactDensity() ? compactExpandedText() : classicExpandedText()),
@@ -3865,6 +3877,8 @@ export class InteractiveMode {
 		if (!this.startupArt) return;
 		this.headerContainer.removeChild(this.startupArt);
 		this.startupArt = undefined;
+		// The header brings the wordmark back now that the scene no longer shows it.
+		this.builtInHeader?.invalidate?.();
 		this.ui.requestRender();
 	}
 

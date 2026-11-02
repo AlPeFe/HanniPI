@@ -9,22 +9,22 @@ import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import {
-	HANNI_HEART_ART,
-	HANNI_HEART_NARROW,
-	HanniHeartComponent,
-	hanniHeartLines,
+	HANNI_MASCOT_ART,
+	HANNI_MASCOT_WIDTH,
+	HanniMascotComponent,
+	hanniMascotLines,
 	STARTUP_ART_MIN_COLUMNS,
 	startupArtSupportsColor,
-} from "../src/modes/interactive/components/hanni-heart.ts";
-import { hanniWordmark } from "../src/modes/interactive/components/hanni-logo.ts";
+} from "../src/modes/interactive/components/hanni-mascot.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 /**
- * SPEC-008 B: escena ASCII de arranque de la TUI. Se pinta una vez al montar, desaparece al primer
+ * SPEC-008 B: escena de arranque de la TUI. Se pinta una vez al montar, desaparece al primer
  * mensaje y nunca se pinta fuera de la TUI (`--print`, `--mode json`, RPC).
  */
-const ART_MARKERS = ["conejita de una línea", "/  \\________/  \\", "\\____________/", "hanni♥"];
+const ART_MARKERS = ["tu conejita de código", "hanni♥", "█", "▀", "▄"];
+const INFO = { version: "1.2.3-hannipi", model: "stub-1", cwd: "~/proyecto" };
 
 const cliPath = resolve(__dirname, "../src/cli.ts");
 const sourceResolverUrl = pathToFileURL(resolve(__dirname, "../src/experimental/source-resolver.ts")).href;
@@ -131,31 +131,38 @@ describe("display.startupArt (SPEC-008 B)", () => {
 		initTheme("dark", false);
 	});
 
-	it("con arte activo, el arranque pinta las 6 líneas del arte y el wordmark", async () => {
-		const art = new HanniHeartComponent({ color: true }).render(120);
+	it("con arte activo, pinta las 6 líneas del dibujo con los datos de la sesión a la derecha", async () => {
+		const scene = new HanniMascotComponent({ color: true, getInfo: () => INFO }).render(120);
 
-		expect(art).toHaveLength(6);
-		expect(art.map(stripAnsi)).toEqual([...HANNI_HEART_ART]);
+		expect(scene).toHaveLength(6);
 
-		// El dibujo es el de la spec: orejas, ojos de corazón, boca, contorno y leyenda.
-		expect(HANNI_HEART_ART[0].trim()).toBe("/\\          /\\");
-		expect(HANNI_HEART_ART[1]).toContain("/  \\________/  \\");
-		expect(HANNI_HEART_ART[2]).toContain("♥");
-		expect(HANNI_HEART_ART[3]).toContain("‿‿");
-		expect(HANNI_HEART_ART[4].trim()).toBe("\\____________/");
-		expect(HANNI_HEART_ART[5].trim()).toBe("conejita de una línea");
+		// Dibujo: todas las filas miden lo mismo y sólo usan bloques.
+		expect(HANNI_MASCOT_ART).toHaveLength(6);
+		for (const row of HANNI_MASCOT_ART) {
+			expect(visibleWidth(row)).toBe(HANNI_MASCOT_WIDTH);
+			expect(row).toMatch(/^[ █▀▄]+$/);
+		}
 
-		// La escena de arranque = arte + wordmark, como la monta la cabecera de la TUI.
-		const scene = [...art, hanniWordmark()];
-
-		// Y tal cual se ve en un terminal real (VirtualTerminal emula el xterm).
+		// Tal cual se ve en un terminal real (VirtualTerminal emula el xterm).
 		const terminal = new VirtualTerminal(120, 20);
 		terminal.write(scene.join("\r\n"));
 		const viewport = await terminal.flushAndGetViewport();
 		const painted = viewport.map((line) => line.trimEnd()).filter((line) => line !== "");
 
-		expect(painted.slice(0, 6)).toEqual([...HANNI_HEART_ART]);
-		expect(stripAnsi(painted[6])).toBe("hanni♥");
+		expect(painted).toHaveLength(6);
+		expect(painted[1]).toContain("hanni♥ v1.2.3-hannipi");
+		expect(painted[2]).toContain("tu conejita de código");
+		expect(painted[3]).toContain("stub-1");
+		expect(painted[4]).toContain("~/proyecto");
+	});
+
+	it("sin modelo elegido no deja un hueco en los datos", () => {
+		const lines = hanniMascotLines(120, { color: false, info: { version: "1.2.3", cwd: "~/proyecto" } });
+
+		expect(lines).toHaveLength(6);
+		expect(lines[1]).toContain("hanni♥ v1.2.3");
+		expect(lines[2]).toContain("tu conejita de código");
+		expect(lines[3]).toContain("~/proyecto");
 	});
 
 	it("con display.startupArt: false no se pinta nada", async () => {
@@ -164,28 +171,30 @@ describe("display.startupArt (SPEC-008 B)", () => {
 		const manager = SettingsManager.create(dir, join(dir, "agent"));
 
 		expect(manager.getStartupArt()).toBe(true);
-		expect(new HanniHeartComponent({ enabled: manager.getStartupArt() }).render(120)).toHaveLength(6);
+		expect(new HanniMascotComponent({ enabled: manager.getStartupArt() }).render(120)).toHaveLength(6);
 
 		manager.setStartupArt(false);
 		await manager.flush();
 		expect(manager.getStartupArt()).toBe(false);
 		expect(SettingsManager.create(dir, join(dir, "agent")).getStartupArt()).toBe(false);
-		expect(new HanniHeartComponent({ enabled: manager.getStartupArt() }).render(120)).toEqual([]);
+		expect(new HanniMascotComponent({ enabled: manager.getStartupArt() }).render(120)).toEqual([]);
 	});
 
-	it("a 50 columnas usa la variante de una línea y no parte el arte", () => {
-		expect(STARTUP_ART_MIN_COLUMNS).toBe(60);
-		const lines = new HanniHeartComponent({ color: false }).render(50);
+	it("en terminal estrecho usa la variante de una línea y nunca se sale del ancho", () => {
+		expect(STARTUP_ART_MIN_COLUMNS).toBe(40);
+		const lines = new HanniMascotComponent({ color: false, getInfo: () => INFO }).render(30);
 
-		expect(lines).toHaveLength(1);
-		expect(lines[0]).toBe(HANNI_HEART_NARROW);
-		expect(lines[0]).toBe("( \\_/ )  hanni♥  (\\_/)");
-		expect(visibleWidth(lines[0])).toBeLessThanOrEqual(50);
+		expect(lines).toEqual(["(\\_/) hanni♥"]);
+		expect(hanniMascotLines(39, { color: false })).toHaveLength(1);
+		expect(hanniMascotLines(40, { color: false })).toHaveLength(6);
 
-		// Con sitio, el arte grande tampoco se sale de su ancho.
-		for (const line of hanniHeartLines(120, false)) expect(visibleWidth(line)).toBeLessThan(60);
-		expect(hanniHeartLines(59, false)).toHaveLength(1);
-		expect(hanniHeartLines(60, false)).toHaveLength(6);
+		// Justo en el límite, un directorio largo se recorta en vez de partir la línea.
+		const longCwd = { ...INFO, cwd: `~/${"carpeta/".repeat(20)}` };
+		for (const color of [true, false]) {
+			for (const line of hanniMascotLines(40, { color, info: longCwd })) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(40);
+			}
+		}
 	});
 
 	it("se degrada a mono cuando el terminal no soporta color", () => {
@@ -193,20 +202,21 @@ describe("display.startupArt (SPEC-008 B)", () => {
 		expect(startupArtSupportsColor({ TERM: "xterm-256color", NO_COLOR: "1" })).toBe(false);
 		expect(startupArtSupportsColor({ TERM: "dumb" })).toBe(false);
 
-		const mono = new HanniHeartComponent({ color: false }).render(120);
+		const mono = new HanniMascotComponent({ color: false, getInfo: () => INFO }).render(120);
 		for (const line of mono) expect(line).toBe(stripAnsi(line));
-		// La degradación es sólo de color: el dibujo es el mismo.
-		expect(mono).toEqual([...HANNI_HEART_ART]);
+		expect(mono[1]).toContain("hanni♥ v1.2.3-hannipi");
+		for (const [index, row] of HANNI_MASCOT_ART.entries()) expect(mono[index]).toContain(row);
 
-		// Con color, los dos rosas de marca (#FF7AB0 contorno y #FFC9E0 ojos) están ahí, en el modo
-		// de color que use el terminal (truecolor o 256).
+		// Con color, el cuerpo (#FF7AB0) y las orejas (#FFC9E0) llevan los rosas de marca, en el modo
+		// de color que use el terminal (truecolor o 256), y cada línea cierra su estilo.
 		const mode = theme.getColorMode();
-		const colored = new HanniHeartComponent({ color: true }).render(120);
-		const outline = foregroundAnsi(rgbColor(255, 122, 176), mode);
-		const eyes = foregroundAnsi(rgbColor(255, 201, 224), mode);
-		expect(outline).not.toBe(eyes);
-		expect(colored[0]).toContain(outline);
-		expect(colored[2]).toContain(eyes);
+		const colored = new HanniMascotComponent({ color: true }).render(120);
+		const body = foregroundAnsi(rgbColor(255, 122, 176), mode);
+		const ears = foregroundAnsi(rgbColor(255, 201, 224), mode);
+		expect(body).not.toBe(ears);
+		expect(colored[0]).toContain(body);
+		expect(colored[1]).toContain(ears);
+		for (const line of colored) expect(line.endsWith("\x1b[0m")).toBe(true);
 	});
 
 	it("no aparece en --print ni en --mode json", async () => {
@@ -217,7 +227,6 @@ describe("display.startupArt (SPEC-008 B)", () => {
 		// Turno real completado: la salida es exactamente la respuesta del modelo, sin decoración.
 		expect(printed.stdout.trim()).toBe("respuesta del stub");
 		for (const marker of ART_MARKERS) expect(printed.stdout).not.toContain(marker);
-		for (const line of HANNI_HEART_ART) expect(printed.stdout).not.toContain(line.trim());
 
 		const jsonDirs = createProject();
 		const json = await runCli(
@@ -231,6 +240,5 @@ describe("display.startupArt (SPEC-008 B)", () => {
 			.map((line) => JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } });
 		expect(events.some((event) => event.type === "agent_end")).toBe(true);
 		for (const marker of ART_MARKERS) expect(json.stdout).not.toContain(marker);
-		for (const line of HANNI_HEART_ART) expect(json.stdout).not.toContain(line.trim());
 	});
 });
